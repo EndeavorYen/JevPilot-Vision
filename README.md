@@ -12,8 +12,20 @@
 - `questions.*.criteria` 是這一幀的選項 id。幾何慢行與停車軌跡留在應用的候選池，不由 SemArbiter 依號誌刪掉。
 - 應用不把 JPEG 送到 SemArbiter。SemArbiter 不 import 這一倉。
 
-## 程式還沒搬
+## 快速開始
 
-駕駛程式仍在 SemArbiter 的 `jevpilot_vision/`。`python demo/server.py` 仍掛 `/jevpilot/` 與 `/v1/vision`。這一倉目前只有這份契約與 `LICENSE`。搬檔、搬 commit、改 remote 不在 SemArbiter #147。
+### 啟動駕駛決策與視覺服務
+```bash
+# 安裝依賴
+pip install -e .
+
+# 啟動 JevPilot 駕駛服務 (Mock 模式，不需 GPU)
+python demo/server.py --mock --port 8000
+
+# 瀏覽器開啟 3D 模擬器
+# http://localhost:8000/jevpilot/
+```
+
+當配合 [SemArbiter](https://github.com/EndeavorYen/SemArbiter) 神經裁決核心時，將 SemArbiter 啟動於指定埠口，JevPilot-Vision 會將候選選項送至 SemArbiter 的 `/v1/classifier` 進行神經打分與先驗校準，並在收到結果後執行碰撞否決（veto）與橫向軌跡控制。
 
 官方駕駛分數仍是閉環乾淨完成。搬倉不改寫已發布數字。權重、快取與第三方原始紀錄不進這一倉。
