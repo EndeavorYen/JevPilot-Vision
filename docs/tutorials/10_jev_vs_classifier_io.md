@@ -1,6 +1,6 @@
 # 教程 10：Jev 與傳統分類器——輸入／輸出維度，以及為何 JevPilot 拿掉 Hierarchical
 
-> **模組對應**：`jevpilot_vision/trajectory_sampler.py`、`src/semif_phase1/action_tree.py`、`demo/server.py`、`benchmarks/driving_quality.py`  
+> **模組對應**：`jevpilot_vision/trajectory_sampler.py`、`jevpilot_vision/action_tree.py`、`demo/server.py`、`benchmarks/driving_quality.py`  
 > **關聯任務**：[ #80 移除 JevPilot Hierarchical](https://github.com/EndeavorYen/SemIf/issues/80)、[ #79 樹只解釋不刪軌](https://github.com/EndeavorYen/SemIf/issues/79)、[ #71 動態採樣](https://github.com/EndeavorYen/SemIf/issues/71)  
 > **前置知識**：[教程 02：決策原生 vs 因果 LM](02_decision_native_vs_causal_lm.md)、[教程 06：LM Head 投影優化](06_transformer_lm_head_optimization.md)、[教程 09：動態候選與語意仲裁](09_dynamic_candidates_and_arbitration.md)
 
@@ -155,7 +155,7 @@ flowchart TD
 - **軌跡向量六欄位**：`[speed, steer, route_error, offroad, collision, stop_at_line]`。
 - **幾何停車標籤**：`stop_at_line` 是幾何收速特徵（速度 $< 0.8\text{ m/s}$ 且在線前），不是紅燈決策按鈕。
 - **致動器解耦**：底層車輛致動器直接執行選中軌跡的目標車速與目標舵角；高階文字意圖（如 `motion: drive|stop`）僅供遙測監控，不直接接入控制迴路。
-- **向後相容防護**：若客戶端請求中仍然帶有 `mode="semif_hierarchical"`，[`demo/server.py`](file:///D:/Code/SemIf/demo/server.py) 內部一律自動重導向至 Flat 執行，徹底杜絕剪枝退化。
+- **向後相容防護**：若客戶端請求中仍然帶有 `mode="semif_hierarchical"`，[`demo/server.py`](../../demo/server.py) 內部一律自動重導向至 Flat 執行，徹底杜絕剪枝退化。
 
 ---
 

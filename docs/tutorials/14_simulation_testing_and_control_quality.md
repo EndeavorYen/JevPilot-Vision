@@ -1,6 +1,6 @@
 # 教程 14：模擬測試（Headless SIL）設計與考量——從二元勝負到微觀因果歸因
 
-> **模組對應**：`src/semif_phase1/control_diagnostics.py`、`benchmarks/diagnose_control_quality.py`、`tests/test_control_diagnostics.py`  
+> **模組對應**：`jevpilot_vision/control_diagnostics.py`、`benchmarks/diagnose_control_quality.py`、`tests/test_control_diagnostics.py`  
 > **關聯任務**：[ #117 無頭運動學品質診斷器](https://github.com/EndeavorYen/SemIf/issues/117)、[ #118 觀測器因果歸因與感知解耦](https://github.com/EndeavorYen/SemIf/issues/118)、[ #113 死區漫遊修復](https://github.com/EndeavorYen/SemIf/issues/113)、[ #110 起步倒車防禦](https://github.com/EndeavorYen/SemIf/issues/110)  
 > **前置知識**：[教程 09：動態候選空間與語意仲裁](09_dynamic_candidates_and_arbitration.md)、[教程 10：Jev 與傳統分類器](10_jev_vs_classifier_io.md)
 

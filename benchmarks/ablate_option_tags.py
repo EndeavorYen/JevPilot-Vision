@@ -9,19 +9,54 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
 
 import torch
-
 import jevpilot_vision.trajectory_sampler as ts
 from benchmarks.benchmark_jevpilot_hierarchical import JevPilot2Simulator, evaluate_jevpilot2_mode
 from demo.server import DecisionEngine
-from semif_phase1.cuda_graph import find_bucket
-from semif_phase1.direct import encode_prompt
 from jevpilot_vision.trajectory_sampler import compact_jev_state, vector_option_tag
 
+LETTERS = "ABCDEFGHIJKLMNOP"
+DIRECT_SYSTEM = (
+    "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. "
+    "Respond with only its uppercase letter, with no explanation or reasoning."
+)
 
-def prompt_stats(engine: DecisionEngine, obs: dict, style: str) -> dict:
+
+def _direct_messages(row: dict) -> list[dict]:
+    payload = {
+        "evidence": row["state"],
+        "criterion": row["question"],
+        "options": [
+            {"letter": LETTERS[index], "description": option["description"]}
+            for index, option in enumerate(row["options"])
+        ],
+    }
+    return [
+        {"role": "system", "content": DIRECT_SYSTEM},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
+    ]
+
+
+def find_bucket(seq_len: int, buckets: tuple[int, ...] = (256, 512, 1024)) -> int | None:
+    for b in sorted(buckets):
+        if b >= seq_len:
+            return b
+    return None
+
+
+def encode_prompt(tokenizer, row: dict, max_tokens: int = 4096) -> tuple[list[int], list[int], str]:
+    if tokenizer is None:
+        messages = _direct_messages(row)
+        return list(range(len(json.dumps(messages)) // 4)), [], ""
+    prompt = tokenizer.apply_chat_template(
+        _direct_messages(row), tokenize=False, add_generation_prompt=True, enable_thinking=False
+    )
+    ids = tokenizer.encode(prompt, add_special_tokens=False)
+    return ids, [], ""
+
+
+def prompt_stats(engine: DecisionEngine, obs: dict, style: str, tokenizer=None) -> dict:
     options = [{"id": k, "description": vector_option_tag(v, style=style)} for k, v in obs["candidates"].items()]
     row = {
         "id": f"tag-{style}",
@@ -29,7 +64,15 @@ def prompt_stats(engine: DecisionEngine, obs: dict, style: str) -> dict:
         "question": "Choose a safe driving path.",
         "options": options,
     }
-    ids, _, _ = encode_prompt(engine.tokenizer, row, 4096)
+    if tokenizer is None:
+        tokenizer = getattr(engine, "tokenizer", None)
+    if tokenizer is None:
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(engine.model_name)
+        except Exception:
+            tokenizer = None
+    ids, _, _ = encode_prompt(tokenizer, row, 4096)
     buckets = getattr(engine.graph_runner, "buckets", (256, 512, 1024))
     return {
         "style": style,
@@ -42,12 +85,17 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA required")
     engine = DecisionEngine(model_name="Qwen/Qwen2.5-3B-Instruct", device="cuda", use_mock=False)
+    try:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(engine.model_name)
+    except Exception:
+        tokenizer = None
     sim = JevPilot2Simulator("traffic_light_red", seed=42, raw_mode=True)
     sim.z = 20.0
     obs = sim.get_observation()
     report = {"prompt": [], "closed_loop": []}
     for style in ("csv", "words", "verbose"):
-        report["prompt"].append(prompt_stats(engine, obs, style))
+        report["prompt"].append(prompt_stats(engine, obs, style, tokenizer=tokenizer))
     print(json.dumps({"prompt": report["prompt"]}, indent=2), flush=True)
     for style in ("csv", "words", "verbose"):
         ts.OPTION_TAG_STYLE = style

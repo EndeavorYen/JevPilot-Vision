@@ -1,7 +1,31 @@
-"""Keep the default Jev letter-slot prompt inside the 512 CUDA Graph bucket (#86)."""
+import json
 
-from semif_phase1.core import direct_messages
 from jevpilot_vision.trajectory_sampler import VECTOR_INSTRUCTIONS, compact_jev_state, vector_option_tag
+
+LETTERS = "ABCDEFGHIJKLMNOP"
+DIRECT_SYSTEM = (
+    "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. "
+    "Respond with only its uppercase letter, with no explanation or reasoning."
+)
+
+
+def _json_compact(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def direct_messages(row: dict) -> list[dict]:
+    payload = {
+        "evidence": row["state"],
+        "criterion": row["question"],
+        "options": [
+            {"letter": LETTERS[index], "description": option["description"]}
+            for index, option in enumerate(row["options"])
+        ],
+    }
+    return [
+        {"role": "system", "content": DIRECT_SYSTEM},
+        {"role": "user", "content": _json_compact(payload)},
+    ]
 
 GRAPH_BUCKET = 512
 # Qwen English JSON is typically ~3.5–4 characters per token. Stay under 4× bucket.

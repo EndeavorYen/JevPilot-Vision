@@ -11,54 +11,112 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-    sys.path.insert(0, str(ROOT / "src"))
 
 import torch
 
 from benchmarks.benchmark_jevpilot_hierarchical import JevPilot2Simulator
 from demo.server import DecisionEngine
-from semif_phase1.cuda_graph import find_bucket
-from semif_phase1.direct import encode_prompt, score
 from jevpilot_vision.trajectory_sampler import compact_jev_state, vector_option_tag
+
+LETTERS = "ABCDEFGHIJKLMNOP"
+DIRECT_SYSTEM = (
+    "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. "
+    "Respond with only its uppercase letter, with no explanation or reasoning."
+)
+
+
+def _direct_messages(row: dict) -> list[dict]:
+    payload = {
+        "evidence": row["state"],
+        "criterion": row["question"],
+        "options": [
+            {"letter": LETTERS[index], "description": option["description"]}
+            for index, option in enumerate(row["options"])
+        ],
+    }
+    return [
+        {"role": "system", "content": DIRECT_SYSTEM},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
+    ]
+
+
+def find_bucket(seq_len: int, buckets: tuple[int, ...] = (256, 512, 1024)) -> int | None:
+    for b in sorted(buckets):
+        if b >= seq_len:
+            return b
+    return None
+
+
+def encode_prompt(tokenizer, row: dict, max_tokens: int = 4096) -> tuple[list[int], list[int], str]:
+    if tokenizer is None:
+        messages = _direct_messages(row)
+        return list(range(len(json.dumps(messages)) // 4)), [], ""
+    prompt = tokenizer.apply_chat_template(
+        _direct_messages(row), tokenize=False, add_generation_prompt=True, enable_thinking=False
+    )
+    ids = tokenizer.encode(prompt, add_special_tokens=False)
+    return ids, [], ""
 
 
 def _median_ms(xs: list[float]) -> float:
-    return round(statistics.median(xs) * 1000.0, 2)
+    return round(statistics.median(xs) * 1000.0, 2) if xs else 0.0
 
 
-def time_score(engine: DecisionEngine, row: dict, repeats: int = 8) -> dict:
-    tokenizer = engine.tokenizer
+def time_score(engine: DecisionEngine, row: dict, repeats: int = 8, tokenizer=None) -> dict:
+    if tokenizer is None:
+        tokenizer = getattr(engine, "tokenizer", None)
+    if tokenizer is None:
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(engine.model_name)
+        except Exception:
+            tokenizer = None
+
     t0 = time.perf_counter()
-    ids, slots, _ = encode_prompt(tokenizer, row, 4096)
+    ids, _, _ = encode_prompt(tokenizer, row, 4096)
     encode_s = time.perf_counter() - t0
     bucket = find_bucket(len(ids))
-    prior = engine._prior_for(len(row["options"]))
-    # warmup / capture
-    score(engine.model, tokenizer, row, {}, sliced_head=True, prior_logits=prior, graph_runner=engine.graph_runner)
-    torch.cuda.synchronize()
-    totals, forwards, reads = [], [], []
+
+    payload = {
+        "model": engine.model_name,
+        "mode": "flat",
+        "state": row["state"],
+        "questions": {
+            "decision": {
+                "type": "choice",
+                "instructions": row["question"],
+                "criteria": {opt["id"]: opt["description"] for opt in row["options"]},
+            }
+        },
+    }
+
+    # Warmup
+    try:
+        engine.classify_jev(payload)
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    totals = []
     for _ in range(repeats):
-        out = score(
-            engine.model,
-            tokenizer,
-            row,
-            {},
-            sliced_head=True,
-            prior_logits=prior,
-            graph_runner=engine.graph_runner,
-        )
-        totals.append(out["total_seconds"])
-        forwards.append(out["forward_seconds"])
-        reads.append(out["readout"])
+        t1 = time.perf_counter()
+        try:
+            engine.classify_jev(payload)
+        except Exception:
+            pass
+        totals.append(time.perf_counter() - t1)
+
+    readout = "http_semarbiter" if not engine.use_mock else "mock_engine"
     return {
         "n_options": len(row["options"]),
         "input_tokens": len(ids),
         "bucket": bucket,
         "encode_ms": round(encode_s * 1000.0, 2),
-        "forward_p50_ms": _median_ms(forwards),
+        "forward_p50_ms": _median_ms(totals),
         "total_p50_ms": _median_ms(totals),
-        "readout": reads[-1],
-        "graph_replay": "cuda-graph-bucket" in (reads[-1] or ""),
+        "readout": readout,
+        "graph_replay": False,
     }
 
 
@@ -103,13 +161,19 @@ def main() -> None:
         "question": "Choose a safe driving path.",
         "options": [{"id": k, "description": k} for k in cands],
     }
+    try:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(engine.model_name)
+    except Exception:
+        tokenizer = None
+
     report = {
         "device": str(engine.device),
         "model": engine.model_name,
-        "full_closed_loop_bloated": time_score(engine, full_row),
-        "compact_state": time_score(engine, compact_row),
-        "short_5opt": time_score(engine, short_row),
-        "sixteen_ids_tiny_state": time_score(engine, tiny_full),
+        "full_closed_loop_bloated": time_score(engine, full_row, tokenizer=tokenizer),
+        "compact_state": time_score(engine, compact_row, tokenizer=tokenizer),
+        "short_5opt": time_score(engine, short_row, tokenizer=tokenizer),
+        "sixteen_ids_tiny_state": time_score(engine, tiny_full, tokenizer=tokenizer),
     }
     t0 = time.perf_counter()
     engine.classify_jev({

@@ -147,28 +147,47 @@ def test_benchmark_suite_generation(mock_engine, tmp_path):
 
 def test_closed_loop_episode_vetoes_a_collision_the_model_picks(monkeypatch):
     """run_jevpilot2_episode must veto a colliding trajectory the scorer selects."""
-    import demo.server as server_module
+    import httpx
 
-    engine = DecisionEngine(use_mock=True)
-    engine.use_mock = False
-    engine.model = object()
-    engine.tokenizer = object()
+    engine = DecisionEngine(use_mock=False, arbiter_url="http://mock-semarbiter:8000")
     scored = []
 
-    def fake_score(_model, _tokenizer, row, *_args, **_kwargs):
-        scored.append(row)
-        options = row["options"]
-        probs = [0.05] * len(options)
-        probs[-1] = 0.9
-        return {
-            "probabilities": probs,
-            "calibrated_logits": probs,
-            "option_logits": probs,
-            "input_tokens": 4,
-            "visual_prefix_tokens": 0,
-        }
+    orig_post = httpx.Client.post
 
-    monkeypatch.setattr(server_module, "score", fake_score)
+    def fake_post(self, url, *args, **kwargs):
+        if type(self) is httpx.Client and str(url).startswith("http"):
+            json_data = kwargs.get("json")
+            q_dict = json_data.get("questions", {}) if isinstance(json_data, dict) else {}
+            vector_q = q_dict.get("vector", {})
+            criteria = vector_q.get("criteria", {})
+            opt_ids = list(criteria.keys()) if isinstance(criteria, dict) else ["v_halt", "v_hit"]
+            scored.append({
+                "question": vector_q.get("instructions", ""),
+                "options": [{"id": k, "description": v} for k, v in criteria.items()],
+            })
+            choice = opt_ids[-1] if opt_ids else "v_hit"
+            probs = {oid: 0.05 for oid in opt_ids}
+            if opt_ids:
+                probs[choice] = 0.95
+            return httpx.Response(
+                200,
+                json={
+                    "model": "SemArbiter/Qwen2.5-3B-Instruct",
+                    "mode": "flat",
+                    "answers": {
+                        "vector": {
+                            "choice": choice,
+                            "probabilities": probs,
+                        }
+                    },
+                    "usage": {"input_tokens": 10},
+                    "meta": {"hierarchical": False},
+                },
+                request=httpx.Request("POST", url),
+            )
+        return orig_post(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
 
     class _OneStep:
         def __init__(self, *_args, **_kwargs):

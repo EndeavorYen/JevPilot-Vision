@@ -532,30 +532,46 @@ def test_v1_vision_returns_vision_encode_ms(mock_engine):
 
 
 def _neural_engine(server_module):
-    engine = DecisionEngine(use_mock=True)
-    engine.use_mock = False
-    engine.model = object()
-    engine.tokenizer = object()
+    engine = DecisionEngine(use_mock=False, arbiter_url="http://mock-semarbiter:8000")
     previous = server_module.engine
     server_module.engine = engine
     return engine, previous
 
 
-def _fake_score_last_option(seen):
-    def fake_score(model, tokenizer, row, *args, **kwargs):
-        seen.append(row)
-        options = row["options"]
-        probs = [0.05] * len(options)
-        probs[-1] = 0.9
-        return {
-            "probabilities": probs,
-            "calibrated_logits": probs,
-            "option_logits": probs,
-            "input_tokens": 4,
-            "visual_prefix_tokens": 0,
-        }
+def _fake_post_last_option(seen):
+    orig_post = httpx.Client.post
 
-    return fake_score
+    def fake_post(self, url, *args, **kwargs):
+        if type(self) is httpx.Client and str(url).startswith("http"):
+            json_data = kwargs.get("json")
+            seen.append((str(url), json_data))
+            q_dict = json_data.get("questions", {}) if isinstance(json_data, dict) else {}
+            answers = {}
+            for q_key, q_val in q_dict.items():
+                criteria = q_val.get("criteria", {})
+                opt_ids = list(criteria.keys()) if isinstance(criteria, dict) else ["opt1"]
+                choice = opt_ids[-1] if opt_ids else "opt1"
+                probs = {oid: 0.05 for oid in opt_ids}
+                if opt_ids:
+                    probs[choice] = 0.95
+                answers[q_key] = {
+                    "choice": choice,
+                    "probabilities": probs,
+                }
+            return httpx.Response(
+                200,
+                json={
+                    "model": "SemArbiter/Qwen2.5-3B-Instruct",
+                    "mode": (json_data.get("mode", "flat") if isinstance(json_data, dict) else "flat"),
+                    "answers": answers,
+                    "usage": {"input_tokens": 10},
+                    "meta": {"hierarchical": False},
+                },
+                request=httpx.Request("POST", url),
+            )
+        return orig_post(self, url, *args, **kwargs)
+
+    return fake_post
 
 
 def test_live_routes_score_supplied_option_without_driving_modules(monkeypatch):
@@ -566,7 +582,7 @@ def test_live_routes_score_supplied_option_without_driving_modules(monkeypatch):
 
     _engine, previous = _neural_engine(server_module)
     seen = []
-    monkeypatch.setattr(server_module, "score", _fake_score_last_option(seen))
+    monkeypatch.setattr(httpx.Client, "post", _fake_post_last_option(seen))
     sys.modules.pop("jevpilot_vision.vision", None)
     sys.modules.pop("jevpilot_vision", None)
     payload = {
@@ -586,9 +602,14 @@ def test_live_routes_score_supplied_option_without_driving_modules(monkeypatch):
             body = response.json()
             assert body["answers"]["decision"]["choice"] == "yes"
             assert set(body["answers"]["decision"]["probabilities"]) == {"no", "yes"}
-        scored = [row for row in seen if row.get("question") == "Is the refund approved?"]
+        scored = [
+            json_body
+            for _url, json_body in seen
+            if json_body.get("questions", {}).get("decision", {}).get("instructions")
+            == "Is the refund approved?"
+        ]
         assert scored
-        assert [opt["id"] for opt in scored[0]["options"]] == ["no", "yes"]
+        assert list(scored[0]["questions"]["decision"]["criteria"].keys()) == ["no", "yes"]
         assert "jevpilot_vision.vision" not in sys.modules
         assert "jevpilot_vision" not in sys.modules
         source = (
@@ -614,11 +635,15 @@ def test_classifier_routes_reject_image_bytes(mock_engine, monkeypatch):
     def boom(*_args, **_kwargs):
         raise AssertionError("VisionEncoder must not run on the classifier door")
 
-    def scored(*_args, **_kwargs):
-        raise AssertionError("image request must not be scored")
+    orig_post = httpx.Client.post
+
+    def scored(self, url, *args, **kwargs):
+        if type(self) is httpx.Client and str(url).startswith("http"):
+            raise AssertionError("image request must not be scored")
+        return orig_post(self, url, *args, **kwargs)
 
     monkeypatch.setattr("jevpilot_vision.vision.get_vision_encoder", boom, raising=False)
-    monkeypatch.setattr(server_module, "score", scored)
+    monkeypatch.setattr(httpx.Client, "post", scored)
     previous = server_module.engine
     image = "data:image/jpeg;base64," + ("A" * 80)
     questions = {
@@ -688,7 +713,7 @@ def test_root_is_not_the_driving_homepage():
 
 
 def test_driving_modules_live_outside_the_core_package():
-    core = REPO_ROOT / "src" / "semif_phase1"
+    assert not (REPO_ROOT / "src" / "semif_phase1").exists()
     app_dir = REPO_ROOT / "jevpilot_vision"
     for name in (
         "vision.py",
@@ -698,13 +723,9 @@ def test_driving_modules_live_outside_the_core_package():
         "stall.py",
         "directive.py",
     ):
-        assert not (core / name).exists(), name
         assert (app_dir / name).exists(), name
     assert (app_dir / "web" / "index.html").exists()
     assert not (REPO_ROOT / "demo" / "jevpilot" / "index.html").exists()
-    for path in core.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        assert "jevpilot_vision" not in text
 
 
 def test_driving_loop_prepares_then_calls_live_classifier(monkeypatch):
@@ -721,7 +742,7 @@ def test_driving_loop_prepares_then_calls_live_classifier(monkeypatch):
 
     _engine, previous = _neural_engine(server_module)
     seen = []
-    monkeypatch.setattr(server_module, "score", _fake_score_last_option(seen))
+    monkeypatch.setattr(httpx.Client, "post", _fake_post_last_option(seen))
     calls = []
     original = DecisionEngine.classify_jev
 

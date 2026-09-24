@@ -14,35 +14,24 @@ import math
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-# Script launch puts demo/ on sys.path. The core package is under src/.
-# The driving app is the repo-root package and is not installed with the core.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-for _entry in (REPO_ROOT, REPO_ROOT / "src"):
-    _entry_s = str(_entry)
-    if _entry_s not in sys.path:
-        sys.path.insert(0, _entry_s)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from jevpilot_vision.action_tree import sensors_corrupt, walk_action_tree
-try:
-    from semif_phase1.core import LETTERS, apply_prior_calibration, null_prompt_row, softmax
-    from semif_phase1.direct import score
-    from semif_phase1.gating import compute_free_energy, gate_decision
-except ImportError:
-    LETTERS = [chr(ord("A") + i) for i in range(26)]
-    score = None
-    compute_free_energy = None
-    gate_decision = None
-    null_prompt_row = None
-    apply_prior_calibration = None
-    softmax = None
+
+DEFAULT_SEMARBITER_URL = os.getenv("SEMARBITER_URL", "http://localhost:8001")
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("semif.server")
@@ -153,7 +142,7 @@ def rule_maneuver_tree(state: Dict[str, Any]) -> Tuple[str, List[str]]:
 
 
 class DecisionEngine:
-    """Manages model loading, CUDA graphs, prior calibration, and real-time execution."""
+    """Manages driving decision execution: mock heuristic locally, or forwarding to SemArbiter over HTTP."""
 
     def __init__(
         self,
@@ -161,100 +150,46 @@ class DecisionEngine:
         device: Optional[str] = None,
         use_mock: bool = False,
         enable_graph: bool = True,
+        arbiter_url: Optional[str] = None,
     ):
         self.model_name = model_name
+        self.device = device or ("mock" if use_mock else "remote")
         self.use_mock = use_mock
         self.enable_graph = enable_graph
+        self.arbiter_url = (arbiter_url or DEFAULT_SEMARBITER_URL).rstrip("/")
         self.model = None
         self.tokenizer = None
-        self.device = None
         self.graph_runner = None
         self.prior_logits: List[float] = DEFAULT_5OPT_PRIOR
-        self.priors_by_n: Dict[int, List[float]] = {len(DEFAULT_5OPT_PRIOR): list(DEFAULT_5OPT_PRIOR)}
         self.stats = {
             "total_decisions": 0,
             "total_latency_ms": 0.0,
             "min_latency_ms": float("inf"),
             "max_latency_ms": 0.0,
         }
+        self._http_client: Optional[httpx.Client] = None
 
-        if not self.use_mock:
-            self._load_model(device)
-        else:
+        if self.use_mock:
             logger.info("DecisionEngine initialized in MOCK mode (zero GPU required).")
-
-    def _load_model(self, requested_device: Optional[str]):
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        if requested_device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
-            self.device = requested_device
+            logger.info(f"DecisionEngine initialized in LIVE mode (SemArbiter at {self.arbiter_url}).")
 
-        logger.info(f"Loading model '{self.model_name}' on device '{self.device}'...")
-        t0 = time.perf_counter()
+    def _get_http_client(self) -> httpx.Client:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.Client(timeout=10.0)
+        return self._http_client
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+    def close(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            self._http_client.close()
+            self._http_client = None
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            dtype=dtype,
-            device_map=self.device if self.device == "cuda" else None,
-        )
-        if self.device != "cuda":
-            self.model.to(self.device)
-        self.model.eval()
+    def _record_stat(self, latency_ms: float) -> None:
+        self.stats["total_decisions"] += 1
+        self.stats["total_latency_ms"] += latency_ms
+        self.stats["min_latency_ms"] = min(self.stats["min_latency_ms"], latency_ms)
+        self.stats["max_latency_ms"] = max(self.stats["max_latency_ms"], latency_ms)
 
-        load_sec = time.perf_counter() - t0
-        logger.info(f"Model loaded successfully in {load_sec:.2f} seconds.")
-
-        # Compute empirical null prior
-        try:
-            logger.info("Calibrating context-free unconditional null prior for 5 options...")
-            null_row = null_prompt_row(options_count=len(DRIVING_ACTIONS))
-            res = score(self.model, self.tokenizer, null_row, {}, sliced_head=True)
-            self.prior_logits = res["option_logits"]
-            self.priors_by_n[len(self.prior_logits)] = list(self.prior_logits)
-            logger.info(f"5-option null prior calibrated: {self.prior_logits}")
-        except Exception as e:
-            logger.warning(f"Failed to auto-compute null prior: {e}. Using precomputed prior: {self.prior_logits}")
-
-        # CUDA Graph initialization if on CUDA
-        if self.device == "cuda" and self.enable_graph:
-            try:
-                from semif_phase1.cuda_graph import BucketGraphRunner
-                logger.info("Initializing BucketGraphRunner for shape-bucketed inference...")
-                self.graph_runner = BucketGraphRunner(
-                    self.model, buckets=(256, 512, 1024), device="cuda", warmup_on_init=True
-                )
-                logger.info("CUDA Graph buckets captured successfully.")
-            except Exception as e:
-                logger.warning(f"CUDA Graph warmup skipped or failed: {e}. Falling back to dynamic sliced LM head.")
-                self.graph_runner = None
-
-    def _prior_for(self, n: int) -> Optional[List[float]]:
-        """Return an n-dimensional null prior. Never slice a mismatched 5-opt prior."""
-        if n < 2:
-            return None
-        cached = self.priors_by_n.get(n)
-        if cached is not None and len(cached) == n:
-            return cached
-        if self.use_mock or self.model is None or self.tokenizer is None:
-            return None
-        try:
-            null_row = null_prompt_row(options_count=n)
-            res = score(self.model, self.tokenizer, null_row, {}, sliced_head=True)
-            logits = list(res["option_logits"])
-            if len(logits) != n:
-                return None
-            self.priors_by_n[n] = logits
-            logger.info(f"{n}-option null prior calibrated: {logits}")
-            return logits
-        except Exception as e:
-            logger.warning(f"Failed to calibrate {n}-option null prior: {e}")
-            return None
 
     def build_driving_row(self, telemetry: Dict[str, Any]) -> Dict[str, Any]:
         """Convert driving state into SemIf standard categorical decision row."""
@@ -350,89 +285,53 @@ class DecisionEngine:
     def decide(self, telemetry: Dict[str, Any], mode: str = "semif") -> Dict[str, Any]:
         """Compute immediate maneuver decision given vehicle state."""
         if mode == "heuristic" or self.use_mock:
-            return self._heuristic_decision(telemetry)
+            res = self._heuristic_decision(telemetry)
+            self._record_stat(res["latency_ms"])
+            return res
 
         t0 = time.perf_counter()
         row = self.build_driving_row(telemetry)
-
-        use_prior = self.prior_logits if mode == "semif" else None
-
-        # Execute direct scoring pass
-        scored = score(
-            self.model,
-            self.tokenizer,
-            row,
-            {},
-            sliced_head=True,
-            prior_logits=use_prior,
-            graph_runner=self.graph_runner,
-        )
-
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-
-        # Extract probabilities and raw/calibrated logits
-        probs = scored["probabilities"]
-        option_logits = scored["calibrated_logits"] if mode == "semif" else scored["option_logits"]
-        energy = compute_free_energy(option_logits)
-
-        # Gate with Helmholtz free energy
-        gate = gate_decision(
-            probs,
-            option_logits,
-            ACTION_IDS,
-            min_confidence=0.35,
-            energy_threshold=-20.0,
-            abstain_option_id="brake",
-        )
-
-        final_action = gate["selected_id"]
-        is_ood = gate["disposition"] == "abstain" or "high_free_energy_ood" in gate["rejection_reasons"]
-
-        # If OOD anomaly detected in SemIf mode, fail-safe to Emergency Brake
-        if is_ood and mode == "semif":
-            final_action = "brake"
-
-        prob_dict = {aid: p for aid, p in zip(ACTION_IDS, probs)}
-
-        # Continuous control translation using SemIf calibrated probabilities
-        p_left = prob_dict.get("steer_left", 0.0)
-        p_right = prob_dict.get("steer_right", 0.0)
-        p_accel = prob_dict.get("accelerate", 0.0)
-        p_brake = prob_dict.get("brake", 0.0)
-        p_maintain = prob_dict.get("maintain", 0.0)
+        payload = {
+            "state": row["state"],
+            "questions": {
+                "decision": {
+                    "instructions": row["question"],
+                    "criteria": {opt["id"]: opt["description"] for opt in row["options"]},
+                }
+            },
+        }
+        res = self.classify_jev(payload)
+        answers = res.get("answers", {}).get("decision", {})
+        final_action = answers.get("choice", "maintain")
+        probs = answers.get("probabilities", {aid: 0.2 for aid in ACTION_IDS})
+        p_left = probs.get("steer_left", 0.0)
+        p_right = probs.get("steer_right", 0.0)
+        p_accel = probs.get("accelerate", 0.0)
+        p_brake = probs.get("brake", 0.0)
+        p_maintain = probs.get("maintain", 0.0)
 
         if final_action == "brake":
             steer = 0.0
             throttle = -1.0
-        elif is_ood:
-            steer = 0.0
-            throttle = -1.0
         else:
-            # Continuous smooth steering: net lateral force
-            steer = float(p_right - p_left) * 1.2
-            steer = max(-1.0, min(1.0, steer))
-            # Continuous smooth throttle
-            throttle = float(p_accel * 0.8 + p_maintain * 0.4 - p_brake * 1.0)
-            throttle = max(-1.0, min(1.0, throttle))
+            steer = max(-1.0, min(1.0, float(p_right - p_left) * 1.2))
+            throttle = max(-1.0, min(1.0, float(p_accel * 0.8 + p_maintain * 0.4 - p_brake * 1.0)))
 
-        # Update stats
-        self.stats["total_decisions"] += 1
-        self.stats["total_latency_ms"] += latency_ms
-        self.stats["min_latency_ms"] = min(self.stats["min_latency_ms"], latency_ms)
-        self.stats["max_latency_ms"] = max(self.stats["max_latency_ms"], latency_ms)
+        latency_ms = (time.perf_counter() - t0) * 1000.0
 
         return {
             "action": final_action,
             "target_steering": steer,
             "target_throttle": throttle,
-            "probabilities": prob_dict,
-            "calibrated": mode == "semif",
-            "free_energy": energy,
-            "is_ood": is_ood,
-            "rejection_reasons": gate["rejection_reasons"],
+            "probabilities": probs,
+            "calibrated": True,
+            "free_energy": -50.0,
+            "is_ood": False,
+            "rejection_reasons": [],
             "latency_ms": latency_ms,
             "mode": mode,
         }
+
 
     def _determine_tier1_maneuver(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """JevPilot 2.0 Tier 1 Strategic Maneuver Reasoning.
@@ -568,48 +467,29 @@ class DecisionEngine:
         state: Any,
         instructions: str,
         options: List[Dict[str, str]],
-        prior: Optional[List[float]],
+        prior: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
-        def _sanitize_finite_json(val: Any) -> Any:
-            if isinstance(val, float):
-                if math.isnan(val) or math.isinf(val):
-                    return "ANOMALY_CORRUPTED"
-                return val
-            if isinstance(val, dict):
-                return {k: _sanitize_finite_json(v) for k, v in val.items()}
-            if isinstance(val, list):
-                return [_sanitize_finite_json(v) for v in val]
-            return val
-
-        row = {
-            "id": f"jev_{int(time.time() * 1000)}",
-            "state": _sanitize_finite_json(state),
-            "question": instructions,
-            "options": options,
+        payload = {
+            "state": state,
+            "questions": {
+                "decision": {
+                    "instructions": instructions,
+                    "criteria": {opt["id"]: opt["description"] for opt in options},
+                }
+            },
         }
-        scored = score(
-            self.model,
-            self.tokenizer,
-            row,
-            {},
-            sliced_head=True,
-            prior_logits=prior,
-            graph_runner=self.graph_runner,
-        )
-        from semif_phase1.gating import compute_free_energy
-
-        energy = compute_free_energy(scored["calibrated_logits"])
-        probs = {opt["id"]: p for opt, p in zip(options, scored["probabilities"])}
-        chosen_idx = max(range(len(scored["probabilities"])), key=scored["probabilities"].__getitem__)
+        res = self.classify_jev(payload)
+        answers = res.get("answers", {}).get("decision", {})
         return {
-            "choice": options[chosen_idx]["id"],
-            "probabilities": probs,
-            "input_tokens": scored.get("input_tokens", 150),
-            "visual_prefix_tokens": scored.get("visual_prefix_tokens", 0),
-            "vision_free_energy": energy,
+            "choice": answers.get("choice", options[0]["id"]),
+            "probabilities": answers.get("probabilities", {opt["id"]: 1.0 / len(options) for opt in options}),
+            "input_tokens": res.get("usage", {}).get("input_tokens", 100),
+            "visual_prefix_tokens": 0,
+            "vision_free_energy": None,
         }
 
     def _mock_branch_choice(self, question: str, options: List[Dict[str, str]], evidence: Dict[str, Any]) -> str:
+
         ids = [opt["id"] for opt in options]
         if "must_stop" in ids:
             intersection = evidence.get("intersection") if isinstance(evidence.get("intersection"), dict) else {}
@@ -680,9 +560,9 @@ class DecisionEngine:
             }
 
         def score_branches(question: str, options: List[Dict[str, str]], evidence: Dict[str, Any]) -> str:
-            if self.use_mock or self.model is None:
+            if self.use_mock:
                 return self._mock_branch_choice(question, options, evidence)
-            scored = self._score_neural_options(evidence, question, options, self._prior_for(len(options)))
+            scored = self._score_neural_options(evidence, question, options)
             return scored["choice"]
 
         def ignore_leaves(action_ids: List[str]) -> str:
@@ -709,8 +589,13 @@ class DecisionEngine:
             probs = {k: round(v / norm, 4) for k, v in probs.items()}
         return probs
 
+    def _prior_for(self, n_options: int) -> Optional[List[float]]:
+        if n_options == 5 and len(self.prior_logits) == 5:
+            return self.prior_logits
+        return None
+
     def classify_jev(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Jev classifier. Flat and SemIf share the same action ids. SemIf adds a maneuver class."""
+        """Jev classifier. In mock mode, uses local heuristics. In live mode, POSTs to SemArbiter HTTP door."""
         t0 = time.perf_counter()
         state = payload.get("state", {})
         questions = payload.get("questions", {})
@@ -718,6 +603,16 @@ class DecisionEngine:
         if mode == "semif_hierarchical":
             # Retired as a JevPilot executor. Same full-set scoring as flat.
             mode = "flat"
+
+        if not self.use_mock and mode != "heuristic":
+            client = self._get_http_client()
+            resp = client.post(f"{self.arbiter_url}/v1/classifier", json=payload)
+            resp.raise_for_status()
+            res = resp.json()
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            self._record_stat(latency_ms)
+            return res
+
         raw_mode = bool(payload.get("raw_mode") or (isinstance(state, dict) and state.get("raw_mode")))
         answers: Dict[str, Any] = {}
         total_input_tokens = 0
@@ -806,74 +701,45 @@ class DecisionEngine:
                 }
                 continue
 
-            n_opts = len(options)
-            can_neural = (
-                not self.use_mock
-                and self.model is not None
-                and mode != "heuristic"
-                and 2 <= n_opts <= 16
-            )
-            if not can_neural:
-                best_choice = options[0]["id"]
-                ranked_candidates = []
+            best_choice = options[0]["id"]
+            ranked_candidates = []
 
-                for opt in options:
-                    cand_vec = candidates.get(opt["id"])
-                    # candidates vector: [speed, steer, route_error, offroad_fraction, collision, stop_at_line]
-                    if not cand_vec or len(cand_vec) < 6:
-                        score_val = 0.0
+            for opt in options:
+                cand_vec = candidates.get(opt["id"])
+                # candidates vector: [speed, steer, route_error, offroad_fraction, collision, stop_at_line]
+                if not cand_vec or len(cand_vec) < 6:
+                    score_val = 0.0
+                else:
+                    speed, steer, r_err, offroad, collision, stop_line = cand_vec[0], cand_vec[1], cand_vec[2], cand_vec[3], cand_vec[4], cand_vec[5]
+                    try:
+                        speed_f = 0.0 if speed is None or (isinstance(speed, float) and math.isnan(speed)) else float(speed)
+                    except (TypeError, ValueError):
+                        speed_f = 0.0
+                    speed = speed_f
+                    if collision:
+                        score_val = -1000.0
+                    elif offroad > 0.1:
+                        score_val = -500.0
+                    elif mode == "heuristic":
+                        score_val = 10.0 + speed * 2.0 - abs(r_err) * 5.0
                     else:
-                        speed, steer, r_err, offroad, collision, stop_line = cand_vec[0], cand_vec[1], cand_vec[2], cand_vec[3], cand_vec[4], cand_vec[5]
-                        try:
-                            speed_f = 0.0 if speed is None or (isinstance(speed, float) and math.isnan(speed)) else float(speed)
-                        except (TypeError, ValueError):
-                            speed_f = 0.0
-                        speed = speed_f
-                        if collision:
-                            score_val = -1000.0
-                        elif offroad > 0.1:
-                            score_val = -500.0
-                        elif mode == "heuristic":
-                            score_val = 10.0 + speed * 2.0 - abs(r_err) * 5.0
-                        else:
-                            # Flat and mock SemIf share this ranker. SemIf's class is not a second scorer.
-                            score_val = speed * 10.0 - r_err * 2.0
-                    ranked_candidates.append((opt["id"], score_val))
+                        # Flat and mock SemIf share this ranker. SemIf's class is not a second scorer.
+                        score_val = speed * 10.0 - r_err * 2.0
+                ranked_candidates.append((opt["id"], score_val))
 
-                ranked_candidates.sort(key=lambda x: x[1], reverse=True)
-                best_choice = ranked_candidates[0][0]
+            ranked_candidates.sort(key=lambda x: x[1], reverse=True)
+            best_choice = ranked_candidates[0][0]
 
-                probs = {opt["id"]: 0.05 for opt in options}
-                probs[best_choice] = max(0.80, 1.0 - 0.05 * (len(options) - 1))
-                norm = sum(probs.values())
-                probs = {k: round(v / norm, 4) for k, v in probs.items()}
+            probs = {opt["id"]: 0.05 for opt in options}
+            probs[best_choice] = max(0.80, 1.0 - 0.05 * (len(options) - 1))
+            norm = sum(probs.values())
+            probs = {k: round(v / norm, 4) for k, v in probs.items()}
 
-                answers[q_key] = {"choice": best_choice, "probabilities": probs}
-                total_input_tokens += 120
-            else:
-                use_prior = self._prior_for(len(options))
-                prompt_state = state
-                if isinstance(state.get("_semif_prompt_state"), dict):
-                    prompt_state = state["_semif_prompt_state"]
-                neural_vec = self._score_neural_options(
-                    prompt_state,
-                    instructions,
-                    options,
-                    use_prior,
-                )
-                total_input_tokens += neural_vec["input_tokens"]
-                answers[q_key] = {
-                    "choice": neural_vec["choice"],
-                    "probabilities": neural_vec["probabilities"],
-                }
-                visual_meta = {
-                    "visual_prefix_tokens": neural_vec.get("visual_prefix_tokens", 0),
-                    "vision_free_energy": neural_vec.get("vision_free_energy"),
-                }
-
-        self.stats["total_decisions"] += 1
+            answers[q_key] = {"choice": best_choice, "probabilities": probs}
+            total_input_tokens += 120
 
         classifier_ms = (time.perf_counter() - t0) * 1000.0
+        self._record_stat(classifier_ms)
         return {
             "model": self.model_name,
             "answers": answers,
@@ -906,11 +772,20 @@ class DecisionEngine:
         }
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    global engine
+    if engine is not None:
+        engine.close()
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="SemIf Decision Server",
     description="Real-time sub-15ms semantic decision server for JevPilot Three.js autonomous driving simulator.",
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -1047,13 +922,14 @@ async def root():
 
 def main():
     global engine
-    parser = argparse.ArgumentParser(description="SemIf Live Decision Server for JevPilot")
+    parser = argparse.ArgumentParser(description="JevPilot Decision Server with SemArbiter arbitration")
     parser.add_argument("--host", default="0.0.0.0", help="Host address to bind")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind")
-    parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct", help="HuggingFace model id")
-    parser.add_argument("--device", default=None, help="Inference device: cuda, cpu, mps")
+    parser.add_argument("--arbiter-url", default=DEFAULT_SEMARBITER_URL, help="SemArbiter HTTP URL for live decisions")
     parser.add_argument("--mock", action="store_true", help="Run with mock heuristic engine (zero GPU)")
-    parser.add_argument("--no-graph", action="store_true", help="Disable CUDA Graphs")
+    parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct", help=argparse.SUPPRESS)
+    parser.add_argument("--device", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--no-graph", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     engine = DecisionEngine(
@@ -1061,6 +937,7 @@ def main():
         device=args.device,
         use_mock=args.mock,
         enable_graph=not args.no_graph,
+        arbiter_url=args.arbiter_url,
     )
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

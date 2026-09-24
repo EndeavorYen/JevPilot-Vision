@@ -1,6 +1,6 @@
 # 教程 09：動態候選空間與語意仲裁（Sampler vs Arbiter）
 
-> **模組對應**：`jevpilot_vision/trajectory_sampler.py`、`src/semif_phase1/action_tree.py`、`benchmarks/benchmark_jevpilot_hierarchical.py`、`demo/server.py`  
+> **模組對應**：`jevpilot_vision/trajectory_sampler.py`、`jevpilot_vision/action_tree.py`、`benchmarks/benchmark_jevpilot_hierarchical.py`、`demo/server.py`  
 > **關聯任務**：[ #71 共用動態幾何採樣](https://github.com/EndeavorYen/SemIf/issues/71)、[ #72 動態分桶樹](https://github.com/EndeavorYen/SemIf/issues/72)、[ #73 Jev 動態候選](https://github.com/EndeavorYen/SemIf/issues/73)  
 > **前置知識**：[教程 02：決策原生 vs 因果 LM](02_decision_native_vs_causal_lm.md)、[教程 03：推論期校準](03_inference_time_calibration.md)、[教程 05：開放世界與 OOD 偵測](05_open_world_and_ood_detection.md)
 
@@ -84,7 +84,7 @@ flowchart LR
 
 ## 三、幾何採樣器的工程實作
 
-幾何採樣器位於 [`jevpilot_vision/trajectory_sampler.py`](file:///D:/Code/SemIf/jevpilot_vision/trajectory_sampler.py)。它採用確定性網格加上以種子控制的微小抖動（Jitter）。
+幾何採樣器位於 [`jevpilot_vision/trajectory_sampler.py`](../../jevpilot_vision/trajectory_sampler.py)。它採用確定性網格加上以種子控制的微小抖動（Jitter）。
 
 ### 1. 2D 點質量動力學前向滾動（Rollout）
 
@@ -136,7 +136,7 @@ $$x_{t+1} = x_t + \delta_{t+1} v_{t+1} \Delta t \times 2.0 - \kappa v_{t+1} \Del
 
 在歷史版本中，決策樹將葉子節點寫死為靜態的符號標籤（如固定動作 $v_0 \sim v_5$）。這種做法切斷了軌跡與當前物理環境的即時關聯。
 
-現代設計在 [`src/semif_phase1/action_tree.py`](file:///D:/Code/SemIf/src/semif_phase1/action_tree.py) 中改用 `partition_ids` 進行**當前幀動態分桶**：
+現代設計在 [`jevpilot_vision/action_tree.py`](../../jevpilot_vision/action_tree.py) 中改用 `partition_ids` 進行**當前幀動態分桶**：
 
 ```mermaid
 flowchart TD
@@ -177,7 +177,7 @@ def partition_ids(
 
 ## 五、指標定義：Clean Completion vs. SDI
 
-過去的語意駕駛指標（SDI）容易因不同情境的權重設定或誤報產生偏差。本專案以 [`benchmarks/driving_quality.py`](file:///D:/Code/SemIf/benchmarks/driving_quality.py) 的客觀指標作為衡量核心：
+過去的語意駕駛指標（SDI）容易因不同情境的權重設定或誤報產生偏差。本專案以 [`benchmarks/driving_quality.py`](../../benchmarks/driving_quality.py) 的客觀指標作為衡量核心：
 
 1. **乾淨完成（Clean Completion）**：
    - 判定標準：任務達成且未發生任何違規或意外事故。
@@ -197,11 +197,11 @@ def partition_ids(
 
 | 功能職責 | 核心檔案與位置 |
 | :--- | :--- |
-| **動態幾何採樣** | [`jevpilot_vision/trajectory_sampler.py`](file:///D:/Code/SemIf/jevpilot_vision/trajectory_sampler.py) |
-| **動態分桶與決策樹** | [`src/semif_phase1/action_tree.py`](file:///D:/Code/SemIf/src/semif_phase1/action_tree.py) |
-| **即時決策伺服器** | [`demo/server.py`](file:///D:/Code/SemIf/demo/server.py) (`DecisionEngine.classify_jev`) |
-| **閉環評測與模擬** | [`benchmarks/benchmark_jevpilot_hierarchical.py`](file:///D:/Code/SemIf/benchmarks/benchmark_jevpilot_hierarchical.py) |
-| **駕駛品質指標計算** | [`benchmarks/driving_quality.py`](file:///D:/Code/SemIf/benchmarks/driving_quality.py) |
+| **動態幾何採樣** | [`jevpilot_vision/trajectory_sampler.py`](../../jevpilot_vision/trajectory_sampler.py) |
+| **動態分桶與決策樹** | [`jevpilot_vision/action_tree.py`](../../jevpilot_vision/action_tree.py) |
+| **即時決策伺服器** | [`demo/server.py`](../../demo/server.py) (`DecisionEngine.classify_jev`) |
+| **閉環評測與模擬** | [`benchmarks/benchmark_jevpilot_hierarchical.py`](../../benchmarks/benchmark_jevpilot_hierarchical.py) |
+| **駕駛品質指標計算** | [`benchmarks/driving_quality.py`](../../benchmarks/driving_quality.py) |
 
 ### 快速驗證指令
 

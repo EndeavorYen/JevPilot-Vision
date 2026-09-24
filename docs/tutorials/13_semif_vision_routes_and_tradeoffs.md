@@ -1,6 +1,6 @@
 # 教程 13：SemIf-Vision 多模態路線分析與架構抉擇
 
-> **模組**：`jevpilot_vision/vision.py`、`src/semif_phase1/visual_prefix.py`、`demo/server.py`、`benchmarks/benchmark_jevpilot_vision.py`  
+> **模組**：`jevpilot_vision/vision.py`、`jevpilot_vision/visual_prefix.py`、`demo/server.py`、`benchmarks/benchmark_jevpilot_vision.py`  
 > **關聯 Issue**：[ #48](https://github.com/EndeavorYen/SemIf/issues/48) [ #90](https://github.com/EndeavorYen/SemIf/issues/90) 傘 [#89](https://github.com/EndeavorYen/SemIf/issues/89)（路線圖總表）  
 > **前置閱讀**：[教程 06：LM Head 投影優化](06_transformer_lm_head_optimization.md)、[教程 07：CUDA Graphs 極限延遲](07_cuda_graphs_and_compilation.md)、[教程 10：Jev vs 分類器與架構邊界](10_jev_vs_classifier_io.md)、[教程 12：JevPilot 視覺輸入](12_jevpilot_vision.md)
 
@@ -51,7 +51,7 @@
 2. **延遲自 ~49 ms 升至 ~87 ms 來自「1024 桶效應」**：  
    加入 `vision.*` 欄位後，Prompt 長度增加，突破了 512-bucket 上限，落入 1024-bucket（如教程 11 所示，形狀分桶擴大導致推論耗時上升），而非 CUDA Graph 被前綴打掉。
 3. **未訓練 Patch 前綴（`VisualPrefixProjector`）的機制定位**：  
-   `src/semif_phase1/visual_prefix.py` 的隨機 Xavier 投影層目前僅為本地架構 PoC。理論上，將未對齊的 32 個隨機向量作為前綴插入 Transformer 注意力最前段，等同於高維雜訊注入，且動態前綴必然破壞靜態 CUDA Graph；此機制不應被當作主力方案，更不可與已測的 CLIP 文字證據混為一談。
+   `jevpilot_vision/visual_prefix.py` 的隨機 Xavier 投影層目前僅為本地架構 PoC。理論上，將未對齊的 32 個隨機向量作為前綴插入 Transformer 注意力最前段，等同於高維雜訊注入，且動態前綴必然破壞靜態 CUDA Graph；此機制不應被當作主力方案，更不可與已測的 CLIP 文字證據混為一談。
 4. **目標門檻（Target Bar）說明**：  
    目前唯一通過 75% 乾淨完成率的只有「純遙測」基線。因此，**$\ge 75\%$ 是任何視覺方案必須超越的驗收門檻，而非路線一現已達成的既有成績**。當前文字視覺為 70%，仍處於待優化超越的狀態。
 
