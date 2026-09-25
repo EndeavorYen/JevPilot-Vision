@@ -23,7 +23,7 @@ pip install -e .
 python demo/server.py --mock --port 8000
 
 # 啟動 JevPilot 駕駛服務 (Live 模式，對接 SemArbiter HTTP 門面)
-# 可透過環境變數 SEMARBITER_URL 或 --arbiter-url 指定 SemArbiter 網址 (預設 http://localhost:8000)
+# 可透過環境變數 SEMARBITER_URL 或 --arbiter-url 指定 SemArbiter 網址 (預設 http://localhost:8001)
 python demo/server.py --port 8000 --arbiter-url http://localhost:8001
 
 # 瀏覽器開啟 3D 模擬器

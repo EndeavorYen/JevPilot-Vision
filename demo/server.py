@@ -8,6 +8,7 @@ and Helmholtz Free Energy OOD detection.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import math
@@ -153,7 +154,9 @@ class DecisionEngine:
         arbiter_url: Optional[str] = None,
     ):
         self.model_name = model_name
-        self.device = device or ("mock" if use_mock else "remote")
+        # The CLI flag is not a measurement. Live mode records SemArbiter's /health device.
+        del device
+        self.device = "mock" if use_mock else "remote"
         self.use_mock = use_mock
         self.enable_graph = enable_graph
         self.arbiter_url = (arbiter_url or DEFAULT_SEMARBITER_URL).rstrip("/")
@@ -178,6 +181,20 @@ class DecisionEngine:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.Client(timeout=10.0)
         return self._http_client
+
+    def sync_scorer_device(self) -> str:
+        """Record the device SemArbiter reports. A missing door stays ``remote``."""
+        if self.use_mock:
+            self.device = "mock"
+            return self.device
+        try:
+            response = self._get_http_client().get(f"{self.arbiter_url}/health")
+            response.raise_for_status()
+            reported = response.json().get("device")
+            self.device = reported if isinstance(reported, str) and reported else "remote"
+        except Exception:
+            self.device = "remote"
+        return self.device
 
     def close(self) -> None:
         if self._http_client is not None and not self._http_client.is_closed:
@@ -282,6 +299,22 @@ class DecisionEngine:
             "mode": "heuristic",
         }
 
+    def _telemetry_ood(self, telemetry: Dict[str, Any]) -> bool:
+        """Local sensor check for /decide. The HTTP door does not report this."""
+        if not isinstance(telemetry, dict):
+            return False
+        if telemetry.get("anomaly") not in (None, False, "", 0):
+            return True
+        for key in ("speed_kmh", "speed_mps", "lateral_offset_m"):
+            raw = telemetry.get(key)
+            try:
+                number = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(number) or math.isinf(number):
+                return True
+        return False
+
     def decide(self, telemetry: Dict[str, Any], mode: str = "semif") -> Dict[str, Any]:
         """Compute immediate maneuver decision given vehicle state."""
         if mode == "heuristic" or self.use_mock:
@@ -300,6 +333,22 @@ class DecisionEngine:
                 }
             },
         }
+        if self._telemetry_ood(telemetry):
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            self._record_stat(latency_ms)
+            return {
+                "action": "brake",
+                "target_steering": 0.0,
+                "target_throttle": -1.0,
+                "probabilities": self._mock_probs(ACTION_IDS, "brake"),
+                "calibrated": None,
+                "free_energy": None,
+                "is_ood": True,
+                "rejection_reasons": ["sensor"],
+                "latency_ms": latency_ms,
+                "mode": mode,
+            }
+
         res = self.classify_jev(payload)
         answers = res.get("answers", {}).get("decision", {})
         final_action = answers.get("choice", "maintain")
@@ -324,8 +373,8 @@ class DecisionEngine:
             "target_steering": steer,
             "target_throttle": throttle,
             "probabilities": probs,
-            "calibrated": True,
-            "free_energy": -50.0,
+            "calibrated": None,
+            "free_energy": None,
             "is_ood": False,
             "rejection_reasons": [],
             "latency_ms": latency_ms,
@@ -594,6 +643,91 @@ class DecisionEngine:
             return self.prior_logits
         return None
 
+    def _criteria_options(self, criteria: Any) -> List[Dict[str, str]]:
+        options: List[Dict[str, str]] = []
+        if isinstance(criteria, dict):
+            for opt_id, opt_desc in criteria.items():
+                desc = str(opt_desc) if opt_desc is not None else f"Path {opt_id}"
+                options.append({"id": str(opt_id), "description": desc})
+        elif isinstance(criteria, list):
+            for item in criteria:
+                options.append({"id": str(item), "description": f"Level {item}"})
+        return options
+
+    def _slowest_candidate(self, candidates: Dict[str, Any]) -> str:
+        def _spd(cid: str) -> float:
+            vec = candidates.get(cid) or [1e9]
+            try:
+                val = float(vec[0])
+                return val if math.isfinite(val) else 1e9
+            except (TypeError, ValueError, IndexError):
+                return 1e9
+
+        return min(candidates, key=_spd)
+
+    def _prompt_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Send the compact prompt state. Keep candidate vectors off the door."""
+        forward = copy.deepcopy(payload)
+        state = forward.get("state")
+        if isinstance(state, dict) and isinstance(state.get("_semif_prompt_state"), dict):
+            forward["state"] = state["_semif_prompt_state"]
+        elif isinstance(state, dict):
+            state.pop("_semif_prompt_state", None)
+        return forward
+
+    def _app_side_answers(self, payload: Dict[str, Any]) -> tuple[bool, Dict[str, Any], Dict[str, Any]]:
+        """Sensor fail-safe and the fixed motion answer stay here. Everything else is forwarded."""
+        state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+        questions = payload.get("questions") if isinstance(payload.get("questions"), dict) else {}
+        true_ood = sensors_corrupt(state) if isinstance(payload.get("state"), dict) else False
+        candidates = state.get("candidates") if isinstance(state.get("candidates"), dict) else {}
+        local: Dict[str, Any] = {}
+        forward: Dict[str, Any] = {}
+        for q_key, q_data in questions.items():
+            criteria = q_data.get("criteria", {}) if isinstance(q_data, dict) else {}
+            options = self._criteria_options(criteria)
+            if q_key == "motion" and options:
+                ids = [opt["id"] for opt in options]
+                pick = "drive" if "drive" in ids else ids[0]
+                local[q_key] = {"choice": pick, "probabilities": self._mock_probs(ids, pick)}
+                continue
+            if q_key == "vector" and true_ood and candidates:
+                slowest = self._slowest_candidate(candidates)
+                local[q_key] = {
+                    "choice": slowest,
+                    "probabilities": self._mock_probs(list(candidates), slowest),
+                }
+                continue
+            forward[q_key] = q_data
+        return true_ood, local, forward
+
+    def _classify_live(self, payload: Dict[str, Any], started: float) -> Dict[str, Any]:
+        true_ood, local_answers, forward_questions = self._app_side_answers(payload)
+        remote: Dict[str, Any] = {}
+        if forward_questions:
+            body = self._prompt_payload(payload)
+            body["questions"] = forward_questions
+            response = self._get_http_client().post(f"{self.arbiter_url}/v1/classifier", json=body)
+            response.raise_for_status()
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                remote = parsed
+        answers = remote.get("answers") if isinstance(remote.get("answers"), dict) else {}
+        answers = dict(answers)
+        answers.update(local_answers)
+        meta = remote.get("meta") if isinstance(remote.get("meta"), dict) else {}
+        meta = dict(meta)
+        meta["true_ood"] = true_ood
+        meta["ood_fail_safe"] = true_ood
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        self._record_stat(latency_ms)
+        result = dict(remote)
+        result["answers"] = answers
+        result["meta"] = meta
+        result.setdefault("model", self.model_name)
+        result["classifier_ms"] = latency_ms
+        return result
+
     def classify_jev(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Jev classifier. In mock mode, uses local heuristics. In live mode, POSTs to SemArbiter HTTP door."""
         t0 = time.perf_counter()
@@ -605,13 +739,7 @@ class DecisionEngine:
             mode = "flat"
 
         if not self.use_mock and mode != "heuristic":
-            client = self._get_http_client()
-            resp = client.post(f"{self.arbiter_url}/v1/classifier", json=payload)
-            resp.raise_for_status()
-            res = resp.json()
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            self._record_stat(latency_ms)
-            return res
+            return self._classify_live(payload, t0)
 
         raw_mode = bool(payload.get("raw_mode") or (isinstance(state, dict) and state.get("raw_mode")))
         answers: Dict[str, Any] = {}
@@ -820,6 +948,8 @@ def get_engine() -> DecisionEngine:
 @app.get("/health")
 async def health_check():
     eng = get_engine()
+    if not eng.use_mock:
+        eng.sync_scorer_device()
     avg_latency = (
         eng.stats["total_latency_ms"] / eng.stats["total_decisions"]
         if eng.stats["total_decisions"] > 0

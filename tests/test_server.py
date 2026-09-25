@@ -780,6 +780,132 @@ def test_driving_loop_prepares_then_calls_live_classifier(monkeypatch):
         server_module.engine = previous
 
 
+def test_live_corrupt_sensor_keeps_slowest_and_true_ood(monkeypatch):
+    """Sensor OOD, the fixed motion answer, and true_ood stay in this app in live mode."""
+    import demo.server as server_module
+
+    _engine, previous = _neural_engine(server_module)
+    seen = []
+    monkeypatch.setattr(httpx.Client, "post", _fake_post_last_option(seen))
+    payload = {
+        "state": {
+            "speed_mps": float("nan"),
+            "anomaly": "gps",
+            "candidates": {
+                "v_stop": [0.0, 0.0, 0.0, 0.0, False, True],
+                "v_go": [12.0, 0.0, 0.0, 0.0, False, False],
+            },
+        },
+        "questions": {
+            "vector": {
+                "instructions": "Select path.",
+                "criteria": {"v_stop": "stop", "v_go": "go"},
+            },
+            "motion": {"criteria": {"drive": "drive", "stop": "stop"}},
+        },
+    }
+    try:
+        body = server_module.engine.classify_jev(payload)
+        assert body["answers"]["vector"]["choice"] == "v_stop"
+        assert body["answers"]["motion"]["choice"] == "drive"
+        assert body["meta"]["true_ood"] is True
+    finally:
+        server_module.engine = previous
+
+
+def test_live_forward_sends_compact_state(monkeypatch):
+    """SemArbiter scores the compact prompt state, not the candidate vectors."""
+    import demo.server as server_module
+    from jevpilot_vision.drive import score_drive_request
+    from jevpilot_vision.trajectory_sampler import compact_jev_state
+
+    engine, previous = _neural_engine(server_module)
+    seen = []
+    monkeypatch.setattr(httpx.Client, "post", _fake_post_last_option(seen))
+    payload = {
+        "state": {
+            "speed_mps": 8.0,
+            "candidates": {
+                "v_halt": [0.0, 0.0, 0.0, 0.0, False, True],
+                "v_hit": [5.0, 0.0, 0.0, 0.0, True, False],
+            },
+        },
+        "questions": {
+            "vector": {
+                "instructions": "Select path.",
+                "criteria": {"v_halt": "halt", "v_hit": "hit"},
+            }
+        },
+    }
+    try:
+        score_drive_request(engine, payload)
+        assert seen
+        forwarded = seen[0][1]["state"]
+        assert forwarded == compact_jev_state(payload["state"])
+        assert "_semif_prompt_state" not in forwarded
+        assert "candidates" not in forwarded
+    finally:
+        server_module.engine = previous
+
+
+def test_live_decide_brakes_when_anomaly_is_set(monkeypatch):
+    engine = DecisionEngine(use_mock=False, arbiter_url="http://arbiter:8001")
+
+    def fake_post(self, url, *args, **kwargs):
+        if type(self) is httpx.Client and str(url).startswith("http"):
+            return httpx.Response(
+                200,
+                json={
+                    "answers": {
+                        "decision": {
+                            "choice": "accelerate",
+                            "probabilities": {aid: 0.2 for aid in ACTION_IDS},
+                        }
+                    }
+                },
+                request=httpx.Request("POST", url),
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    result = engine.decide({"anomaly": "lidar", "speed_kmh": 40.0})
+    assert result["action"] == "brake"
+    assert result["is_ood"] is True
+    assert result["calibrated"] is None
+    assert result["free_energy"] is None
+
+
+def test_scorer_device_follows_arbiter_health_not_the_cli_flag(monkeypatch, tmp_path):
+    from benchmarks.web_city_vision import WORLD, write_official_report
+
+    engine = DecisionEngine(use_mock=False, device="cuda", arbiter_url="http://arbiter:8001")
+    assert engine.device != "cuda"
+
+    def fake_get(self, url, *args, **kwargs):
+        if type(self) is httpx.Client and str(url).endswith("/health"):
+            return httpx.Response(
+                200,
+                json={"status": "online", "device": "cpu"},
+                request=httpx.Request("GET", url),
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+    assert engine.sync_scorer_device() == "cpu"
+    report = {
+        "device": engine.device,
+        "mock": False,
+        "model": "Qwen/Qwen2.5-3B-Instruct",
+        "seed": 42,
+        "world": WORLD,
+        "laps": [
+            {"vision": "on", "complete": True, "seed": 42},
+            {"vision": "off", "complete": True, "seed": 42},
+        ],
+    }
+    assert write_official_report(tmp_path / "official.json", report) is False
+
+
 def test_server_script_mounts_jevpilot_without_repo_root_on_path():
     """python demo/server.py must see jevpilot_vision even when only demo/ is on sys.path."""
     import os

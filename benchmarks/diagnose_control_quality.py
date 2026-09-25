@@ -262,17 +262,17 @@ def _engine_for(args: argparse.Namespace) -> tuple[DecisionEngine, str]:
         raise SystemExit("use --fast or --cuda, not both")
     mock = bool(args.mock or args.fast or not args.cuda)
     mode = args.mode or ("flat" if args.cuda else "heuristic")
-    device = args.device or ("cuda" if args.cuda else None)
     if args.cuda and mock:
         raise SystemExit("--cuda refuses MockDecisionEngine")
     engine = DecisionEngine(
         model_name=args.model,
-        device=device,
         use_mock=mock,
         enable_graph=bool(args.cuda),
     )
-    if args.cuda and str(engine.device) != "cuda":
-        raise SystemExit(f"--cuda requested but engine.device={engine.device}")
+    if args.cuda:
+        engine.sync_scorer_device()
+        if str(engine.device) != "cuda":
+            raise SystemExit(f"--cuda requested but SemArbiter reports device={engine.device}")
     return engine, mode
 
 

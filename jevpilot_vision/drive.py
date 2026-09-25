@@ -123,7 +123,7 @@ def prepare_drive_request(payload: Dict[str, Any]) -> Dict[str, Any]:
                     else:
                         tagged[opt_id] = desc
                 vector["criteria"] = tagged
-    state["_semif_prompt_state"] = compact_jev_state(state)
+    state["_semif_prompt_state"] = compact_jev_state(payload.get("state"))
     return prepared
 
 
