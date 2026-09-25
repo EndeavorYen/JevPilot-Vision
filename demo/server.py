@@ -153,9 +153,9 @@ class DecisionEngine:
         enable_graph: bool = True,
         arbiter_url: Optional[str] = None,
     ):
-        self.model_name = model_name
-        # The CLI flag is not a measurement. Live mode records SemArbiter's /health device.
+        # CLI model and device are not measurements. Live mode records SemArbiter's /health.
         del device
+        self.model_name = model_name if use_mock else None
         self.device = "mock" if use_mock else "remote"
         self.use_mock = use_mock
         self.enable_graph = enable_graph
@@ -190,10 +190,14 @@ class DecisionEngine:
         try:
             response = self._get_http_client().get(f"{self.arbiter_url}/health")
             response.raise_for_status()
-            reported = response.json().get("device")
+            body = response.json()
+            reported = body.get("device") if isinstance(body, dict) else None
+            reported_model = body.get("model") if isinstance(body, dict) else None
             self.device = reported if isinstance(reported, str) and reported else "remote"
+            self.model_name = reported_model if isinstance(reported_model, str) and reported_model else None
         except Exception:
             self.device = "remote"
+            self.model_name = None
         return self.device
 
     def close(self) -> None:

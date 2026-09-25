@@ -906,6 +906,58 @@ def test_scorer_device_follows_arbiter_health_not_the_cli_flag(monkeypatch, tmp_
     assert write_official_report(tmp_path / "official.json", report) is False
 
 
+def test_scorer_model_follows_arbiter_health_not_the_cli_default(monkeypatch, tmp_path):
+    """The official report names the model SemArbiter is running, not this process's default."""
+    import json
+
+    import demo.server as server_module
+    from benchmarks.web_city_vision import WORLD, write_official_report
+
+    arbiter_model = "Qwen/Qwen2.5-0.5B-Instruct"
+    engine = DecisionEngine(
+        use_mock=False,
+        model_name="Qwen/Qwen2.5-3B-Instruct",
+        device="cuda",
+        arbiter_url="http://arbiter:8001",
+    )
+    assert engine.model_name != "Qwen/Qwen2.5-3B-Instruct"
+
+    orig_get = httpx.Client.get
+
+    def fake_get(self, url, *args, **kwargs):
+        if str(url).startswith("http://arbiter:8001"):
+            return httpx.Response(
+                200,
+                json={"status": "online", "device": "cuda", "model": arbiter_model},
+                request=httpx.Request("GET", str(url)),
+            )
+        return orig_get(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+    previous = server_module.engine
+    server_module.engine = engine
+    try:
+        health = TestClient(app).get("/health").json()
+        assert health["model"] == arbiter_model
+        assert health["device"] == "cuda"
+        report = {
+            "device": health["device"],
+            "mock": health["mock_mode"],
+            "model": health["model"],
+            "seed": 42,
+            "world": WORLD,
+            "laps": [
+                {"vision": "on", "complete": True, "seed": 42},
+                {"vision": "off", "complete": True, "seed": 42},
+            ],
+        }
+        path = tmp_path / "official.json"
+        assert write_official_report(path, report) is True
+        assert json.loads(path.read_text(encoding="utf-8"))["model"] == arbiter_model
+    finally:
+        server_module.engine = previous
+
+
 def test_server_script_mounts_jevpilot_without_repo_root_on_path():
     """python demo/server.py must see jevpilot_vision even when only demo/ is on sys.path."""
     import os
