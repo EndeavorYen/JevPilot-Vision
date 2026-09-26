@@ -34,6 +34,25 @@ def _project(rel_x: float, rel_z: float) -> Optional[Tuple[float, float]]:
     return u, v
 
 
+def _paint_signal(draw: Any, rel_x: float, rel_z: float, color: Tuple[int, int, int]) -> None:
+    """Keep the lamp in the upper band so the red mask is a light, not a vehicle."""
+    projected = _project(rel_x, rel_z)
+    if projected is None:
+        return
+    u, v = projected
+    height_px = CAM_F_PX * 0.4 / rel_z
+    width_px = CAM_F_PX * 0.4 / rel_z
+    upper_bottom = int(IMAGE_H * 0.48) - 2
+    bottom = min(v - 8.0, float(upper_bottom))
+    top = bottom - height_px
+    if v > bottom:
+        draw.line([(u, bottom), (u, v)], fill=(50, 50, 55), width=2)
+    draw.rectangle(
+        (u - width_px / 2.0, top, u + width_px / 2.0, bottom),
+        fill=color,
+    )
+
+
 def _paint_subject(draw: Any, rel_x: float, rel_z: float, height_m: float, color: Tuple[int, int, int], width_m: float) -> None:
     projected = _project(rel_x, rel_z)
     if projected is None:
@@ -78,7 +97,7 @@ def render_pinhole_frame(scenario: str, env: Any) -> Any:
     if scenario == "traffic_light_red":
         intersection = _actor(env, "intersection") or {}
         rel_z = float(intersection.get("stop_line_ahead_m", 55.0)) - ego_z
-        _paint_subject(draw, 0.0, rel_z, 0.4, (220, 30, 30), 0.4)
+        _paint_signal(draw, 0.0, rel_z, (220, 30, 30))
     elif scenario == "speed_zone_city":
         _paint_subject(draw, 2.0, 40.0 - ego_z, 0.6, (240, 240, 240), 0.6)
     elif scenario == "pedestrian_jaywalking":

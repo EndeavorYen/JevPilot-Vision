@@ -68,7 +68,7 @@ def test_phase6_writes_json_sha256_and_clean_rate(tmp_path):
     assert payload == json.dumps(report, indent=2).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
     sums = path.with_name(path.name + ".SHA256SUMS")
-    assert sums.read_text(encoding="utf-8") == f"{digest}  {path.name}\n"
+    assert sums.read_bytes() == f"{digest}  {path.name}\n".encode("utf-8")
 
 
 def test_phase6_refuses_when_a_row_is_missing(tmp_path):

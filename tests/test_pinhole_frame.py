@@ -53,6 +53,7 @@ def test_red_light_pixels_differ_from_schematic():
     schematic = render_scenario_frame("traffic_light_red", env)
     assert list(pinhole.getdata()) != list(schematic.getdata())
     assert any(r > 180 and g < 90 and b < 90 for r, g, b in pinhole.getdata())
+    assert camera_obstacles_from_blobs(blobs_from_frame(pinhole)) == []
 
 
 def test_observation_skips_schematic_frame(monkeypatch):

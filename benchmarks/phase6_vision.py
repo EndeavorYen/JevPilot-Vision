@@ -72,7 +72,7 @@ def write_phase6_report(path: Path, report: dict) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     sums = Path(str(path) + ".SHA256SUMS")
-    sums.write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+    sums.write_bytes(f"{digest}  {path.name}\n".encode("utf-8"))
     return True
 
 
