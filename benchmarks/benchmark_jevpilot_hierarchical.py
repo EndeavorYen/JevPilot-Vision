@@ -255,12 +255,15 @@ class JevPilot2Simulator:
             }
 
         from jevpilot_vision.ipm import camera_obstacles_from_blobs
-        from jevpilot_vision.vision import blobs_from_frame, render_scenario_frame
+        from jevpilot_vision.pinhole_frame import render_pinhole_frame
+        from jevpilot_vision.vision import blobs_from_frame
 
         if getattr(self, "use_camera_obstacles", True):
-            frame = render_scenario_frame(self.scenario_type, self)
+            frame = render_pinhole_frame(self.scenario_type, self)
+            self.last_frame = frame
             obstacles = camera_obstacles_from_blobs(blobs_from_frame(frame))
         else:
+            self.last_frame = None
             obstacles = self.ground_truth_obstacles()
 
         stop_line_z = None
@@ -481,6 +484,11 @@ def run_jevpilot2_episode(
 
                 obs = dict(obs)
                 obs["vision"] = vision_from_scenario(scenario)
+            elif vision_mode == "siglip":
+                from jevpilot_vision.vision import get_vision_encoder
+
+                obs = dict(obs)
+                obs["vision"] = get_vision_encoder().infer_pil(env.last_frame)
             req = {
                 "model": engine.model_name,
                 "mode": mode,
