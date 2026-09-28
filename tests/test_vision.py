@@ -272,3 +272,17 @@ def test_surround_frames_share_one_siglip_forward():
     from jevpilot_vision.vision import compact_vision
 
     assert "cameras" not in compact_vision(out)
+
+
+def test_surround_event_speaks_only_for_the_front_camera():
+    """Rear and side hazards raise the merged scores but never read as 'ahead'."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    enc = _fake_siglip_encoder([])
+    frames = {name: Image.new("RGB", (224, 224), (80, 80, 80)) for name in ("front", "right", "rear", "left")}
+    out = enc.infer_surround(frames)
+    assert out["vehicle"] > 0.9 and out["pedestrian"] > 0.9
+    assert "vehicle" not in out["event"]
+    assert "pedestrian" not in out["event"]
+    assert enc.last_scores["vehicle"] < 0.1

@@ -532,10 +532,10 @@ class VisionEncoder:
             name: {key: round(row[key], 3) for key in ("red", "green") + HAZARD_FIELDS}
             for name, row in zip(names, rows)
         }
-        merged = dict(rows[names.index("front")])
+        # Event text says "ahead", so it is built from the front camera alone.
+        packed = self._pack(rows[names.index("front")], front, n_prefix)
         for key in HAZARD_FIELDS:
-            merged[key] = max(row[key] for row in rows)
-        packed = self._pack(merged, front, n_prefix)
+            packed[key] = round(max(row[key] for row in rows), 3)
         packed["cameras"] = per_camera
         return packed
 
