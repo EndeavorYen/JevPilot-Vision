@@ -229,6 +229,8 @@ window.requestAnimationFrame = (fn) => {
 };
 window.cancelAnimationFrame = () => {};
 const visionPosts = [];
+const visionBodies = [];
+const surroundLooks = [];
 const visionIntervals = [];
 window.fetch = function () {
   return Promise.resolve({ ok: false, json: async () => ({}) });
@@ -277,7 +279,15 @@ if (specEarly.cmd === "vision-order") {
 if (specEarly.cmd === "upload") {
   window.fetch = function (url) {
     const href = typeof url === "string" ? url : "";
-    if (href.indexOf("/v1/vision") !== -1) visionPosts.push(nowMs);
+    if (href.indexOf("/v1/vision") !== -1) {
+      visionPosts.push(nowMs);
+      const sent = JSON.parse((arguments[1] && arguments[1].body) || "{}");
+      visionBodies.push({
+        keys: Object.keys(sent),
+        frames: sent.frames ? Object.keys(sent.frames) : [],
+        front: sent.frames ? sent.frames.front : null,
+      });
+    }
     return Promise.resolve({
       ok: true,
       json: async () => ({ vision: { signal: "green" }, vision_encode_ms: 3 }),
@@ -491,8 +501,15 @@ if (spec.cmd === "dom") {
   let renders = 0;
   const renderer = window.SEMIF_WORLD.renderer;
   const paint = renderer.render;
-  renderer.render = function () {
+  renderer.render = function (_scene, cam) {
     renders += 1;
+    if (surroundLooks.length < 4 && cam && cam.look) {
+      surroundLooks.push({
+        dx: cam.look.x - cam.position.x,
+        dz: cam.look.z - cam.position.z,
+        fov: cam.fov,
+      });
+    }
     return paint.apply(this, arguments);
   };
   nowMs = 0;
@@ -503,6 +520,8 @@ if (spec.cmd === "dom") {
   }
   process.stdout.write(JSON.stringify({
     posts: visionPosts.length,
+    bodies: visionBodies.slice(0, 2),
+    yaws: surroundLooks,
     postTimes: visionPosts,
     tickTimes: ticks,
     intervals: visionIntervals,
@@ -729,11 +748,21 @@ def test_pip_shell_is_in_the_loaded_overlay():
     assert "fsd-pip-hidden" in css
 
 
-def test_each_display_frame_posts_onboard_jpeg():
-    """Live tick posts one /v1/vision JPEG per painted onboard frame."""
+def test_each_display_frame_posts_four_surround_jpegs():
+    """Live tick posts one /v1/vision with four camera JPEGs per painted onboard frame."""
     pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
     assert pumped["posts"] == 120
-    assert pumped["renders"] == 120
+    assert pumped["renders"] == 120 * 4
+    body = pumped["bodies"][0]
+    assert body["keys"] == ["frames"]
+    assert body["frames"] == ["front", "right", "rear", "left"]
+    assert body["front"] == "data:image/jpeg;base64,ONBOARD"
+    # heading pi/2 faces +x; right, rear and left turn clockwise from there
+    looks = pumped["yaws"]
+    directions = [(round(look["dx"]), round(look["dz"])) for look in looks]
+    assert directions == [(25, 0), (0, 25), (-25, 0), (0, -25)]
+    hfov = [2 * math.degrees(math.atan(math.tan(math.radians(look["fov"] / 2)) * PIP_W / PIP_H)) for look in looks]
+    assert all(abs(value - 100.0) < 0.5 for value in hfov)
     assert pumped["postTimes"] == pumped["tickTimes"]
     assert 700 not in pumped["intervals"]
     assert pumped["fps"] == "60 FPS"
@@ -771,7 +800,7 @@ def test_pip_shows_the_fixed_onboard_camera_not_the_player_view():
     assert grabbed["url"] == "data:image/jpeg;base64,ONBOARD"
     assert grabbed["mode"] == "chase"
     shot = grabbed["first"]
-    assert shot["fov"] == 60
+    assert shot["fov"] == pytest.approx(67.67, abs=0.01)  # 100° horizontal at 16:9
     assert shot["x"] == pytest.approx(10.15)
     assert shot["y"] == pytest.approx(1.45)
     assert shot["z"] == pytest.approx(-4)

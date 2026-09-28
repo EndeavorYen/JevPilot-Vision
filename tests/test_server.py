@@ -996,3 +996,27 @@ def test_readme_points_at_the_semarbiter_repo():
     assert (REPO_ROOT / "jevpilot_vision" / "http.py").is_file()
     assert (REPO_ROOT / "jevpilot_vision" / "web" / "index.html").is_file()
 
+
+
+def test_v1_vision_takes_four_surround_frames_in_one_infer(mock_engine, monkeypatch):
+    """frames: {front, right, rear, left} goes to one surround infer, not four posts."""
+    reset_vision_slot()
+    seen: list = []
+    jpeg = _tiny_jpeg_data_url()
+
+    class _Dummy:
+        def infer_surround_b64(self, frames):
+            seen.append(frames)
+            return {"signal": "green", "backend": "stub", "cameras": {name: {} for name in frames}}
+
+    monkeypatch.setattr("jevpilot_vision.vision.get_vision_encoder", lambda: _Dummy())
+    frames = {name: jpeg for name in ("front", "right", "rear", "left")}
+    with TestClient(app) as client:
+        resp = client.post("/v1/vision", json={"frames": frames})
+        missing_front = client.post("/v1/vision", json={"frames": {"rear": jpeg}})
+        classifier = client.post("/v1/classifier", json={"state": {"frames": frames}})
+    assert resp.status_code == 200
+    assert set(resp.json()["vision"]["cameras"]) == set(frames)
+    assert seen == [frames]
+    assert "error" in missing_front.json()
+    assert classifier.status_code == 422

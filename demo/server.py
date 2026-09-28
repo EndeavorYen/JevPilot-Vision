@@ -974,12 +974,14 @@ async def health_check():
 
 
 def _payload_image(payload: Dict[str, Any]) -> Optional[str]:
-    image = payload.get("image")
-    state = payload.get("state")
-    if not image and isinstance(state, dict):
-        image = state.get("image")
-    if isinstance(image, str) and image:
-        return image
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    for holder in (payload, state):
+        image = holder.get("image")
+        if isinstance(image, str) and image:
+            return image
+        frames = holder.get("frames")
+        if isinstance(frames, dict) and frames:
+            return "frames"
     return None
 
 

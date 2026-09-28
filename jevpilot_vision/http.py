@@ -1,4 +1,7 @@
-"""JevPilot-Vision HTTP: latest-frame JPEG slot, /v1/vision, and the static driving page."""
+"""JevPilot-Vision HTTP: latest-frame JPEG slot, /v1/vision, and the static driving page.
+
+A slot item is one JPEG or one set of surround frames {front, right, rear, left}.
+"""
 
 from __future__ import annotations
 
@@ -15,17 +18,17 @@ _WEB_DIR = Path(__file__).resolve().parent / "web"
 
 
 class _LatestVisionSlot:
-    """One JPEG slot. A busy worker finishes, then infers whatever is newest."""
+    """One frame slot. A busy worker finishes, then infers whatever is newest."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._image: Optional[str] = None
+        self._image: Any = None
         self._gen = 0
         self._running = False
         self._last: Optional[Dict[str, Any]] = None
         self._last_gen: Optional[int] = None
 
-    def submit(self, image: str) -> tuple[bool, Optional[Dict[str, Any]], Optional[int]]:
+    def submit(self, image: Any) -> tuple[bool, Optional[Dict[str, Any]], Optional[int]]:
         with self._lock:
             self._gen += 1
             self._image = image
@@ -81,16 +84,32 @@ def reset_vision_slot() -> None:
     _vision_slot = _LatestVisionSlot()
 
 
-def _infer_latest_jpeg(image_b64: str) -> Dict[str, Any]:
+def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
     from jevpilot_vision.vision import get_vision_encoder
 
-    return get_vision_encoder().infer_b64(image_b64)
+    if isinstance(image, dict):
+        return get_vision_encoder().infer_surround_b64(image)
+    return get_vision_encoder().infer_b64(image)
+
+
+def _surround_frames(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    frames = payload.get("frames")
+    if not isinstance(frames, dict) or not isinstance(frames.get("front"), str):
+        return None
+    if not all(isinstance(value, str) and len(value) >= 64 for value in frames.values()):
+        return None
+    return dict(frames)
 
 
 async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
-    image = payload.get("image") or payload.get("image_base64")
-    if not isinstance(image, str) or len(image) < 64:
-        return {"error": "image (data URL or base64) required"}
+    if "frames" in payload:
+        image: Any = _surround_frames(payload)
+        if image is None:
+            return {"error": "frames need a front camera and a JPEG (data URL or base64) per camera"}
+    else:
+        image = payload.get("image") or payload.get("image_base64")
+        if not isinstance(image, str) or len(image) < 64:
+            return {"error": "image (data URL or base64) required"}
     start, last, last_gen = _vision_slot.submit(image)
     if not start:
         body: Dict[str, Any] = {}

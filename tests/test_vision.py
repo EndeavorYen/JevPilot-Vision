@@ -212,3 +212,62 @@ def test_jevpilot2_clip_refuses_before_schematic_frame(monkeypatch):
             vision_mode="clip",
         )
     assert calls == []
+
+
+def _fake_siglip_encoder(calls):
+    torch = pytest.importorskip("torch")
+    from jevpilot_vision.vision import _PROMPTS, VisionEncoder
+
+    keys = [key for key, _prompt in _PROMPTS]
+
+    class _Processor:
+        def __call__(self, text=None, images=None, padding=None, return_tensors=None):
+            batch = images if isinstance(images, list) else [images]
+            calls.append(len(batch))
+            return {"pixel_values": torch.zeros(len(batch), 3, 2, 2)}
+
+    class _Model:
+        def __call__(self, pixel_values=None, **_kw):
+            rows = []
+            for index in range(pixel_values.shape[0]):
+                row = [0.0] * len(keys)
+                # front sees green, rear sees a vehicle, right sees a pedestrian
+                row[keys.index({0: "green", 1: "pedestrian", 2: "vehicle", 3: "clear"}[index])] = 8.0
+                rows.append(row)
+            return type("Out", (), {"logits_per_image": torch.tensor(rows)})()
+
+    enc = VisionEncoder.__new__(VisionEncoder)
+    enc._torch = torch
+    enc._model = _Model()
+    enc._processor = _Processor()
+    enc._tokenizer = None
+    enc._image_proc = None
+    enc.device = "cpu"
+    enc.backend = "fake-siglip"
+    enc.last_patches = None
+    enc.last_scores = None
+    enc.last_blobs = None
+    enc._null_patches = None
+    enc.encode_patches = lambda _image: None
+    return enc
+
+
+def test_surround_frames_share_one_siglip_forward():
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    calls = []
+    enc = _fake_siglip_encoder(calls)
+    frames = {name: Image.new("RGB", (224, 224), (80, 80, 80)) for name in ("front", "right", "rear", "left")}
+    out = enc.infer_surround(frames)
+    assert calls == [4]
+    assert set(out["cameras"]) == {"front", "right", "rear", "left"}
+    assert out["cameras"]["rear"]["vehicle"] > 0.9
+    assert out["cameras"]["right"]["pedestrian"] > 0.9
+    # merged: signal from the front camera, hazards from any camera
+    assert out["signal"] == "green"
+    assert out["vehicle"] > 0.9
+    assert out["pedestrian"] > 0.9
+    from jevpilot_vision.vision import compact_vision
+
+    assert "cameras" not in compact_vision(out)
