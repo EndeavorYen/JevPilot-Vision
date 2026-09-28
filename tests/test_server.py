@@ -1020,3 +1020,13 @@ def test_v1_vision_takes_four_surround_frames_in_one_infer(mock_engine, monkeypa
     assert seen == [frames]
     assert "error" in missing_front.json()
     assert classifier.status_code == 422
+
+
+def test_v1_vision_refuses_unknown_camera_names_and_classifier_refuses_any_frames(mock_engine):
+    reset_vision_slot()
+    jpeg = _tiny_jpeg_data_url()
+    with TestClient(app) as client:
+        extra = client.post("/v1/vision", json={"frames": {"front": jpeg, "roof": jpeg}})
+        listed = client.post("/v1/classifier", json={"state": {"frames": [jpeg]}})
+    assert "error" in extra.json()
+    assert listed.status_code == 422

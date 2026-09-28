@@ -26,6 +26,8 @@ VISION_FIELDS = (
 
 SURROUND_ORDER = ("front", "right", "rear", "left")
 HAZARD_FIELDS = ("pedestrian", "vehicle", "construction")
+# Blob kinds read only by jevpilot_vision.surround; not motion events.
+SURROUND_ONLY_BLOBS = frozenset({"emergency"})
 
 _PROMPTS = (
     ("red", "a red traffic light facing the camera"),
@@ -89,8 +91,12 @@ def _bbox_from_mask(mask: Any, width: int, height: int) -> Optional[Dict[str, fl
     }
 
 
-def blobs_from_frame(image: Any) -> Dict[str, Dict[str, float]]:
-    """Axis-aligned blobs from RGB pixels. No world coordinates."""
+def blobs_from_frame(image: Any, ground_row: Optional[int] = None) -> Dict[str, Dict[str, float]]:
+    """Axis-aligned blobs from RGB pixels. No world coordinates.
+
+    ``ground_row`` is the first image row below the horizon. Vehicles are read
+    from there down; without it the band starts at 55% of the height.
+    """
     import numpy as np
 
     arr = np.asarray(image.convert("RGB"))
@@ -102,7 +108,7 @@ def blobs_from_frame(image: Any) -> Dict[str, Dict[str, float]]:
     upper = yy < int(height * 0.48)
     mid = yy > int(height * 0.48)
     lower = yy > int(height * 0.50)
-    bottom = yy > int(height * 0.55)
+    bottom = yy > (int(ground_row) if ground_row is not None else int(height * 0.55))
     masks = {
         "light_red": upper & (r > 180) & (g < 90) & (b < 90),
         "light_green": upper & (g > 150) & (r < 90) & (b < 90),
@@ -131,6 +137,8 @@ def frame_motion(
     prev = prev or {}
     events: list[Dict[str, Any]] = []
     for kind, now in curr.items():
+        if kind in SURROUND_ONLY_BLOBS:
+            continue
         was = prev.get(kind)
         if was is None:
             events.append({"kind": kind, "onset": True, "growing": False, "cut_in": False})
@@ -510,7 +518,7 @@ class VisionEncoder:
         if self._model is None:
             ev = synthetic_vision()
             ev["prefix_tokens"] = 0
-            ev["cameras"] = {name: {key: 0.0 for key in HAZARD_FIELDS} for name in names}
+            ev["cameras"] = {name: {key: 0.0 for key in ("red", "green") + HAZARD_FIELDS} for name in names}
             return ev
         rows = self._score_batch([frames[name] for name in names])
         per_camera = {

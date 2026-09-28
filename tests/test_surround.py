@@ -123,3 +123,25 @@ def test_rear_camera_evidence_drives_the_give_way_intent():
     assert engine._determine_tier1_maneuver(env.get_observation())["intent"] == "GIVE_WAY_EMERGENCY"
     env.emergency_vehicle["z"] = -200.0
     assert engine._determine_tier1_maneuver(env.get_observation())["intent"] != "GIVE_WAY_EMERGENCY"
+
+
+def test_warning_light_blob_stays_out_of_the_event_text():
+    from jevpilot_vision.vision import blobs_from_frame, event_from_motion, frame_motion
+
+    env = _env(emergency_vehicle={"x": 0.0, "z": 8.0})
+    front = _frames("emergency_vehicle", env)["front"]
+    blobs = blobs_from_frame(front)
+    assert "emergency" in blobs
+    motion = frame_motion(None, blobs)
+    assert all(m["kind"] != "emergency" for m in motion)
+    assert "emergency" not in event_from_motion(motion)
+
+
+@pytest.mark.parametrize("behind_m", [20.0, 30.0, 40.0])
+def test_rear_emergency_is_seen_past_the_give_way_range(behind_m):
+    """Give-way acts at 40 m, so the rear camera has to see further than that."""
+    env = _env(emergency_vehicle={"x": 0.0, "z": -behind_m})
+    seen = emergency_from_surround(surround_blobs(_frames("emergency_vehicle", env)))
+    assert seen is not None
+    assert seen["behind"] is True
+    assert seen["distance_m"] == pytest.approx(behind_m, rel=0.35)

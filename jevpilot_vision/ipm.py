@@ -3,6 +3,9 @@
 Four onboard pinhole cameras share one intrinsic: 224×224, about 100°
 horizontal, horizon at v=120. Each camera differs only by yaw.
 rel_z is metres ahead of the bumper, rel_x is metres to the right.
+
+Range: at this resolution a car keeps the 12 mask pixels a blob needs out to
+about 42 m. That covers the 40 m give-way rule, not the 45 m go-around one.
 """
 
 from __future__ import annotations

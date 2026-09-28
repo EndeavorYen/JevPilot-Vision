@@ -979,8 +979,7 @@ def _payload_image(payload: Dict[str, Any]) -> Optional[str]:
         image = holder.get("image")
         if isinstance(image, str) and image:
             return image
-        frames = holder.get("frames")
-        if isinstance(frames, dict) and frames:
+        if holder.get("frames"):
             return "frames"
     return None
 

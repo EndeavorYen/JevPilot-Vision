@@ -10,9 +10,19 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional
 
-from jevpilot_vision.ipm import CAMERAS, IMAGE_H, IMAGE_W, Camera, camera_obstacles_from_blobs, ground_uv_to_ego
+from jevpilot_vision.ipm import (
+    CAMERAS,
+    HORIZON_V,
+    IMAGE_H,
+    IMAGE_W,
+    Camera,
+    camera_obstacles_from_blobs,
+    ground_uv_to_ego,
+)
 
 DEDUPE_M = 2.5
+# The road starts one row under the horizon; a vehicle 80 m out touches it there.
+GROUND_ROW = int(HORIZON_V) + 1
 
 Blobs = Dict[str, Dict[str, float]]
 
@@ -21,7 +31,7 @@ def surround_blobs(frames: Dict[str, Any]) -> Dict[str, Blobs]:
     """Blob pass on each camera frame, keyed by camera name."""
     from jevpilot_vision.vision import blobs_from_frame
 
-    return {name: blobs_from_frame(image) for name, image in frames.items()}
+    return {name: blobs_from_frame(image, ground_row=GROUND_ROW) for name, image in frames.items()}
 
 
 def _camera(name: str) -> Optional[Camera]:

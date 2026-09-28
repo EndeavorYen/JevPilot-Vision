@@ -110,7 +110,7 @@ def _lanes(draw: Any, env: Any, camera: Camera) -> None:
             draw.line(points, fill=LANE, width=2)
 
 
-def _rel(env: Any, actor: Dict[str, Any], ego_x: float, ego_z: float) -> Tuple[float, float]:
+def _rel(actor: Dict[str, Any], ego_x: float, ego_z: float) -> Tuple[float, float]:
     return float(actor.get("x", 0.0)) - ego_x, float(actor.get("z", 0.0)) - ego_z
 
 
@@ -131,22 +131,22 @@ def render_pinhole_frame(scenario: str, env: Any, camera: Camera = FRONT) -> Any
     elif scenario == "speed_zone_city":
         _paint_subject(draw, 2.0, 40.0 - ego_z, 0.6, (240, 240, 240), 0.6, camera)
     elif scenario == "pedestrian_jaywalking":
-        rel_x, rel_z = _rel(env, _actor(env, "pedestrian") or {}, ego_x, ego_z)
+        rel_x, rel_z = _rel(_actor(env, "pedestrian") or {}, ego_x, ego_z)
         _paint_subject(draw, rel_x, rel_z, 1.7, (20, 20, 20), 0.5, camera)
     elif scenario == "roadside_parked_hazard":
-        rel_x, rel_z = _rel(env, _actor(env, "roadside_obstacle") or {}, ego_x, ego_z)
+        rel_x, rel_z = _rel(_actor(env, "roadside_obstacle") or {}, ego_x, ego_z)
         _paint_subject(draw, rel_x, rel_z, 1.5, VEHICLE, 1.9, camera)
     elif scenario == "cut_in_vehicle":
-        rel_x, rel_z = _rel(env, _actor(env, "cut_in_vehicle") or {}, ego_x, ego_z)
+        rel_x, rel_z = _rel(_actor(env, "cut_in_vehicle") or {}, ego_x, ego_z)
         _paint_subject(draw, rel_x, rel_z, 1.5, VEHICLE, 1.8, camera)
     elif scenario == "ambiguous_priority":
-        rel_x, rel_z = _rel(env, _actor(env, "other_vehicle") or {}, ego_x, ego_z)
+        rel_x, rel_z = _rel(_actor(env, "other_vehicle") or {}, ego_x, ego_z)
         _paint_subject(draw, rel_x, rel_z, 1.5, VEHICLE, 1.8, camera)
     elif scenario == "construction_detour":
-        rel_x, rel_z = _rel(env, _actor(env, "construction") or {}, ego_x, ego_z)
+        rel_x, rel_z = _rel(_actor(env, "construction") or {}, ego_x, ego_z)
         _paint_subject(draw, rel_x, rel_z, 0.7, (230, 120, 20), 0.4, camera)
     elif scenario == "emergency_vehicle":
-        rel_x, rel_z = _rel(env, _actor(env, "emergency_vehicle") or {}, ego_x, ego_z)
+        rel_x, rel_z = _rel(_actor(env, "emergency_vehicle") or {}, ego_x, ego_z)
         _paint_subject(
             draw, rel_x, rel_z, 1.5, EMERGENCY_BODY, 1.8, camera, light=EMERGENCY_LIGHT
         )

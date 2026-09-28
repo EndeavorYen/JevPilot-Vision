@@ -702,11 +702,17 @@
       return;
     }
     const tGrab = performance.now();
-    const frames = grabSurround(
-      alreadyPainted && pipCanvas
-        ? pipCanvas.toDataURL("image/jpeg", 0.55)
-        : grabFrame()
-    );
+    let frames = null;
+    try {
+      frames = grabSurround(
+        alreadyPainted && pipCanvas
+          ? pipCanvas.toDataURL("image/jpeg", 0.55)
+          : grabFrame()
+      );
+    } catch (_err) {
+      visionEl.textContent = "VISION error";
+      return;
+    }
     const grabMs = performance.now() - tGrab;
     if (!frames) {
       visionEl.textContent = "VISION waiting";

@@ -92,9 +92,14 @@ def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
     return get_vision_encoder().infer_b64(image)
 
 
+_CAMERA_NAMES = frozenset({"front", "right", "rear", "left"})
+
+
 def _surround_frames(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
     frames = payload.get("frames")
     if not isinstance(frames, dict) or not isinstance(frames.get("front"), str):
+        return None
+    if not set(frames) <= _CAMERA_NAMES:
         return None
     if not all(isinstance(value, str) and len(value) >= 64 for value in frames.values()):
         return None
