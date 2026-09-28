@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 VISION_FIELDS = (
     "backend",
@@ -94,8 +97,8 @@ def _bbox_from_mask(mask: Any, width: int, height: int) -> Optional[Dict[str, fl
 def blobs_from_frame(image: Any, ground_row: Optional[int] = None) -> Dict[str, Dict[str, float]]:
     """Axis-aligned blobs from RGB pixels. No world coordinates.
 
-    ``ground_row`` is the first image row below the horizon. Vehicles are read
-    from there down; without it the band starts at 55% of the height.
+    ``ground_row`` is the horizon row. Vehicles are read from the rows below
+    it; without it the band starts at 55% of the height.
     """
     import numpy as np
 
@@ -334,6 +337,7 @@ class VisionEncoder:
         self.last_scores = None
         self.last_blobs = None
         self._null_patches = None
+        self._scoring_failed = False
         self._load()
 
     def _load(self) -> None:
@@ -458,6 +462,9 @@ class VisionEncoder:
                 rows = out.logits_per_image.softmax(dim=-1).tolist()
             return [{key: float(prob) for (key, _prompt), prob in zip(_PROMPTS, row)} for row in rows]
         except Exception:
+            log = logger.debug if getattr(self, "_scoring_failed", False) else logger.warning
+            log("SigLIP scoring failed for %d image(s); reporting a clear road", len(images), exc_info=True)
+            self._scoring_failed = True
             fallback = {key: 0.0 for key, _prompt in _PROMPTS}
             fallback["clear"] = 1.0
             return [dict(fallback) for _image in images]

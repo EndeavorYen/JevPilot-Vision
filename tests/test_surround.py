@@ -137,10 +137,11 @@ def test_warning_light_blob_stays_out_of_the_event_text():
     assert "emergency" not in event_from_motion(motion)
 
 
+@pytest.mark.parametrize("lateral_m", [-1.8, 0.0, 1.8, 2.7])
 @pytest.mark.parametrize("behind_m", [20.0, 30.0, 40.0])
-def test_rear_emergency_is_seen_past_the_give_way_range(behind_m):
-    """Give-way acts at 40 m, so the rear camera has to see further than that."""
-    env = _env(emergency_vehicle={"x": 0.0, "z": -behind_m})
+def test_rear_emergency_is_seen_past_the_give_way_range(behind_m, lateral_m):
+    """Give-way acts at 40 m, so the rear camera has to see that far, in and beside the lane."""
+    env = _env(emergency_vehicle={"x": lateral_m, "z": -behind_m})
     seen = emergency_from_surround(surround_blobs(_frames("emergency_vehicle", env)))
     assert seen is not None
     assert seen["behind"] is True

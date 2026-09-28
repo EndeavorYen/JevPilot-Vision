@@ -21,8 +21,8 @@ from jevpilot_vision.ipm import (
 )
 
 DEDUPE_M = 2.5
-# The road starts one row under the horizon; a vehicle 80 m out touches it there.
-GROUND_ROW = int(HORIZON_V) + 1
+# Rows below this one are road (the renderer paints from HORIZON_V + 1).
+GROUND_ROW = int(HORIZON_V)
 
 Blobs = Dict[str, Dict[str, float]]
 

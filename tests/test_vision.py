@@ -248,6 +248,7 @@ def _fake_siglip_encoder(calls):
     enc.last_scores = None
     enc.last_blobs = None
     enc._null_patches = None
+    enc._scoring_failed = False
     enc.encode_patches = lambda _image: None
     return enc
 
