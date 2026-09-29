@@ -234,20 +234,25 @@ body.fsd-theme .vector-label.selected {
   transform-origin: top center;
 }
 
+/* Docked under the map / strategy panel (semif-layer.js places it), clear of the road. */
 #fsd-status {
   pointer-events: auto;
   position: fixed;
-  left: 16px;
-  bottom: 108px;
+  left: 27px;
+  top: 250px;
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 6px 10px;
   align-items: center;
-  max-width: min(720px, 84vw);
-  padding: 7px 12px;
+  width: 460px;
+  max-width: calc(100vw - 54px);
+  padding: 8px 12px;
   background: var(--fsd-bg);
   border: 1px solid var(--fsd-line);
-  border-radius: 999px;
+  border-radius: 12px;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
   color: var(--fsd-ink);
   font-size: 11px;
   letter-spacing: 0.03em;
@@ -319,8 +324,8 @@ body.fsd-theme .vector-label.selected {
   #fsd-status {
     left: 10px;
     right: 10px;
+    width: auto;
     max-width: none;
-    border-radius: 14px;
   }
   #fsd-pip {
     right: 10px;

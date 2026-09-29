@@ -39,6 +39,22 @@
   `;
   document.body.appendChild(chrome);
 
+  // Dock the status bar under the bundle's map / strategy panel, whatever size that panel has.
+  const statusEl = document.getElementById("fsd-status");
+  let statusDock = "";
+  function dockStatus() {
+    const panel = document.querySelector(".topbar");
+    if (!panel || !statusEl) return;
+    const box = panel.getBoundingClientRect();
+    if (!box.width) return;
+    const dock = `${Math.round(box.left)}:${Math.round(box.bottom)}:${Math.round(box.width)}`;
+    if (dock === statusDock) return;
+    statusDock = dock;
+    statusEl.style.left = `${Math.round(box.left)}px`;
+    statusEl.style.top = `${Math.round(box.bottom + 10)}px`;
+    statusEl.style.width = `${Math.round(box.width)}px`;
+  }
+
   const halo = document.getElementById("fsd-halo");
   const boxes = document.getElementById("fsd-boxes");
   const seedInput = document.getElementById("fsd-seed-input");
@@ -752,6 +768,9 @@
     return renderView(world, 0, pipCanvas);
   }
 
+  // The onboard cameras sit at the windscreen: no glass, no dashboard in view.
+  const ONBOARD_HIDDEN = new Set(["Glass", "Interior"]);
+
   function renderView(world, yaw, canvas) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
@@ -779,7 +798,7 @@
     const hidden = [];
     if (world.player && world.player.traverse) {
       world.player.traverse((obj) => {
-        if (obj.isMesh && obj.material && obj.material.name === "Glass" && obj.visible) {
+        if (obj.isMesh && obj.material && ONBOARD_HIDDEN.has(obj.material.name) && obj.visible) {
           hidden.push(obj);
           obj.visible = false;
         }
@@ -842,6 +861,11 @@
   function tick() {
     const sim = window.SEMIF_SIM;
     const world = window.SEMIF_WORLD;
+    try {
+      dockStatus();
+    } catch (_err) {
+      /* layout must not kill the drive loop */
+    }
     if (sim) {
       if (sim._fsdBound !== true) {
         sim._fsdBound = true;
