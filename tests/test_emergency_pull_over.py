@@ -80,7 +80,7 @@ def test_car_closing_from_behind_blocks_the_lane_but_not_the_pull_over():
     lane = [s for s in samples.values() if s.hold_offset_m is None and abs(s.end_x) < 0.3 and s.speed > 1.0]
     pull = [s for s in samples.values() if s.hold_offset_m == PULL_OVER_OFFSET_M]
     assert lane and all(s.collision for s in lane)
-    assert pull and not any(s.collision for s in pull)
+    assert pull and not all(s.collision for s in pull), "slowing while pulling over lets it close faster"
 
     static = sample_trajectories(ego_x=0.0, ego_z=0.0, speed=16.0, obstacles=[_car(0.0, -8.0)], seed=5)
     assert not any(s.collision for s in static.values()), "a parked car behind is never hit going forward"
@@ -156,3 +156,24 @@ def test_emergency_stop_brakes_straight():
         "fast": [18.0, 0.0, 0.0, 0.0, True, False],
     }
     assert fail_safe_choice(candidates, "fast") == "straight"
+
+
+def test_a_car_behind_at_the_same_speed_does_not_block_braking():
+    follower = [_car(0.0, -9.0, rel_vz_mps=0.0)]
+    samples = sample_trajectories(ego_x=0.0, ego_z=0.0, speed=12.0, stop_line_z=14.0, obstacles=follower, seed=5)
+    brake = [s for s in samples.values() if s.description.startswith("brake straight")]
+    assert brake and not brake[0].collision
+
+
+def test_a_car_that_starts_behind_is_a_box_once_it_is_alongside():
+    """Same manoeuvre, same passing car: the verdict must not depend on where the car started."""
+    near = rollout(1.0, 0.0, 5.0, 0.0, 0.0, 0.0, None, [_car(-1.0, -3.0, rel_vz_mps=8.0)], hold_offset_m=1.0)
+    far = rollout(1.0, 0.0, 5.0, 0.0, 0.0, 0.0, None, [_car(-1.0, -8.0, rel_vz_mps=8.0)], hold_offset_m=1.0)
+    assert near["collision"] is True and far["collision"] is True
+
+
+def test_red_light_veto_never_trades_a_clear_pick_for_a_colliding_stop():
+    from jevpilot_vision.directive import fail_safe_choice
+
+    candidates = {"t00": [12, 0, 0, 0, False, False], "t01": [0, 0, 0, 0, True, True]}
+    assert fail_safe_choice(candidates, "t00", {"intent": "RED_LIGHT_STOP"}) == "t00"

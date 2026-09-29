@@ -72,6 +72,6 @@ def fail_safe_choice(
     intent = (directive or {}).get("intent")
     if intent == "RED_LIGHT_STOP":
         halt = _halt_ids(candidates)
-        if halt:
+        if halt and not all(_brake_key(candidates[cid])[0] for cid in halt):
             return min(halt, key=lambda cid: _brake_key(candidates[cid]))
     return pick

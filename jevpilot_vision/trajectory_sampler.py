@@ -148,12 +148,13 @@ PLAN_POINTS = 31
 MAX_SAMPLES = 16
 LANE_HALF_M = 4.5  # matches JevPilot2Simulator.off_track
 REAR_CLEAR_M = 0.55  # matches JevPilot2Simulator's rear catch-up rule
+REAR_MARGIN_M = 1.0  # tracked IPM speed lags; keep clear a little past the rule's 6 m
 CONTACT_DZ_M = 3.5  # car-sized box, the ahead check's size
 CONTACT_DX_M = 1.8
 # Pull-over: hold a right offset past the Web A() lane-keep snap (1.4 m), far enough that a car
 # passing in the lane centre clears the box (CONTACT_DX_M) by the time it is alongside. Right is positive.
 # Sampled every frame, whatever the scene says. Speed fractions of planning-max.
-PULL_OVER_OFFSET_M = 2.4
+PULL_OVER_OFFSET_M = 2.8
 PULL_OVER_SPEED_FRACTIONS = (0.9, 0.45)
 # Speed mix is a fraction of planning-max, matching the worker's A*(0.78..1.0) / A*(0.25..0.55).
 # Required-stop bias (O&&r<8) is NOT copied: that is signal injection.
@@ -217,17 +218,21 @@ def _hits_obstacle(
         rel_vz = obj.get("rel_vz_mps")
         if rel_vz is not None and float(rel_vz) > 0.0 and float(obj["rel_z"]) < 6.0:
             # Catching up or passing. The simulator's rear rule: |dx| < 0.55 while -4 < dz < 6.
-            # Once the car is alongside or ahead it is also a car-sized box, as in the ahead check.
-            alongside = float(obj["rel_z"]) > -CONTACT_DZ_M
+            # Wherever the moved car is alongside or ahead, it is also a car-sized box.
             oz += (float(ego_speed) + float(rel_vz)) * t
             dz = oz - z
-            if alongside and abs(dz) < CONTACT_DZ_M and abs(x - ox) < CONTACT_DX_M:
+            if abs(dz) < CONTACT_DZ_M and abs(x - ox) < CONTACT_DX_M:
                 return True
-            return abs(x - ox) < REAR_CLEAR_M and -4.0 < dz < 6.0
-        if rel_vz is not None and str(obj.get("kind") or "vehicle") == "vehicle":
+            return abs(x - ox) < REAR_CLEAR_M and -4.0 < dz < 6.0 + REAR_MARGIN_M
+        if (
+            rel_vz is not None
+            and str(obj.get("kind") or "vehicle") == "vehicle"
+            and float(obj["rel_z"]) > -CONTACT_DZ_M
+        ):
             # Closing on or passing a slower car. Far IPM speed is coarse, so keep the
             # static check ahead and add the car as a box that moves at its own speed and
-            # stays beside the ego while alongside.
+            # stays beside the ego while alongside. A car behind that is not closing is its
+            # own driver's to avoid, as in the ahead-only check.
             if 0.0 <= oz - z < 3.5 and abs(x - ox) < 1.8:
                 return True
             moved = oz + (float(ego_speed) + float(rel_vz)) * t
