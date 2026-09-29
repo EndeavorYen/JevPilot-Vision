@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 VISION_FIELDS = (
     "backend",
@@ -23,6 +26,11 @@ VISION_FIELDS = (
     "construction",
     "prefix_tokens",
 )
+
+SURROUND_ORDER = ("front", "right", "rear", "left")
+HAZARD_FIELDS = ("pedestrian", "vehicle", "construction")
+# Blob kinds read only by jevpilot_vision.surround; not motion events.
+SURROUND_ONLY_BLOBS = frozenset({"emergency"})
 
 _PROMPTS = (
     ("red", "a red traffic light facing the camera"),
@@ -86,8 +94,12 @@ def _bbox_from_mask(mask: Any, width: int, height: int) -> Optional[Dict[str, fl
     }
 
 
-def blobs_from_frame(image: Any) -> Dict[str, Dict[str, float]]:
-    """Axis-aligned blobs from RGB pixels. No world coordinates."""
+def blobs_from_frame(image: Any, ground_row: Optional[int] = None) -> Dict[str, Dict[str, float]]:
+    """Axis-aligned blobs from RGB pixels. No world coordinates.
+
+    ``ground_row`` is the horizon row. Vehicles are read from the rows below
+    it; without it the band starts at 55% of the height.
+    """
     import numpy as np
 
     arr = np.asarray(image.convert("RGB"))
@@ -99,12 +111,13 @@ def blobs_from_frame(image: Any) -> Dict[str, Dict[str, float]]:
     upper = yy < int(height * 0.48)
     mid = yy > int(height * 0.48)
     lower = yy > int(height * 0.50)
-    bottom = yy > int(height * 0.55)
+    bottom = yy > (int(ground_row) if ground_row is not None else int(height * 0.55))
     masks = {
         "light_red": upper & (r > 180) & (g < 90) & (b < 90),
         "light_green": upper & (g > 150) & (r < 90) & (b < 90),
         "construction": mid & (r > 180) & (g > 70) & (g < 190) & (b < 90),
         "pedestrian": lower & (r < 40) & (g < 40) & (b < 40),
+        "emergency": mid & (b > 180) & (r < 80) & (g < 110),
         "vehicle": bottom
         & (
             ((r >= 85) & (r <= 130) & (np.abs(r.astype(int) - g.astype(int)) < 18) & (np.abs(g.astype(int) - b.astype(int)) < 18))
@@ -127,6 +140,8 @@ def frame_motion(
     prev = prev or {}
     events: list[Dict[str, Any]] = []
     for kind, now in curr.items():
+        if kind in SURROUND_ONLY_BLOBS:
+            continue
         was = prev.get(kind)
         if was is None:
             events.append({"kind": kind, "onset": True, "growing": False, "cut_in": False})
@@ -322,6 +337,7 @@ class VisionEncoder:
         self.last_scores = None
         self.last_blobs = None
         self._null_patches = None
+        self._scoring_failed = False
         self._load()
 
     def _load(self) -> None:
@@ -429,32 +445,31 @@ class VisionEncoder:
         self._null_patches = self.encode_patches(blank)
         return self._null_patches
 
-    def infer_pil(self, image: Any) -> Dict[str, Any]:
-        patches = self.encode_patches(image)
-        self.last_patches = patches
-        n_prefix = int(patches.shape[0]) if patches is not None else 0
-        if self._model is None:
-            ev = synthetic_vision()
-            ev["prefix_tokens"] = 0
-            return ev
+    def _score_batch(self, images: list) -> list:
+        """One SigLIP forward over every image. One prompt-score dict per image."""
         torch = self._torch
         texts = [text for _key, text in _PROMPTS]
         try:
             if self._processor is not None:
-                inputs = self._processor(text=texts, images=image, padding=True, return_tensors="pt")
+                inputs = self._processor(text=texts, images=images, padding=True, return_tensors="pt")
             else:
                 text_inputs = self._tokenizer(texts, padding=True, return_tensors="pt")
-                image_inputs = self._image_proc(images=image, return_tensors="pt")
+                image_inputs = self._image_proc(images=images, return_tensors="pt")
                 inputs = {**text_inputs, **image_inputs}
             inputs = {key: value.to(self.device) for key, value in inputs.items()}
             with torch.no_grad():
                 out = self._model(**inputs)
-                logits = out.logits_per_image
-                probs = logits.softmax(dim=-1)[0].tolist()
-            scores = {key: float(prob) for (key, _prompt), prob in zip(_PROMPTS, probs)}
+                rows = out.logits_per_image.softmax(dim=-1).tolist()
+            return [{key: float(prob) for (key, _prompt), prob in zip(_PROMPTS, row)} for row in rows]
         except Exception:
-            scores = {key: 0.0 for key, _prompt in _PROMPTS}
-            scores["clear"] = 1.0
+            log = logger.debug if getattr(self, "_scoring_failed", False) else logger.warning
+            log("SigLIP scoring failed for %d image(s); reporting a clear road", len(images), exc_info=True)
+            self._scoring_failed = True
+            fallback = {key: 0.0 for key, _prompt in _PROMPTS}
+            fallback["clear"] = 1.0
+            return [dict(fallback) for _image in images]
+
+    def _pack(self, scores: Dict[str, float], image: Any, n_prefix: int) -> Dict[str, Any]:
         signal = "unknown"
         if scores["red"] >= 0.28 and scores["red"] >= scores["green"]:
             signal = "red"
@@ -487,10 +502,54 @@ class VisionEncoder:
         }
         return packed
 
+    def infer_pil(self, image: Any) -> Dict[str, Any]:
+        patches = self.encode_patches(image)
+        self.last_patches = patches
+        n_prefix = int(patches.shape[0]) if patches is not None else 0
+        if self._model is None:
+            ev = synthetic_vision()
+            ev["prefix_tokens"] = 0
+            return ev
+        return self._pack(self._score_batch([image])[0], image, n_prefix)
+
+    def infer_surround(self, frames: Dict[str, Any]) -> Dict[str, Any]:
+        """Four camera frames in one batch. Signal and event follow the front camera;
+        hazard scores take the highest camera. ``cameras`` keeps each camera's scores."""
+        names = [name for name in SURROUND_ORDER if name in frames]
+        if "front" not in names:
+            raise ValueError("surround frames need a front camera")
+        front = frames["front"]
+        patches = self.encode_patches(front)
+        self.last_patches = patches
+        n_prefix = int(patches.shape[0]) if patches is not None else 0
+        if self._model is None:
+            ev = synthetic_vision()
+            ev["prefix_tokens"] = 0
+            ev["cameras"] = {name: {key: 0.0 for key in ("red", "green") + HAZARD_FIELDS} for name in names}
+            return ev
+        rows = self._score_batch([frames[name] for name in names])
+        per_camera = {
+            name: {key: round(row[key], 3) for key in ("red", "green") + HAZARD_FIELDS}
+            for name, row in zip(names, rows)
+        }
+        # Event text says "ahead", so it is built from the front camera alone.
+        packed = self._pack(rows[names.index("front")], front, n_prefix)
+        for key in HAZARD_FIELDS:
+            packed[key] = round(max(row[key] for row in rows), 3)
+        packed["cameras"] = per_camera
+        return packed
+
     def infer_b64(self, image_b64: str) -> Dict[str, Any]:
         t0 = time.perf_counter()
         image = decode_image_bytes(image_b64)
         evidence = self.infer_pil(image)
+        evidence["latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
+        return evidence
+
+    def infer_surround_b64(self, frames_b64: Dict[str, str]) -> Dict[str, Any]:
+        t0 = time.perf_counter()
+        frames = {name: decode_image_bytes(image) for name, image in frames_b64.items()}
+        evidence = self.infer_surround(frames)
         evidence["latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
         return evidence
 

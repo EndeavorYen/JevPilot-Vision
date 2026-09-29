@@ -13,7 +13,7 @@ def test_horizon_pixels_are_dropped():
 
 
 def test_lower_pixel_is_closer_than_near_horizon():
-    far = ground_uv_to_ego(112, 140)
+    far = ground_uv_to_ego(112, 128)
     near = ground_uv_to_ego(112, 190)
     assert far is not None and near is not None
     assert near["rel_z"] < far["rel_z"]

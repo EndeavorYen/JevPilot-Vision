@@ -78,6 +78,10 @@ def test_siglip_sets_vision_and_keeps_candidate_keys(monkeypatch):
         raise AssertionError("schematic frame")
 
     class _Encoder:
+        def infer_surround(self, frames):
+            assert set(frames) == {"front", "right", "rear", "left"}
+            return self.infer_pil(frames["front"])
+
         def infer_pil(self, _image):
             return {
                 "backend": "siglip",

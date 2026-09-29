@@ -478,10 +478,10 @@
     return Math.round(((pipFrameMs.length - 1) * 1000) / span) + " FPS";
   }
 
-  function onboardMount(player) {
+  function onboardMount(player, yaw) {
     const ahead = 0.15;
     const height = 1.45;
-    const h = Number(player.heading) || 0;
+    const h = (Number(player.heading) || 0) + (Number(yaw) || 0);
     const x = player.x + Math.sin(h) * ahead;
     const z = player.z - Math.cos(h) * ahead;
     return {
@@ -494,8 +494,8 @@
     };
   }
 
-  function paintOnboardPixels(pixels) {
-    const ctx = pipCanvas.getContext("2d");
+  function paintOnboardPixels(pixels, canvas) {
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const image = ctx.createImageData(PIP_W, PIP_H);
     const row = PIP_W * 4;
@@ -506,16 +506,40 @@
     ctx.putImageData(image, 0, 0);
   }
 
+  // Four onboard cameras, about 100° horizontal each. Yaw turns clockwise from forward.
+  const ONBOARD_HFOV = 100;
+  const ONBOARD_VFOV = 2 * Math.atan(Math.tan((ONBOARD_HFOV * Math.PI) / 360) / (PIP_W / PIP_H)) * (180 / Math.PI);
+  const SURROUND_SIDES = [
+    ["right", Math.PI / 2],
+    ["rear", Math.PI],
+    ["left", -Math.PI / 2],
+  ];
+  const surroundCanvases = {};
+
+  function surroundCanvas(name) {
+    if (!surroundCanvases[name]) {
+      const node = document.createElement("canvas");
+      node.width = PIP_W;
+      node.height = PIP_H;
+      surroundCanvases[name] = node;
+    }
+    return surroundCanvases[name];
+  }
+
   function renderOnboard(world) {
+    return renderView(world, 0, pipCanvas);
+  }
+
+  function renderView(world, yaw, canvas) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
     const scene = world && world.scene;
     const sample = world && world.sun && world.sun.shadow && world.sun.shadow.map;
-    if (!player || !renderer || !scene || !sample || !world.camera || !pipCanvas) return false;
-    const mount = onboardMount(player);
+    if (!player || !renderer || !scene || !sample || !world.camera || !canvas) return false;
+    const mount = onboardMount(player, yaw);
     if (!world._onboardCam) world._onboardCam = world.camera.clone();
     const cam = world._onboardCam;
-    cam.fov = 60;
+    cam.fov = ONBOARD_VFOV;
     cam.aspect = PIP_W / PIP_H;
     cam.position.set(mount.x, mount.y, mount.z);
     cam.lookAt(mount.lookX, mount.lookY, mount.lookZ);
@@ -547,7 +571,7 @@
       if (renderer.readRenderTargetPixels) {
         renderer.readRenderTargetPixels(target, 0, 0, PIP_W, PIP_H, pixels);
       }
-      paintOnboardPixels(pixels);
+      paintOnboardPixels(pixels, canvas);
     } finally {
       if (renderer.setRenderTarget) renderer.setRenderTarget(prev);
       hidden.forEach((obj) => {
@@ -659,17 +683,38 @@
 
   window.SEMIF_GRAB_FRAME = grabFrame;
 
+  // Front comes from the painted PIP; right, rear and left render off-screen.
+  function grabSurround(frontUrl) {
+    if (!frontUrl) return null;
+    const world = window.SEMIF_WORLD;
+    const frames = { front: frontUrl };
+    for (const [name, yaw] of SURROUND_SIDES) {
+      const canvas = surroundCanvas(name);
+      if (!renderView(world, yaw, canvas)) return null;
+      frames[name] = canvas.toDataURL("image/jpeg", 0.55);
+    }
+    return frames;
+  }
+
   async function visionTick(alreadyPainted) {
     if (!visionOn) {
       visionEl.textContent = "VISION off";
       return;
     }
     const tGrab = performance.now();
-    const dataUrl = alreadyPainted && pipCanvas
-      ? pipCanvas.toDataURL("image/jpeg", 0.55)
-      : grabFrame();
+    let frames = null;
+    try {
+      frames = grabSurround(
+        alreadyPainted && pipCanvas
+          ? pipCanvas.toDataURL("image/jpeg", 0.55)
+          : grabFrame()
+      );
+    } catch (_err) {
+      visionEl.textContent = "VISION error";
+      return;
+    }
     const grabMs = performance.now() - tGrab;
-    if (!dataUrl) {
+    if (!frames) {
       visionEl.textContent = "VISION waiting";
       return;
     }
@@ -678,7 +723,7 @@
       const res = await origFetch("/v1/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: dataUrl }),
+        body: JSON.stringify({ frames: frames }),
       });
       const data = await res.json();
       const rttMs = performance.now() - tVis;

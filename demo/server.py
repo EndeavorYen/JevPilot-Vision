@@ -973,14 +973,16 @@ async def health_check():
     }
 
 
-def _payload_image(payload: Dict[str, Any]) -> Optional[str]:
-    image = payload.get("image")
-    state = payload.get("state")
-    if not image and isinstance(state, dict):
-        image = state.get("image")
-    if isinstance(image, str) and image:
-        return image
-    return None
+def _payload_has_pixels(payload: Dict[str, Any]) -> bool:
+    """An image or surround frames, at the top level or under state."""
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    for holder in (payload, state):
+        image = holder.get("image")
+        if isinstance(image, str) and image:
+            return True
+        if holder.get("frames"):
+            return True
+    return False
 
 
 def _six_column_candidates(payload: Dict[str, Any]) -> bool:
@@ -996,7 +998,7 @@ def _six_column_candidates(payload: Dict[str, Any]) -> bool:
 @app.post("/v1/classifier")
 @app.post("/v1/systemone")
 async def classifier_endpoint(payload: Dict[str, Any]):
-    if _payload_image(payload):
+    if _payload_has_pixels(payload):
         raise HTTPException(status_code=422, detail="image is not accepted")
     if _six_column_candidates(payload):
         try:

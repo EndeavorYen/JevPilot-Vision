@@ -254,15 +254,21 @@ class JevPilot2Simulator:
                 "siren": True,
             }
 
-        from jevpilot_vision.ipm import camera_obstacles_from_blobs
-        from jevpilot_vision.pinhole_frame import render_pinhole_frame
-        from jevpilot_vision.vision import blobs_from_frame
+        from jevpilot_vision.pinhole_frame import render_surround_frames
+        from jevpilot_vision.surround import emergency_from_surround, surround_blobs, surround_obstacles
 
         if getattr(self, "use_camera_obstacles", True):
-            frame = render_pinhole_frame(self.scenario_type, self)
-            self.last_frame = frame
-            obstacles = camera_obstacles_from_blobs(blobs_from_frame(frame))
+            frames = render_surround_frames(self.scenario_type, self)
+            self.last_frames = frames
+            self.last_frame = frames["front"]
+            blobs = surround_blobs(frames)
+            obstacles = surround_obstacles(blobs)
+            if emergency_obs is not None:
+                seen = emergency_from_surround(blobs)
+                emergency_obs["distance_m"] = seen["distance_m"] if seen else None
+                emergency_obs["behind"] = bool(seen and seen["behind"])
         else:
+            self.last_frames = None
             self.last_frame = None
             obstacles = self.ground_truth_obstacles()
 
@@ -488,7 +494,11 @@ def run_jevpilot2_episode(
                 from jevpilot_vision.vision import get_vision_encoder
 
                 obs = dict(obs)
-                obs["vision"] = get_vision_encoder().infer_pil(env.last_frame)
+                encoder = get_vision_encoder()
+                if getattr(env, "last_frames", None):
+                    obs["vision"] = encoder.infer_surround(env.last_frames)
+                else:
+                    obs["vision"] = encoder.infer_pil(env.last_frame)
             req = {
                 "model": engine.model_name,
                 "mode": mode,
