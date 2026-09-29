@@ -751,9 +751,23 @@ if (spec.cmd === "dom") {
     };
     sim.time += 5;
     const stale = { env: sim.speedEnvelope(near).max, stop: sim.rule(near).mustStop };
+    // The world restarts: its clock goes back to zero with the same car ids.
+    sim.time = 300;
+    sim.step(0.05);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const postsBefore = fleetBodies.length;
+    sim.time = 0;
+    const restartEnv = sim.speedEnvelope(near).max;
+    sim.step(0.05);
+    const restart = {
+      env: restartEnv,
+      posted: fleetBodies.length > postsBefore,
+      sessions: [...new Set(fleetBodies.map((b) => b.session))].length,
+    };
     const button = document.getElementById("fsd-fleet");
     process.stdout.write(JSON.stringify({
-      before, after, stale, bodies: fleetBodies, hud: button && button.textContent,
+      before, after, stale, restart, bodies: fleetBodies, hud: button && button.textContent,
     }));
   })().catch((err) => {
     process.stderr.write(String(err && err.stack || err));
@@ -933,6 +947,11 @@ def test_fleet_mode_drives_traffic_from_v1_fleet():
     assert body["agents"][2]["intersection"]["signal"] == "yellow", "the city's amber is the contract's yellow"
     assert out["stale"] == {"env": 9, "stop": True}, "a stale decision hands the car back to the script"
     assert out["hud"].startswith("FLEET semif")
+    assert near["steers"] is False, "web traffic keeps its route geometry; only speed is decided"
+    assert body["t"] == pytest.approx(0.05) and body["session"]
+    assert out["restart"]["env"] == 9, "a restarted world does not inherit the old world's decisions"
+    assert out["restart"]["posted"] is True, "a restarted world posts again at once"
+    assert out["restart"]["sessions"] >= 2, "a restarted world starts fresh tracks"
 
 
 def test_fleet_mode_is_off_by_default():

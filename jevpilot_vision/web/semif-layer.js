@@ -125,7 +125,9 @@
   const FLEET_RANGE_M = 42;
   const FLEET_LINE_M = 60;
   const FLEET_MAX = 64;
-  const FLEET_CONTACT_M = 2.0;
+  // Car footprint when the bundle does not give one (its cars are 1.9 m by 4.75 m).
+  const FLEET_WIDTH_M = 1.9;
+  const FLEET_DEPTH_M = 4.75;
   // The decision owns the signal. Junction interlocks the 1D planner cannot see
   // (crossing traffic, stop-sign order, pedestrians) stay with the traffic rules.
   const FLEET_SIGNAL_STOPS = new Set(["Red light", "Amber light"]);
@@ -137,6 +139,10 @@
     decisions: new Map(),
     inflight: false,
     nextAt: 0,
+    epoch: 0,
+    lastTime: null,
+    seed: null,
+    session: `fleet-${Math.random().toString(36).slice(2, 10)}`,
     posts: 0,
     errors: 0,
     contacts: new Set(),
@@ -156,13 +162,20 @@
       : "FLEET off";
   }
 
-  function setFleetPolicy(policy) {
-    fleet.policy = FLEET_POLICIES.indexOf(policy) >= 0 ? policy : "off";
+  // A new policy or a restarted world: nothing from before carries over.
+  function resetFleet() {
+    fleet.epoch += 1;
     fleet.decisions.clear();
     fleet.contacts.clear();
     fleet.lines.clear();
     fleet.reds = 0;
     fleet.errors = 0;
+    fleet.nextAt = 0;
+  }
+
+  function setFleetPolicy(policy) {
+    fleet.policy = FLEET_POLICIES.indexOf(policy) >= 0 ? policy : "off";
+    resetFleet();
     refreshFleetHud();
   }
 
@@ -203,6 +216,7 @@
     }
     const agent = {
       id: car.id,
+      steers: false,
       speed_mps: Math.max(0, Number(car.speed) || 0),
       speed_ceiling_mps: Number(sim.world && sim.world.theme && sim.world.theme.limit) || 14,
       obstacles,
@@ -225,7 +239,8 @@
   function fleetDecision(sim, car) {
     if (!fleetOn() || !car || car === sim.player || car.parked) return null;
     const d = fleet.decisions.get(car.id);
-    return d && (Number(sim.time) || 0) - d.at <= FLEET_STALE_S ? d : null;
+    const age = (Number(sim.time) || 0) - (d ? d.at : 0);
+    return d && age >= 0 && age <= FLEET_STALE_S ? d : null;
   }
 
   function bindFleet(sim) {
@@ -260,7 +275,11 @@
     for (const car of fleetCars(sim)) {
       if (!fleetDecision(sim, car)) continue;
       for (const other of everyone) {
-        if (other === car || Math.hypot(other.x - car.x, other.z - car.z) >= FLEET_CONTACT_M) continue;
+        if (other === car) continue;
+        const rel = egoRelative(car, other);
+        const halfDepth = ((car.depth || FLEET_DEPTH_M) + (other.depth || FLEET_DEPTH_M)) / 2;
+        const halfWidth = ((car.width || FLEET_WIDTH_M) + (other.width || FLEET_WIDTH_M)) / 2;
+        if (Math.abs(rel.rel_z) >= halfDepth || Math.abs(rel.rel_x) >= halfWidth) continue;
         fleet.contacts.add([car.id, other.id || "player"].sort().join("|"));
       }
       const rule = sim._fleetBaseRule ? sim._fleetBaseRule(car) : null;
@@ -276,8 +295,12 @@
   function fleetTick(sim) {
     if (!fleetOn() || !sim) return;
     bindFleet(sim);
-    fleetStats(sim);
     const now = Number(sim.time) || 0;
+    const seed = sim.world ? sim.world.seed : null;
+    if ((fleet.lastTime != null && now < fleet.lastTime) || seed !== fleet.seed) resetFleet();
+    fleet.lastTime = now;
+    fleet.seed = seed;
+    fleetStats(sim);
     if (fleet.inflight || now < fleet.nextAt) return;
     const cars = fleetCars(sim).slice(0, FLEET_MAX);
     if (!cars.length) return;
@@ -285,12 +308,13 @@
     const base = sim._fleetBaseRule;
     const agents = cars.map((car, i) => fleetAgent(sim, car, base ? base(car) : null, i));
     const policy = fleet.policy;
+    const epoch = fleet.epoch;
     fleet.inflight = true;
     fleet.posts += 1;
     origFetch("/v1/fleet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ policy, agents }),
+      body: JSON.stringify({ policy, agents, session: `${fleet.session}-${epoch}`, t: now }),
     })
       .then((res) => res.json())
       .then((body) => {
@@ -298,7 +322,7 @@
           fleet.errors += 1;
           return;
         }
-        if (fleet.policy !== policy) return;
+        if (fleet.policy !== policy || fleet.epoch !== epoch) return;
         const at = Number(sim.time) || 0;
         for (const [id, d] of Object.entries(body.decisions)) {
           fleet.decisions.set(id, { target_speed_mps: Number(d.target_speed_mps) || 0, choice: d.choice, at });

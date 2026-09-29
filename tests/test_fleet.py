@@ -110,3 +110,27 @@ def test_v1_fleet_scores_each_car_from_ego_relative_boxes():
     assert client.post("/v1/fleet", json={"policy": "chaos", "agents": []}).status_code == 422
     too_many = [{"id": f"v{i}", "obstacles": []} for i in range(65)]
     assert client.post("/v1/fleet", json={"policy": "semif", "agents": too_many}).status_code == 422
+
+
+def test_a_speed_only_car_is_offered_only_trajectories_that_keep_its_place():
+    free = agent_state(speed_mps=12.0, speed_ceiling_mps=13.4, obstacles=[], lateral_offset_m=0.3, seed=4)
+    fixed = agent_state(
+        speed_mps=12.0, speed_ceiling_mps=13.4, obstacles=[], lateral_offset_m=0.3, seed=4, steers=False
+    )
+    assert set(fixed["candidates"]) < set(free["candidates"])
+    assert fixed["candidates"], "the straight brake always qualifies"
+    for cid in fixed["candidates"]:
+        meta = fixed["candidate_meta"][cid]
+        assert abs(meta["end_x"] - 0.3) <= 0.5
+        assert meta.get("hold_offset_m") in (None, 0.3)
+
+
+def test_fleet_tracks_run_on_the_sender_clock_per_session():
+    from jevpilot_vision.http import _FleetTracks
+
+    tracks = _FleetTracks()
+    box = lambda z: [{"kind": "vehicle", "rel_x": 0.0, "rel_z": z}]
+    tracks.track(("a", "car"), box(-8.0), 10.0)
+    assert tracks.track(("a", "car"), box(-7.2), 10.1)[0]["rel_vz_mps"] == pytest.approx(8.0)
+    assert "rel_vz_mps" not in tracks.track(("b", "car"), box(-7.0), 10.2)[0], "another session starts its own track"
+    assert "rel_vz_mps" not in tracks.track(("a", "car"), box(-6.0), 0.1)[0], "a clock that runs back starts over"

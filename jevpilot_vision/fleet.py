@@ -28,6 +28,9 @@ POLICIES: Dict[str, Dict[str, Any]] = {
     "semif": {"mode": "flat", "raw_mode": False},
 }
 SENSOR_RANGE_M = 42.0  # the onboard camera range (jevpilot_vision.ipm)
+# A car that only controls speed (web traffic keeps its route geometry) is offered
+# only the trajectories that stay where it is across the lane.
+SPEED_ONLY_TOLERANCE_M = 0.5
 
 
 def agent_state(
@@ -40,8 +43,14 @@ def agent_state(
     current_steer: float = 0.0,
     curvature: float = 0.0,
     seed: int = 0,
+    steers: bool = True,
 ) -> Dict[str, Any]:
-    """Driving state for one car, with this frame's sampled trajectories."""
+    """Driving state for one car, with this frame's sampled trajectories.
+
+    steers=False keeps the trajectories a speed-only car can follow: those that end within
+    SPEED_ONLY_TOLERANCE_M of where it is and hold no other offset. The straight brake always
+    qualifies, so the set is never empty.
+    """
     samples = sample_trajectories(
         ego_x=float(lateral_offset_m),
         ego_z=0.0,
@@ -53,6 +62,14 @@ def agent_state(
         speed_ceiling=float(speed_ceiling_mps),
         current_steer=float(current_steer),
     )
+    if not steers:
+        here = float(lateral_offset_m)
+        samples = {
+            sid: sample
+            for sid, sample in samples.items()
+            if abs(sample.end_x - here) <= SPEED_ONLY_TOLERANCE_M
+            and (sample.hold_offset_m is None or abs(sample.hold_offset_m - here) <= 1e-6)
+        }
     return {
         "speed_mps": round(float(speed_mps), 2),
         "speed_ceiling_mps": round(float(speed_ceiling_mps), 2),

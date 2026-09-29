@@ -138,22 +138,29 @@ _WORLD_KEYS = frozenset({"x", "z", "world_x", "world_z", "position"})
 
 
 class _FleetTracks:
-    """Per-car box history, so each car gets rel_vz_mps from its own frames."""
+    """Per-car box history, so each car gets rel_vz_mps from its own frames.
+
+    Keyed by (session, car id) and timed on the client's sim clock when it sends one;
+    a clock that runs backwards (a restarted world) starts the track over.
+    """
 
     def __init__(self, ttl_s: float = 2.0) -> None:
         self._lock = threading.Lock()
         self._ttl_s = ttl_s
-        self._tracks: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+        self._tracks: Dict[tuple[str, str], tuple[float, float, List[Dict[str, Any]]]] = {}
 
-    def track(self, car_id: str, boxes: List[Dict[str, Any]], now: float) -> List[Dict[str, Any]]:
+    def track(self, key: tuple[str, str], boxes: List[Dict[str, Any]], t: float) -> List[Dict[str, Any]]:
         from jevpilot_vision.surround import track_obstacles
 
+        wall = time.monotonic()
         with self._lock:
-            self._tracks = {k: v for k, v in self._tracks.items() if now - v[0] <= self._ttl_s}
-            previous = self._tracks.get(car_id)
-        tracked = track_obstacles(previous[1] if previous else None, boxes, now - previous[0] if previous else 0.0)
+            self._tracks = {k: v for k, v in self._tracks.items() if wall - v[0] <= self._ttl_s}
+            previous = self._tracks.get(key)
+        if previous is not None and t <= previous[1]:
+            previous = None
+        tracked = track_obstacles(previous[2] if previous else None, boxes, t - previous[1] if previous else 0.0)
         with self._lock:
-            self._tracks[car_id] = (now, tracked)
+            self._tracks[key] = (wall, t, tracked)
         return tracked
 
 
@@ -185,7 +192,11 @@ def _fleet_decide(get_engine: Callable[[], Any], payload: Dict[str, Any]) -> Dic
     if not isinstance(agents, list) or len(agents) > FLEET_MAX_AGENTS:
         raise HTTPException(status_code=422, detail=f"agents must be a list of at most {FLEET_MAX_AGENTS}")
     engine = get_engine()
-    now = time.monotonic()
+    session = str(payload.get("session") or "")
+    try:
+        now = float(payload["t"]) if payload.get("t") is not None else time.monotonic()
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="t is the sender's clock in seconds")
     started = time.perf_counter()
     decisions: Dict[str, Any] = {}
     for agent in agents:
@@ -203,10 +214,11 @@ def _fleet_decide(get_engine: Callable[[], Any], payload: Dict[str, Any]) -> Dic
             state = agent_state(
                 speed_mps=float(agent.get("speed_mps", 0.0)),
                 speed_ceiling_mps=float(agent.get("speed_ceiling_mps", 13.4)),
-                obstacles=_fleet_tracks.track(car_id, boxes, now),
+                obstacles=_fleet_tracks.track((session, car_id), boxes, now),
                 intersection=intersection,
                 lateral_offset_m=float(agent.get("lateral_offset_m", 0.0)),
                 seed=int(agent.get("seed", 0)),
+                steers=bool(agent.get("steers", True)),
             )
         except (TypeError, ValueError, KeyError):
             raise HTTPException(status_code=422, detail=f"agent {car_id} has a bad speed, offset, seed or stop line")
