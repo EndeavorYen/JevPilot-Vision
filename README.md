@@ -41,3 +41,10 @@ python demo/server.py --port 8000 --arbiter-url http://localhost:8001
 - `POST /v1/fleet`：`{"policy": "semif" | "raw_flat" | "heuristic", "agents": [{"id", "speed_mps", "obstacles": [{"kind", "rel_x", "rel_z"}], "intersection"?}]}`，回傳每台車選中的軌跡。帶 `x`／`z` 的輸入回 422。
 - 網頁：HUD 的 `FLEET` 按鈕依序切換 off → semif → raw_flat → heuristic，也可以用 `?fleet=semif` 開啟。開啟後，交通車的速度與停車都來自決策，不再用腳本的停止線夾速。
 - 無頭對比：`python benchmarks/benchmark_fleet.py --mock --theme town`（`city` 是 28 台交通車）。它在環狀道路上比較腳本車流與全車隊三種策略的碰撞、闖紅燈、乾淨車輛比例與平均車速。
+
+## 畫面與地圖
+
+- **場景層：** `jevpilot_vision/web/semif-scenery.js` 負責建築立面與量體、近處交通車（Model Y）、號誌燈罩、天光與小地圖輪廓。網址加 `?scenery=0` 可以關掉，回到打包檔原本的方塊外觀。
+- **地圖尺寸：** Skyline City 與 Small town 是 7×7 個路口，約 1 km 見方。
+- **打包檔修補：** 修改的地方與理由都列在 [`jevpilot_vision/web/BUNDLE_PATCHES.md`](jevpilot_vision/web/BUNDLE_PATCHES.md)。
+- **配色限制：** 場景的配色不會落進相機的號誌、施工與警示燈色塊範圍，由 `tests/test_scenery.py` 檢查。
