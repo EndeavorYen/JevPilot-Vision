@@ -34,6 +34,7 @@
       <span id="fsd-vision">VISION off</span>
       <span id="fsd-latency">e2e —  P50 —  P95 —</span>
       <button type="button" id="fsd-latency-export">Export latency</button>
+      <button type="button" id="fsd-fleet" title="Fleet mode: traffic drives on the same decision core">FLEET off</button>
     </div>
   `;
   document.body.appendChild(chrome);
@@ -114,6 +115,203 @@
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     pipRoot.classList.toggle("fsd-pip-hidden");
   });
+
+  // Fleet mode (#3): traffic cars ask /v1/fleet, the same decision core as the player.
+  // Each car is described by what it senses: its speed and ego-relative boxes (rel_x right,
+  // rel_z ahead) within camera range, plus the next stop line. No world position is sent.
+  const FLEET_POLICIES = ["off", "semif", "raw_flat", "heuristic"];
+  const FLEET_PERIOD_S = 0.2;
+  const FLEET_STALE_S = 1.0;
+  const FLEET_RANGE_M = 42;
+  const FLEET_LINE_M = 60;
+  const FLEET_MAX = 64;
+  const FLEET_CONTACT_M = 2.0;
+  // The decision owns the signal. Junction interlocks the 1D planner cannot see
+  // (crossing traffic, stop-sign order, pedestrians) stay with the traffic rules.
+  const FLEET_SIGNAL_STOPS = new Set(["Red light", "Amber light"]);
+  const FLEET_SIGNAL_NAMES = { red: "red", amber: "yellow", yellow: "yellow", green: "green" };
+  const fleetBtn = document.getElementById("fsd-fleet");
+  const fleetParam = params.get("fleet");
+  const fleet = {
+    policy: FLEET_POLICIES.indexOf(fleetParam) > 0 ? fleetParam : "off",
+    decisions: new Map(),
+    inflight: false,
+    nextAt: 0,
+    posts: 0,
+    errors: 0,
+    contacts: new Set(),
+    reds: 0,
+    lines: new Map(),
+  };
+  window.SEMIF_FLEET = fleet;
+
+  function fleetOn() {
+    return fleet.policy !== "off";
+  }
+
+  function refreshFleetHud() {
+    if (!fleetBtn) return;
+    fleetBtn.textContent = fleetOn()
+      ? `FLEET ${fleet.policy} · hits ${fleet.contacts.size} · reds ${fleet.reds}${fleet.errors ? " · error" : ""}`
+      : "FLEET off";
+  }
+
+  function setFleetPolicy(policy) {
+    fleet.policy = FLEET_POLICIES.indexOf(policy) >= 0 ? policy : "off";
+    fleet.decisions.clear();
+    fleet.contacts.clear();
+    fleet.lines.clear();
+    fleet.reds = 0;
+    fleet.errors = 0;
+    refreshFleetHud();
+  }
+
+  if (fleetBtn) {
+    fleetBtn.addEventListener("click", () => {
+      const at = FLEET_POLICIES.indexOf(fleet.policy);
+      setFleetPolicy(FLEET_POLICIES[(at + 1) % FLEET_POLICIES.length]);
+    });
+  }
+  refreshFleetHud();
+
+  function fleetCars(sim) {
+    return (sim.traffic || []).filter((car) => car && !car.parked && car.id);
+  }
+
+  // Right-positive, forward-positive, heading 0 is -Z (the Web bicycle's frame).
+  function egoRelative(car, other) {
+    const dx = other.x - car.x;
+    const dz = other.z - car.z;
+    const h = Number(car.heading) || 0;
+    return { rel_x: dx * Math.cos(h) + dz * Math.sin(h), rel_z: dx * Math.sin(h) - dz * Math.cos(h) };
+  }
+
+  function fleetBox(kind, rel) {
+    return { kind, rel_x: +rel.rel_x.toFixed(2), rel_z: +rel.rel_z.toFixed(2) };
+  }
+
+  function fleetAgent(sim, car, rule, index) {
+    const obstacles = [];
+    for (const other of [sim.player].concat(sim.traffic || [])) {
+      if (!other || other === car) continue;
+      const rel = egoRelative(car, other);
+      if (Math.hypot(rel.rel_x, rel.rel_z) <= FLEET_RANGE_M) obstacles.push(fleetBox("vehicle", rel));
+    }
+    for (const ped of sim.pedestrians || []) {
+      const rel = egoRelative(car, ped);
+      if (Math.hypot(rel.rel_x, rel.rel_z) <= FLEET_RANGE_M) obstacles.push(fleetBox("pedestrian", rel));
+    }
+    const agent = {
+      id: car.id,
+      speed_mps: Math.max(0, Number(car.speed) || 0),
+      speed_ceiling_mps: Number(sim.world && sim.world.theme && sim.world.theme.limit) || 14,
+      obstacles,
+      seed: ((sim.world && Number(sim.world.seed)) || 0) + index,
+    };
+    const dist = rule ? Number(rule.distance) : NaN;
+    if (Number.isFinite(dist) && dist >= 0 && dist <= FLEET_LINE_M) {
+      const signal = FLEET_SIGNAL_NAMES[rule.color];
+      agent.intersection = {
+        control: signal ? "traffic_light" : "stop",
+        distance_to_line_m: +dist.toFixed(1),
+        signal: signal || "none",
+        stop_completed: !!rule.stopCompleted,
+        already_entered: false,
+      };
+    }
+    return agent;
+  }
+
+  function fleetDecision(sim, car) {
+    if (!fleetOn() || !car || car === sim.player || car.parked) return null;
+    const d = fleet.decisions.get(car.id);
+    return d && (Number(sim.time) || 0) - d.at <= FLEET_STALE_S ? d : null;
+  }
+
+  function bindFleet(sim) {
+    if (sim._fleetBound) return;
+    sim._fleetBound = true;
+    const baseRule = typeof sim.rule === "function" ? sim.rule.bind(sim) : null;
+    const baseEnvelope = typeof sim.speedEnvelope === "function" ? sim.speedEnvelope.bind(sim) : null;
+    sim._fleetBaseRule = baseRule;
+    if (baseRule) {
+      // A fleet car stops for a signal on its decision, not on the script's stop-line clamp.
+      sim.rule = function (car, flag) {
+        const out = baseRule(car, flag);
+        if (!out || !out.mustStop || !FLEET_SIGNAL_STOPS.has(out.reason) || !fleetDecision(sim, car)) return out;
+        return Object.assign({}, out, { mustStop: false, reason: `Fleet ${fleet.policy}` });
+      };
+    }
+    if (baseEnvelope) {
+      // Same as the player: the decision's speed under the safety envelope; raw_flat drops it, like raw mode.
+      sim.speedEnvelope = function (car) {
+        const env = baseEnvelope(car);
+        const d = fleetDecision(sim, car);
+        if (!env || !d) return env;
+        const decided = Math.max(0, d.target_speed_mps);
+        const max = fleet.policy === "raw_flat" ? decided : Math.min(Number(env.max), decided);
+        return Object.assign({}, env, { max, reason: `Fleet ${fleet.policy}` });
+      };
+    }
+  }
+
+  function fleetStats(sim) {
+    const everyone = [sim.player].concat(sim.traffic || []).filter(Boolean);
+    for (const car of fleetCars(sim)) {
+      if (!fleetDecision(sim, car)) continue;
+      for (const other of everyone) {
+        if (other === car || Math.hypot(other.x - car.x, other.z - car.z) >= FLEET_CONTACT_M) continue;
+        fleet.contacts.add([car.id, other.id || "player"].sort().join("|"));
+      }
+      const rule = sim._fleetBaseRule ? sim._fleetBaseRule(car) : null;
+      const dist = rule ? Number(rule.distance) : NaN;
+      if (!Number.isFinite(dist)) continue;
+      const before = fleet.lines.get(car.id);
+      const crossed = before && before.node === rule.nodeId && before.dist > 0 && dist <= 0;
+      if (crossed && before.color === "red" && car.speed > 2) fleet.reds += 1;
+      fleet.lines.set(car.id, { node: rule.nodeId, dist, color: rule.color });
+    }
+  }
+
+  function fleetTick(sim) {
+    if (!fleetOn() || !sim) return;
+    bindFleet(sim);
+    fleetStats(sim);
+    const now = Number(sim.time) || 0;
+    if (fleet.inflight || now < fleet.nextAt) return;
+    const cars = fleetCars(sim).slice(0, FLEET_MAX);
+    if (!cars.length) return;
+    fleet.nextAt = now + FLEET_PERIOD_S;
+    const base = sim._fleetBaseRule;
+    const agents = cars.map((car, i) => fleetAgent(sim, car, base ? base(car) : null, i));
+    const policy = fleet.policy;
+    fleet.inflight = true;
+    fleet.posts += 1;
+    origFetch("/v1/fleet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policy, agents }),
+    })
+      .then((res) => res.json())
+      .then((body) => {
+        if (!body || !body.decisions) {
+          fleet.errors += 1;
+          return;
+        }
+        if (fleet.policy !== policy) return;
+        const at = Number(sim.time) || 0;
+        for (const [id, d] of Object.entries(body.decisions)) {
+          fleet.decisions.set(id, { target_speed_mps: Number(d.target_speed_mps) || 0, choice: d.choice, at });
+        }
+      })
+      .catch(() => {
+        fleet.errors += 1;
+      })
+      .finally(() => {
+        fleet.inflight = false;
+        refreshFleetHud();
+      });
+  }
 
   const STALL_SPEED = 0.2;
   const STALL_PROGRESS_M = 0.5;
@@ -654,6 +852,11 @@
             requestEgoReplan(sim, dt);
           } catch (_err) {
             /* replan must not kill the drive loop */
+          }
+          try {
+            fleetTick(sim);
+          } catch (_err) {
+            /* fleet mode must not kill the drive loop */
           }
           return out;
         };

@@ -1,4 +1,4 @@
-"""JevPilot-Vision HTTP: latest-frame JPEG slot, /v1/vision, and the static driving page.
+"""JevPilot-Vision HTTP: latest-frame JPEG slot, /v1/vision, /v1/fleet, and the static driving page.
 
 A slot item is one JPEG or one set of surround frames {front, right, rear, left}.
 """
@@ -9,9 +9,9 @@ import asyncio
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 _WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -133,7 +133,98 @@ async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def mount(app: FastAPI) -> None:
+FLEET_MAX_AGENTS = 64
+_WORLD_KEYS = frozenset({"x", "z", "world_x", "world_z", "position"})
+
+
+class _FleetTracks:
+    """Per-car box history, so each car gets rel_vz_mps from its own frames."""
+
+    def __init__(self, ttl_s: float = 2.0) -> None:
+        self._lock = threading.Lock()
+        self._ttl_s = ttl_s
+        self._tracks: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+
+    def track(self, car_id: str, boxes: List[Dict[str, Any]], now: float) -> List[Dict[str, Any]]:
+        from jevpilot_vision.surround import track_obstacles
+
+        with self._lock:
+            self._tracks = {k: v for k, v in self._tracks.items() if now - v[0] <= self._ttl_s}
+            previous = self._tracks.get(car_id)
+        tracked = track_obstacles(previous[1] if previous else None, boxes, now - previous[0] if previous else 0.0)
+        with self._lock:
+            self._tracks[car_id] = (now, tracked)
+        return tracked
+
+
+_fleet_tracks = _FleetTracks()
+
+
+def _fleet_boxes(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=422, detail="obstacles must be a list")
+    boxes = []
+    for item in raw:
+        if not isinstance(item, dict) or _WORLD_KEYS & set(item):
+            raise HTTPException(status_code=422, detail="obstacles are ego-relative rel_x/rel_z only")
+        try:
+            box = {"kind": str(item.get("kind") or "vehicle"), "rel_x": float(item["rel_x"]), "rel_z": float(item["rel_z"])}
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="each obstacle needs numeric rel_x and rel_z")
+        boxes.append(box)
+    return boxes
+
+
+def _fleet_decide(get_engine: Callable[[], Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    from jevpilot_vision.fleet import POLICIES, SENSOR_RANGE_M, agent_state, decide
+
+    policy = payload.get("policy", "semif")
+    if policy not in POLICIES:
+        raise HTTPException(status_code=422, detail=f"policy must be one of {sorted(POLICIES)}")
+    agents = payload.get("agents")
+    if not isinstance(agents, list) or len(agents) > FLEET_MAX_AGENTS:
+        raise HTTPException(status_code=422, detail=f"agents must be a list of at most {FLEET_MAX_AGENTS}")
+    engine = get_engine()
+    now = time.monotonic()
+    started = time.perf_counter()
+    decisions: Dict[str, Any] = {}
+    for agent in agents:
+        if not isinstance(agent, dict) or _WORLD_KEYS & set(agent):
+            raise HTTPException(status_code=422, detail="an agent is described by what it senses, not where it is")
+        car_id = str(agent.get("id") or "")
+        if not car_id:
+            raise HTTPException(status_code=422, detail="each agent needs an id")
+        boxes = [
+            box for box in _fleet_boxes(agent.get("obstacles", []))
+            if (box["rel_x"] ** 2 + box["rel_z"] ** 2) ** 0.5 <= SENSOR_RANGE_M
+        ]
+        intersection = agent.get("intersection") if isinstance(agent.get("intersection"), dict) else None
+        try:
+            state = agent_state(
+                speed_mps=float(agent.get("speed_mps", 0.0)),
+                speed_ceiling_mps=float(agent.get("speed_ceiling_mps", 13.4)),
+                obstacles=_fleet_tracks.track(car_id, boxes, now),
+                intersection=intersection,
+                lateral_offset_m=float(agent.get("lateral_offset_m", 0.0)),
+                seed=int(agent.get("seed", 0)),
+            )
+        except (TypeError, ValueError, KeyError):
+            raise HTTPException(status_code=422, detail=f"agent {car_id} has a bad speed, offset, seed or stop line")
+        decisions[car_id] = decide(engine, policy, state)
+    return {
+        "policy": policy,
+        "decisions": decisions,
+        "fleet_ms": round((time.perf_counter() - started) * 1000.0, 3),
+    }
+
+
+def mount(app: FastAPI, get_engine: Optional[Callable[[], Any]] = None) -> None:
     app.add_api_route("/v1/vision", vision_endpoint, methods=["POST"])
+    if get_engine is not None:
+
+        async def fleet_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+            return await asyncio.to_thread(_fleet_decide, get_engine, payload)
+
+        app.add_api_route("/v1/fleet", fleet_endpoint, methods=["POST"])
     if _WEB_DIR.exists():
         app.mount("/jevpilot", StaticFiles(directory=str(_WEB_DIR), html=True), name="jevpilot")

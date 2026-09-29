@@ -1048,7 +1048,7 @@ try:
 except ModuleNotFoundError:
     mount_jevpilot = None
 if mount_jevpilot is not None:
-    mount_jevpilot(app)
+    mount_jevpilot(app, get_engine)
 
 
 @app.get("/")
