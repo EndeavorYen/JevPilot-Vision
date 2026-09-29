@@ -51,6 +51,30 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("semif.benchmark.jevpilot2")
 
 
+def advance_plant(
+    body: Any,
+    target_speed: float,
+    target_steer: float,
+    curvature: float,
+    dt: float,
+    hold_offset_m: Optional[float] = None,
+) -> float:
+    """One tick of the one-dimensional plant. Mutates body; returns the steer command.
+
+    body has speed_mps, prev_accel, steer_angle, x (lateral) and z (along track).
+    """
+    accel = max(-12.0, min(6.0, (target_speed - body.speed_mps) * 4.0))
+    body.prev_accel = accel
+    body.speed_mps = max(0.0, body.speed_mps + accel * dt)
+    offset_dot = body.steer_angle * body.speed_mps * 2.0 - curvature * body.speed_mps * 1.5
+    command = plant_steer_target(target_steer, body.x, offset_dot, curvature, hold_offset_m=hold_offset_m)
+    body.steer_angle += (command - body.steer_angle) * 6.0 * dt
+    body.z += body.speed_mps * dt
+    body.x += body.steer_angle * body.speed_mps * dt * 2.0
+    body.x -= curvature * body.speed_mps * dt * 1.5
+    return command
+
+
 class JevPilot2Simulator:
     """Standardized 2D kinematic vehicle simulator for JevPilot 2.0 multi-scenario benchmark."""
 
@@ -345,29 +369,13 @@ class JevPilot2Simulator:
         target_steer = chosen_vector[1] if len(chosen_vector) > 1 else 0.0
 
         # Dynamics
-        accel = (target_speed - self.speed_mps) * 4.0
-        accel = max(-12.0, min(6.0, accel))
-        jerk = (accel - self.prev_accel) / self.dt
-        self.jerks.append(jerk)
-        self.prev_accel = accel
-
-        self.speed_mps = max(0.0, self.speed_mps + accel * self.dt)
+        prev_accel, prev_steer = self.prev_accel, self.steer_angle
+        steer_cmd = advance_plant(
+            self, target_speed, target_steer, self.track_curvature, self.dt, hold_offset_m=hold_offset_m
+        )
+        self.jerks.append((self.prev_accel - prev_accel) / self.dt)
         self.speeds.append(self.speed_mps)
-
-        offset_dot = (
-            self.steer_angle * self.speed_mps * 2.0
-            - self.track_curvature * self.speed_mps * 1.5
-        )
-        target_steer = plant_steer_target(
-            target_steer, self.x, offset_dot, self.track_curvature, hold_offset_m=hold_offset_m
-        )
-        steer_delta = abs(target_steer - self.steer_angle)
-        self.steering_deltas.append(steer_delta)
-        self.steer_angle += (target_steer - self.steer_angle) * 6.0 * self.dt
-
-        self.z += self.speed_mps * self.dt
-        self.x += self.steer_angle * self.speed_mps * self.dt * 2.0
-        self.x -= self.track_curvature * self.speed_mps * self.dt * 1.5
+        self.steering_deltas.append(abs(steer_cmd - prev_steer))
 
         # Dynamic Agents Progression
         if self.pedestrian and self.pedestrian["crossing"]:
