@@ -33,3 +33,11 @@ python demo/server.py --port 8000 --arbiter-url http://localhost:8001
 當配合 [SemArbiter](https://github.com/EndeavorYen/SemArbiter) 神經裁決核心時，將 SemArbiter 啟動於指定埠口（例如 8001），JevPilot-Vision 的 `DecisionEngine` 會透過 HTTP 將候選選項 `POST` 至 SemArbiter 的 `/v1/classifier` 進行神經打分與先驗校準，收到結果後在本地執行物理碰撞否決（fail-safe veto）與橫向軌跡控制。
 
 官方駕駛分數仍是閉環乾淨完成。搬倉不改寫已發布數字。權重、快取與第三方原始紀錄不進這一倉。
+
+## 車隊模式（Fleet Mode）
+
+每台交通車都可以走跟玩家同一條決策路徑：自己取樣軌跡，再打同一個 `DecisionEngine`（mock 或 SemArbiter）。一台車只描述它感測到的東西：車速、車道偏移、相機範圍（42 m）內的自車相對框 `rel_x`／`rel_z`，以及下一條停止線。任何一台車的世界座標都不會進決策。
+
+- `POST /v1/fleet`：`{"policy": "semif" | "raw_flat" | "heuristic", "agents": [{"id", "speed_mps", "obstacles": [{"kind", "rel_x", "rel_z"}], "intersection"?}]}`，回傳每台車選中的軌跡。帶 `x`／`z` 的輸入回 422。
+- 網頁：HUD 的 `FLEET` 按鈕依序切換 off → semif → raw_flat → heuristic，也可以用 `?fleet=semif` 開啟。開啟後，交通車的速度與停車都來自決策，不再用腳本的停止線夾速。
+- 無頭對比：`python benchmarks/benchmark_fleet.py --mock --theme town`（`city` 是 28 台交通車）。它在環狀道路上比較腳本車流與全車隊三種策略的碰撞、闖紅燈、乾淨車輛比例與平均車速。

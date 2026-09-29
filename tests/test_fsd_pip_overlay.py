@@ -216,6 +216,7 @@ document.querySelector = (sel) => {
 const specEarly = JSON.parse(process.argv[3]);
 let search = specEarly.vision === "1" ? "" : "?vision=0";
 if (specEarly.lap === "1") search += (search ? "&" : "?") + "lap=1";
+if (specEarly.fleet) search += (search ? "&" : "?") + "fleet=" + specEarly.fleet;
 const location = { search };
 let nowMs = 0;
 const window = global;
@@ -292,6 +293,22 @@ if (specEarly.cmd === "upload") {
       ok: true,
       json: async () => ({ vision: { signal: "green" }, vision_encode_ms: 3 }),
     });
+  };
+}
+const fleetBodies = [];
+if (specEarly.cmd === "fleet") {
+  window.fetch = function (url, opts) {
+    const href = typeof url === "string" ? url : "";
+    if (href.indexOf("/v1/fleet") === -1) {
+      return Promise.resolve({ ok: false, json: async () => ({}) });
+    }
+    const sent = JSON.parse((opts && opts.body) || "{}");
+    fleetBodies.push(sent);
+    const decisions = {};
+    for (const agent of sent.agents || []) {
+      decisions[agent.id] = { target_speed_mps: 3.5, choice: "t01" };
+    }
+    return Promise.resolve({ ok: true, json: async () => ({ policy: sent.policy, decisions }) });
   };
 }
 window.URL = { createObjectURL: () => "blob:pip", revokeObjectURL() {} };
@@ -688,6 +705,74 @@ if (spec.cmd === "dom") {
     endZ: end.z,
     s: player.s,
   }));
+} else if (spec.cmd === "fleet") {
+  const player = { id: undefined, x: 0, z: 0, heading: 0, speed: 5 };
+  const near = { id: "vehicle-0", x: 1.0, z: -12, heading: 0, speed: 8 };
+  const far = { id: "vehicle-1", x: 0, z: -200, heading: 0, speed: 8 };
+  const parked = { id: "vehicle-2", x: 2, z: -20, heading: 0, speed: 0, parked: true };
+  const yielding = { id: "vehicle-3", x: -60, z: 0, heading: Math.PI / 2, speed: 6 };
+  const sim = {
+    time: 0,
+    player,
+    traffic: [near, far, parked, yielding],
+    pedestrians: [{ x: -1, z: -30 }],
+    world: { seed: 42, theme: { limit: 14 } },
+    rule(car) {
+      if (car === yielding) {
+        return { mustStop: true, distance: 6, color: "amber", reason: "Yield to crossing traffic", nodeId: "n2" };
+      }
+      return { mustStop: true, distance: 18, color: "red", reason: "Red light", nodeId: "n1" };
+    },
+    speedEnvelope(car) {
+      return { max: car === far ? 2 : 9, reason: "script" };
+    },
+    step(dt) {
+      sim.time += dt;
+    },
+  };
+  window.SEMIF_SIM = sim;
+  window.SEMIF_WORLD = {};
+  (async () => {
+    window.__raf();
+    const before = { env: sim.speedEnvelope(near).max, stop: sim.rule(near).mustStop };
+    sim.step(0.05);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    sim.step(0.05);
+    const after = {
+      env: sim.speedEnvelope(near).max,
+      stop: sim.rule(near).mustStop,
+      reason: sim.speedEnvelope(near).reason,
+      playerEnv: sim.speedEnvelope(player).max,
+      playerStop: sim.rule(player).mustStop,
+      parkedEnv: sim.speedEnvelope(parked).max,
+      farEnv: sim.speedEnvelope(far).max,
+      yieldStop: sim.rule(yielding).mustStop,
+    };
+    sim.time += 5;
+    const stale = { env: sim.speedEnvelope(near).max, stop: sim.rule(near).mustStop };
+    // The world restarts: its clock goes back to zero with the same car ids.
+    sim.time = 300;
+    sim.step(0.05);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const postsBefore = fleetBodies.length;
+    sim.time = 0;
+    const restartEnv = sim.speedEnvelope(near).max;
+    sim.step(0.05);
+    const restart = {
+      env: restartEnv,
+      posted: fleetBodies.length > postsBefore,
+      sessions: [...new Set(fleetBodies.map((b) => b.session))].length,
+    };
+    const button = document.getElementById("fsd-fleet");
+    process.stdout.write(JSON.stringify({
+      before, after, stale, restart, bodies: fleetBodies, hud: button && button.textContent,
+    }));
+  })().catch((err) => {
+    process.stderr.write(String(err && err.stack || err));
+    process.exit(1);
+  });
 } else {
   throw new Error("unknown cmd");
 }
@@ -830,3 +915,47 @@ def test_v_and_header_toggle_without_stealing_seed_input():
     assert keys["afterRepeat"] is keys["afterVHidden"]
     assert keys["afterClickFold"] is not keys["beforeFold"]
     assert keys["hiddenAfterType"] is keys["hiddenBeforeType"]
+
+
+def test_fleet_mode_drives_traffic_from_v1_fleet():
+    """#3: ?fleet=semif posts ego-relative boxes for moving traffic and applies the decisions."""
+    out = _run({"cmd": "fleet", "fleet": "semif"})
+    assert out["before"] == {"env": 9, "stop": True}
+    assert out["bodies"], "fleet mode must post to /v1/fleet"
+    body = out["bodies"][0]
+    assert body["policy"] == "semif"
+    ids = [agent["id"] for agent in body["agents"]]
+    assert ids == ["vehicle-0", "vehicle-1", "vehicle-3"], "parked cars are not fleet cars"
+    near = body["agents"][0]
+    assert "x" not in near and "z" not in near
+    for box in near["obstacles"]:
+        assert set(box) == {"kind", "rel_x", "rel_z"}
+        assert (box["rel_x"] ** 2 + box["rel_z"] ** 2) ** 0.5 <= 42
+    player_box = [b for b in near["obstacles"] if b["kind"] == "vehicle"][0]
+    assert player_box["rel_z"] == pytest.approx(-12.0)
+    assert player_box["rel_x"] == pytest.approx(-1.0)
+    assert [b["kind"] for b in body["agents"][1]["obstacles"]] == [], "200 m away is out of range"
+    assert near["intersection"]["signal"] == "red"
+    assert near["intersection"]["distance_to_line_m"] == 18
+    assert out["after"]["env"] == 3.5
+    assert out["after"]["stop"] is False
+    assert out["after"]["reason"] == "Fleet semif"
+    assert out["after"]["playerEnv"] == 9 and out["after"]["playerStop"] is True
+    assert out["after"]["parkedEnv"] == 9
+    assert out["after"]["farEnv"] == 2, "the decision runs under the safety envelope, as the player's does"
+    assert out["after"]["yieldStop"] is True, "junction interlocks stay with the traffic rules"
+    assert body["agents"][2]["intersection"]["signal"] == "yellow", "the city's amber is the contract's yellow"
+    assert out["stale"] == {"env": 9, "stop": True}, "a stale decision hands the car back to the script"
+    assert out["hud"].startswith("FLEET semif")
+    assert near["steers"] is False, "web traffic keeps its route geometry; only speed is decided"
+    assert body["t"] == pytest.approx(0.05) and body["session"]
+    assert out["restart"]["env"] == 9, "a restarted world does not inherit the old world's decisions"
+    assert out["restart"]["posted"] is True, "a restarted world posts again at once"
+    assert out["restart"]["sessions"] >= 2, "a restarted world starts fresh tracks"
+
+
+def test_fleet_mode_is_off_by_default():
+    out = _run({"cmd": "fleet"})
+    assert out["bodies"] == []
+    assert out["after"]["env"] == 9 and out["after"]["stop"] is True
+    assert out["hud"] == "FLEET off"
