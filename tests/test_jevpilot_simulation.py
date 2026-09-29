@@ -219,7 +219,7 @@ def test_closed_loop_episode_vetoes_a_collision_the_model_picks(monkeypatch):
                 },
             }
 
-        def step(self, _vec, _is_ood):
+        def step(self, _vec, _is_ood, hold_offset_m=None):
             return True, {}
 
     monkeypatch.setattr(

@@ -33,7 +33,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from demo.server import DecisionEngine
-from jevpilot_vision.lateral import DETOUR_STEER, lateral_pd
+from jevpilot_vision.lateral import plant_steer_target
 from jevpilot_vision.trajectory_sampler import (
     VECTOR_INSTRUCTIONS,
     candidates_as_vecs,
@@ -255,7 +255,12 @@ class JevPilot2Simulator:
             }
 
         from jevpilot_vision.pinhole_frame import render_surround_frames
-        from jevpilot_vision.surround import emergency_from_surround, surround_blobs, surround_obstacles
+        from jevpilot_vision.surround import (
+            emergency_from_surround,
+            surround_blobs,
+            surround_obstacles,
+            track_obstacles,
+        )
 
         if getattr(self, "use_camera_obstacles", True):
             frames = render_surround_frames(self.scenario_type, self)
@@ -263,6 +268,11 @@ class JevPilot2Simulator:
             self.last_frame = frames["front"]
             blobs = surround_blobs(frames)
             obstacles = surround_obstacles(blobs)
+            # step() also observes, so the same instant can be read twice; track against an earlier one.
+            history = [h for h in getattr(self, "_obstacle_history", []) if h[0] < self.t]
+            if history:
+                obstacles = track_obstacles(history[-1][1], obstacles, self.t - history[-1][0])
+            self._obstacle_history = history[-1:] + [(self.t, obstacles)]
             if emergency_obs is not None:
                 seen = emergency_from_surround(blobs)
                 emergency_obs["distance_m"] = seen["distance_m"] if seen else None
@@ -320,7 +330,12 @@ class JevPilot2Simulator:
 
         return obs
 
-    def step(self, chosen_vector: List[float], is_ood: bool) -> Tuple[bool, Dict[str, Any]]:
+    def step(
+        self,
+        chosen_vector: List[float],
+        is_ood: bool,
+        hold_offset_m: Optional[float] = None,
+    ) -> Tuple[bool, Dict[str, Any]]:
         self.t += self.dt
 
         if is_ood:
@@ -343,11 +358,9 @@ class JevPilot2Simulator:
             self.steer_angle * self.speed_mps * 2.0
             - self.track_curvature * self.speed_mps * 1.5
         )
-        u_sel = float(target_steer)
-        if abs(u_sel) <= DETOUR_STEER:
-            # Plant: x += steer * v * dt * 2.0; x -= kappa * v * dt * 1.5. Hold x with steer = (1.5/2) * kappa.
-            u_sel = (1.5 / 2.0) * float(self.track_curvature)
-        target_steer = lateral_pd(u_sel, self.x, offset_dot)
+        target_steer = plant_steer_target(
+            target_steer, self.x, offset_dot, self.track_curvature, hold_offset_m=hold_offset_m
+        )
         steer_delta = abs(target_steer - self.steer_angle)
         self.steering_deltas.append(steer_delta)
         self.steer_angle += (target_steer - self.steer_angle) * 6.0 * self.dt
@@ -479,6 +492,7 @@ def run_jevpilot2_episode(
 
     chosen_vec = [env.speed_mps, 0.0]
     chosen_id = "v1"
+    hold_offset_m: Optional[float] = None
     last_obs: Optional[Dict[str, Any]] = None
     is_ood = False
 
@@ -523,10 +537,12 @@ def run_jevpilot2_episode(
             answers = resp.get("answers", {})
             chosen_id = answers.get("vector", {}).get("choice", "v1")
             chosen_vec = list(obs["candidates"].get(chosen_id, [env.speed_mps, 0.0]))
+            chosen_meta = (obs.get("candidate_meta") or {}).get(chosen_id) or {}
+            hold_offset_m = chosen_meta.get("hold_offset_m")
             is_ood = bool(resp.get("meta", {}).get("true_ood"))
             last_obs = obs
 
-        terminated, _ = env.step(chosen_vec, is_ood)
+        terminated, _ = env.step(chosen_vec, is_ood, hold_offset_m=hold_offset_m)
         if on_step is not None:
             on_step(env, chosen_id, chosen_vec, last_obs)
         step_count += 1

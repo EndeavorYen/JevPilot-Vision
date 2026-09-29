@@ -87,3 +87,25 @@ def lateral_pd(
     elif pd < -limit:
         pd = -limit
     return max(-STEER_LIMIT, min(STEER_LIMIT, u_selected - pd))
+
+
+def plant_steer_target(
+    selected_steer: float,
+    offset_m: float,
+    offset_dot: float,
+    curvature: float,
+    hold_offset_m: float | None = None,
+) -> float:
+    """Steer target of the one-dimensional plant. The sampler's rollout calls this too.
+
+    A lane change (|steer| > DETOUR_STEER) passes through. A smaller steer is replaced by the
+    curvature hold and the PD pulls toward the centerline, or toward hold_offset_m when the
+    selected trajectory holds a lateral offset (a pull-over).
+    """
+    u_sel = float(selected_steer)
+    if hold_offset_m is None and abs(u_sel) > DETOUR_STEER:
+        return lateral_pd(u_sel, offset_m, offset_dot)
+    # Plant: x += steer * v * dt * 2.0; x -= kappa * v * dt * 1.5. Hold x with steer = (1.5/2) * kappa.
+    u_sel = (1.5 / 2.0) * float(curvature)
+    target = 0.0 if hold_offset_m is None else float(hold_offset_m)
+    return lateral_pd(u_sel, float(offset_m) - target, offset_dot)

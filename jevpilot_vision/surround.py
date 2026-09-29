@@ -101,3 +101,64 @@ def emergency_from_surround(blobs_by_camera: Dict[str, Blobs]) -> Optional[Dict[
         "lateral_offset_m": round(best["rel_x"], 1),
         "behind": best["rel_z"] < 0.0,
     }
+
+
+
+TRACK_GATE_M = 3.0
+# A speed step between frames is IPM noise more than motion; move part of the way.
+TRACK_SMOOTHING = 0.35
+# An overtaking car goes through the blind spot beside the ego. Coast it this long.
+COAST_S = 1.0
+COAST_UNTIL_AHEAD_M = 6.0
+
+
+def track_obstacles(
+    previous: Optional[List[Dict[str, Any]]],
+    current: List[Dict[str, Any]],
+    dt: float,
+) -> List[Dict[str, Any]]:
+    """Add rel_vz_mps (d rel_z / dt) by matching each obstacle to the nearest one of its kind last frame.
+
+    Ego-relative only: a parked car ahead reads about -ego_speed, a car catching up from behind reads > 0.
+    A car catching up that no camera sees this frame is coasted on its last speed (coasted_s) until it
+    is COAST_UNTIL_AHEAD_M ahead or COAST_S has passed.
+    """
+    if not previous or dt <= 0.0:
+        return [dict(item) for item in current]
+    out: List[Dict[str, Any]] = []
+    used: set[int] = set()
+    for item in current:
+        tracked = dict(item)
+        best_i: Optional[int] = None
+        best_d = TRACK_GATE_M
+        for i, old in enumerate(previous):
+            if i in used or old.get("kind") != item.get("kind"):
+                continue
+            ox, oz = float(old["rel_x"]), float(old["rel_z"])
+            if old.get("rel_vz_mps") is not None:
+                oz += float(old["rel_vz_mps"]) * dt
+            d = math.hypot(ox - float(item["rel_x"]), oz - float(item["rel_z"]))
+            if d < best_d:
+                best_i, best_d = i, d
+        if best_i is not None:
+            used.add(best_i)
+            old = previous[best_i]
+            measured = (float(item["rel_z"]) - float(old["rel_z"])) / dt
+            if old.get("rel_vz_mps") is not None:
+                prior = float(old["rel_vz_mps"])
+                measured = prior + TRACK_SMOOTHING * (measured - prior)
+            tracked["rel_vz_mps"] = round(measured, 2)
+        out.append(tracked)
+    for i, old in enumerate(previous):
+        rel_vz = old.get("rel_vz_mps")
+        if i in used or rel_vz is None or float(rel_vz) <= 0.0:
+            continue
+        coasted = float(old.get("coasted_s", 0.0)) + dt
+        rel_z = float(old["rel_z"]) + float(rel_vz) * dt
+        if coasted > COAST_S or rel_z > COAST_UNTIL_AHEAD_M:
+            continue
+        ghost = dict(old)
+        ghost["rel_z"] = round(rel_z, 2)
+        ghost["coasted_s"] = round(coasted, 3)
+        out.append(ghost)
+    return out
