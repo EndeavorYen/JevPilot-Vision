@@ -148,9 +148,12 @@ PLAN_POINTS = 31
 MAX_SAMPLES = 16
 LANE_HALF_M = 4.5  # matches JevPilot2Simulator.off_track
 REAR_CLEAR_M = 0.55  # matches JevPilot2Simulator's rear catch-up rule
-# Pull-over: hold a right offset past the Web A() lane-keep snap (1.4 m). Right is positive.
+CONTACT_DZ_M = 3.5  # car-sized box, the ahead check's size
+CONTACT_DX_M = 1.8
+# Pull-over: hold a right offset past the Web A() lane-keep snap (1.4 m), far enough that a car
+# passing in the lane centre clears the box (CONTACT_DX_M) by the time it is alongside. Right is positive.
 # Sampled every frame, whatever the scene says. Speed fractions of planning-max.
-PULL_OVER_OFFSET_M = 1.6
+PULL_OVER_OFFSET_M = 2.4
 PULL_OVER_SPEED_FRACTIONS = (0.9, 0.45)
 # Speed mix is a fraction of planning-max, matching the worker's A*(0.78..1.0) / A*(0.25..0.55).
 # Required-stop bias (O&&r<8) is NOT copied: that is signal injection.
@@ -214,8 +217,12 @@ def _hits_obstacle(
         rel_vz = obj.get("rel_vz_mps")
         if rel_vz is not None and float(rel_vz) > 0.0 and float(obj["rel_z"]) < 6.0:
             # Catching up or passing. The simulator's rear rule: |dx| < 0.55 while -4 < dz < 6.
+            # Once the car is alongside or ahead it is also a car-sized box, as in the ahead check.
+            alongside = float(obj["rel_z"]) > -CONTACT_DZ_M
             oz += (float(ego_speed) + float(rel_vz)) * t
             dz = oz - z
+            if alongside and abs(dz) < CONTACT_DZ_M and abs(x - ox) < CONTACT_DX_M:
+                return True
             return abs(x - ox) < REAR_CLEAR_M and -4.0 < dz < 6.0
         if rel_vz is not None and str(obj.get("kind") or "vehicle") == "vehicle":
             # Closing on or passing a slower car. Far IPM speed is coarse, so keep the
@@ -392,8 +399,12 @@ def sample_trajectories(
             description=desc,
         )
         kept += 1
-    # Brake in lane. A full stop from the random mix can carry a full-range steer.
-    geom = rollout(ego_x, ego_z, speed, 0.0, 0.0, curvature, stop_line_z, obstacles, current_steer=current_steer)
+    # Brake straight: stop where the car is. A full stop from the random mix can carry a
+    # full-range steer, and one that recentres can sweep into a car stopped beside it.
+    geom = rollout(
+        ego_x, ego_z, speed, 0.0, 0.0, curvature, stop_line_z, obstacles,
+        current_steer=current_steer, hold_offset_m=ego_x,
+    )
     sid = f"t{kept:02d}"
     samples[sid] = Sample(
         id=sid,
@@ -407,9 +418,10 @@ def sample_trajectories(
         end_x=geom["end_x"],
         end_z=geom["end_z"],
         description=(
-            f"brake in lane, end_speed {geom['end_speed']:.1f} m/s, end_x {geom['end_x']:.1f} m, "
+            f"brake straight, end_speed {geom['end_speed']:.1f} m/s, end_x {geom['end_x']:.1f} m, "
             f"collision {geom['collision']}, halt_geom {geom['stop_at_line']}"
         ),
+        hold_offset_m=float(ego_x),
     )
     kept += 1
     for frac in PULL_OVER_SPEED_FRACTIONS:

@@ -64,6 +64,8 @@ def test_pull_over_is_sampled_every_frame_and_the_plant_holds_it():
     assert all(s.end_x == pytest.approx(PULL_OVER_OFFSET_M, abs=0.3) for s in pull)
     assert all(s.meta()["hold_offset_m"] == PULL_OVER_OFFSET_M for s in pull)
     assert all("hold_offset_m" not in s.meta() for s in plain.values() if s.hold_offset_m is None)
+    brake = [s for s in plain.values() if s.description.startswith("brake straight")]
+    assert [s.hold_offset_m for s in brake] == [0.0], "brake straight holds where the car is"
 
     env = JevPilot2Simulator("speed_zone_city", seed=1)
     env.use_camera_obstacles = False
@@ -75,8 +77,8 @@ def test_pull_over_is_sampled_every_frame_and_the_plant_holds_it():
 def test_car_closing_from_behind_blocks_the_lane_but_not_the_pull_over():
     rear = [_car(0.0, -8.0, rel_vz_mps=8.0)]
     samples = sample_trajectories(ego_x=0.0, ego_z=0.0, speed=16.0, obstacles=rear, seed=5)
-    lane = [s for s in samples.values() if s.hold_offset_m is None and abs(s.end_x) < 0.3]
-    pull = [s for s in samples.values() if s.hold_offset_m is not None]
+    lane = [s for s in samples.values() if s.hold_offset_m is None and abs(s.end_x) < 0.3 and s.speed > 1.0]
+    pull = [s for s in samples.values() if s.hold_offset_m == PULL_OVER_OFFSET_M]
     assert lane and all(s.collision for s in lane)
     assert pull and not any(s.collision for s in pull)
 
@@ -146,7 +148,7 @@ def test_emergency_stop_brakes_straight():
     from jevpilot_vision.directive import fail_safe_choice
 
     samples = sample_trajectories(ego_x=0.0, ego_z=0.0, speed=16.0, seed=5)
-    brake = [s for s in samples.values() if s.description.startswith("brake in lane")]
+    brake = [s for s in samples.values() if s.description.startswith("brake straight")]
     assert len(brake) == 1 and brake[0].speed == 0.0
     candidates = {
         "swerve": [0.0, -0.53, -9.0, 0.6, True, False],
