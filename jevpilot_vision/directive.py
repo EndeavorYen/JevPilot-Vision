@@ -40,6 +40,15 @@ def _speed(vec: Any) -> float:
         return 1e9
 
 
+def _brake_key(vec: Any) -> tuple[float, float]:
+    """Slowest first; among equally slow, the straightest (an emergency stop does not swerve)."""
+    try:
+        steer = abs(float(vec[1]))
+    except (TypeError, ValueError, IndexError):
+        steer = 1e9
+    return (_speed(vec), steer)
+
+
 def fail_safe_choice(
     candidates: Dict[str, Any],
     choice_id: Optional[str],
@@ -57,11 +66,11 @@ def fail_safe_choice(
     if collided:
         halt = _halt_ids(candidates)
         if halt:
-            return min(halt, key=lambda cid: _speed(candidates[cid]))
-        return min(ids, key=lambda cid: _speed(candidates[cid]))
+            return min(halt, key=lambda cid: _brake_key(candidates[cid]))
+        return min(ids, key=lambda cid: _brake_key(candidates[cid]))
     intent = (directive or {}).get("intent")
     if intent == "RED_LIGHT_STOP":
         halt = _halt_ids(candidates)
         if halt:
-            return min(halt, key=lambda cid: _speed(candidates[cid]))
+            return min(halt, key=lambda cid: _brake_key(candidates[cid]))
     return pick

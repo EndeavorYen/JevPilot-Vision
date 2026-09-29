@@ -147,6 +147,11 @@ PLAN_DT = 0.05
 PLAN_POINTS = 31
 MAX_SAMPLES = 16
 LANE_HALF_M = 4.5  # matches JevPilot2Simulator.off_track
+REAR_CLEAR_M = 0.55  # matches JevPilot2Simulator's rear catch-up rule
+# Pull-over: hold a right offset past the Web A() lane-keep snap (1.4 m). Right is positive.
+# Sampled every frame, whatever the scene says. Speed fractions of planning-max.
+PULL_OVER_OFFSET_M = 1.6
+PULL_OVER_SPEED_FRACTIONS = (0.9, 0.45)
 # Speed mix is a fraction of planning-max, matching the worker's A*(0.78..1.0) / A*(0.25..0.55).
 # Required-stop bias (O&&r<8) is NOT copied: that is signal injection.
 
@@ -164,6 +169,7 @@ class Sample:
     end_x: float
     end_z: float
     description: str
+    hold_offset_m: Optional[float] = None
 
     def as_vec(self) -> List[Any]:
         return [
@@ -183,6 +189,7 @@ class Sample:
             "steer": round(self.steer, 2),
             "stop_at_line": self.stop_at_line,
             "description": self.description,
+            **({"hold_offset_m": self.hold_offset_m} if self.hold_offset_m is not None else {}),
         }
 
 
@@ -193,14 +200,31 @@ def _hits_obstacle(
     speed: float,
     ego_x: float = 0.0,
     ego_z: float = 0.0,
+    t: float = 0.0,
+    ego_speed: float = 0.0,
 ) -> bool:
     """Same radii as JevPilot2Simulator.step — prediction must match the loop.
 
     Prefer ego-frame rel_x/rel_z from IPM. World x/z is only for unit tests.
+    A tracked vehicle (rel_vz_mps) moves at ego speed + rel_vz for t seconds.
     """
     if obj.get("rel_z") is not None:
         ox = float(ego_x) + float(obj.get("rel_x") or 0.0)
         oz = float(ego_z) + float(obj["rel_z"])
+        rel_vz = obj.get("rel_vz_mps")
+        if rel_vz is not None and float(rel_vz) > 0.0 and float(obj["rel_z"]) < 6.0:
+            # Catching up or passing. The simulator's rear rule: |dx| < 0.55 while -4 < dz < 6.
+            oz += (float(ego_speed) + float(rel_vz)) * t
+            dz = oz - z
+            return abs(x - ox) < REAR_CLEAR_M and -4.0 < dz < 6.0
+        if rel_vz is not None and str(obj.get("kind") or "vehicle") == "vehicle":
+            # Closing on or passing a slower car. Far IPM speed is coarse, so keep the
+            # static check ahead and add the car as a box that moves at its own speed and
+            # stays beside the ego while alongside.
+            if 0.0 <= oz - z < 3.5 and abs(x - ox) < 1.8:
+                return True
+            moved = oz + (float(ego_speed) + float(rel_vz)) * t
+            return abs(moved - z) < 3.5 and abs(x - ox) < 1.8
     else:
         oz = obj.get("z")
         ox = float(obj.get("x", 0.0) or 0.0)
@@ -236,17 +260,26 @@ def rollout(
     stop_line_z: Optional[float],
     obstacles: Sequence[Dict[str, Any]],
     current_steer: float = 0.0,
+    hold_offset_m: Optional[float] = None,
 ) -> Dict[str, Any]:
+    """Same lateral rule as JevPilot2Simulator.step, so a small steer comes back to center."""
+    from jevpilot_vision.lateral import plant_steer_target
+
     x, z, v = ego_x, ego_z, speed
     steer = current_steer
     target_steer = max(-STEER_LIMIT, min(STEER_LIMIT, target_steer))
     offroad_steps = 0
     collision = False
     crossed_line = False
-    for _ in range(PLAN_POINTS):
+    first_steer: Optional[float] = None
+    for step in range(PLAN_POINTS):
         accel = max(-12.0, min(6.0, (target_speed - v) * 4.0))
         v = max(-5.0, v + accel * PLAN_DT)
-        steer += (target_steer - steer) * 6.0 * PLAN_DT
+        offset_dot = steer * v * 2.0 - curvature * v * 1.5
+        command = plant_steer_target(target_steer, x, offset_dot, curvature, hold_offset_m=hold_offset_m)
+        if first_steer is None:
+            first_steer = command
+        steer += (command - steer) * 6.0 * PLAN_DT
         z += v * PLAN_DT
         x += steer * v * PLAN_DT * 2.0
         x -= curvature * v * PLAN_DT * 1.5
@@ -255,7 +288,9 @@ def rollout(
         if stop_line_z is not None and z >= stop_line_z:
             crossed_line = True
         for obj in obstacles:
-            if _hits_obstacle(x, z, obj, v, ego_x=ego_x, ego_z=ego_z):
+            if _hits_obstacle(
+                x, z, obj, v, ego_x=ego_x, ego_z=ego_z, t=(step + 1) * PLAN_DT, ego_speed=speed
+            ):
                 collision = True
     stop_at_line = False
     if stop_line_z is not None and (stop_line_z - ego_z) > 0.5:
@@ -269,6 +304,7 @@ def rollout(
         "stop_at_line": stop_at_line,
         "route_error": x,
         "crosses_stop_line": crossed_line,
+        "first_steer": first_steer if first_steer is not None else target_steer,
     }
 
 
@@ -315,7 +351,7 @@ def sample_trajectories(
     samples: Dict[str, Sample] = {}
     kept = 0
     attempt = 0
-    while kept < MAX_SAMPLES and attempt < 40:
+    while kept < MAX_SAMPLES - len(PULL_OVER_SPEED_FRACTIONS) - 1 and attempt < 40:
         steer = _steer_sample(attempt, rng, current_steer)
         frac = _speed_fraction(attempt, rng, speed)
         if frac < 0:
@@ -354,6 +390,63 @@ def sample_trajectories(
             end_x=geom["end_x"],
             end_z=geom["end_z"],
             description=desc,
+        )
+        kept += 1
+    # Brake in lane. A full stop from the random mix can carry a full-range steer.
+    geom = rollout(ego_x, ego_z, speed, 0.0, 0.0, curvature, stop_line_z, obstacles, current_steer=current_steer)
+    sid = f"t{kept:02d}"
+    samples[sid] = Sample(
+        id=sid,
+        speed=0.0,
+        steer=geom["first_steer"],
+        route_error=geom["route_error"],
+        offroad=geom["offroad"],
+        collision=geom["collision"],
+        stop_at_line=geom["stop_at_line"],
+        end_speed=geom["end_speed"],
+        end_x=geom["end_x"],
+        end_z=geom["end_z"],
+        description=(
+            f"brake in lane, end_speed {geom['end_speed']:.1f} m/s, end_x {geom['end_x']:.1f} m, "
+            f"collision {geom['collision']}, halt_geom {geom['stop_at_line']}"
+        ),
+    )
+    kept += 1
+    for frac in PULL_OVER_SPEED_FRACTIONS:
+        target_speed = cap * frac
+        geom = rollout(
+            ego_x,
+            ego_z,
+            speed,
+            target_speed,
+            0.0,
+            curvature,
+            stop_line_z,
+            obstacles,
+            current_steer=current_steer,
+            hold_offset_m=PULL_OVER_OFFSET_M,
+        )
+        if geom["offroad"] > 0.55 and target_speed > 0.5:
+            continue
+        sid = f"t{kept:02d}"
+        desc = (
+            f"pull over to {PULL_OVER_OFFSET_M:+.1f} m, target {target_speed:.1f} m/s, "
+            f"end_speed {geom['end_speed']:.1f} m/s, end_x {geom['end_x']:.1f} m, "
+            f"collision {geom['collision']}, halt_geom {geom['stop_at_line']}"
+        )
+        samples[sid] = Sample(
+            id=sid,
+            speed=target_speed,
+            steer=geom["first_steer"],
+            route_error=geom["route_error"],
+            offroad=geom["offroad"],
+            collision=geom["collision"],
+            stop_at_line=geom["stop_at_line"],
+            end_speed=geom["end_speed"],
+            end_x=geom["end_x"],
+            end_z=geom["end_z"],
+            description=desc,
+            hold_offset_m=PULL_OVER_OFFSET_M,
         )
         kept += 1
     if len(samples) < 2:

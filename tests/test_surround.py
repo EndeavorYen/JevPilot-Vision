@@ -113,7 +113,7 @@ def test_simulator_emergency_position_comes_from_the_rear_camera():
 
 
 def test_rear_camera_evidence_drives_the_give_way_intent():
-    """Evidence layer only. Pulling over is the planner's job (follow-up issue)."""
+    """Evidence layer. The pull-over itself is tests/test_emergency_pull_over.py (#7)."""
     from benchmarks.benchmark_jevpilot_hierarchical import JevPilot2Simulator
     from demo.server import DecisionEngine
 
