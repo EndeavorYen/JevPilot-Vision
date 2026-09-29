@@ -28,6 +28,13 @@
         window.SEMIF_RAW_MODE = q.get("raw") === "1" || q.get("rawMode") === "1";
         var seed = q.get("seed");
         window.SEMIF_SEED = seed && isFinite(Number(seed)) ? Number(seed) : null;
+        // Map size (junctions per side) for Skyline City and Small town. Free driving uses the
+        // larger 7 x 7 grid; a benchmark lap (lap=1) keeps the 5 x 5 grid its published scores
+        // were measured on. ?size=3..9 overrides both.
+        var size = Number(q.get("size"));
+        if (!(size >= 3 && size <= 9)) size = q.get("lap") === "1" ? 5 : 7;
+        size = Math.round(size);
+        window.SEMIF_MAP = { size: size, cityTraffic: 28 + (size - 5) * 6, townTraffic: 14 + (size - 5) * 4 };
         var proto = HTMLCanvasElement.prototype;
         var origGetContext = proto.getContext;
         proto.getContext = function (kind, attrs) {

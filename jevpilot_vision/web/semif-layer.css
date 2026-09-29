@@ -184,12 +184,126 @@ body.fsd-theme .vector-label.selected {
   padding: 0 8px 8px;
 }
 
-#fsd-camera-canvas {
+.fsd-pip-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #05060a;
+}
+
+#fsd-camera-canvas,
+#fsd-camera-view {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
-  height: auto;
-  background: #05060a;
-  border-radius: 8px;
+  height: 100%;
+}
+
+#fsd-camera-view {
+  visibility: hidden;
+}
+
+.fsd-camera-label {
+  position: absolute;
+  left: 8px;
+  bottom: 7px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(8, 10, 14, 0.62);
+  color: #e8edf3;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+.fsd-pip-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.fsd-cam-tab {
+  flex: 1;
+  min-height: 26px;
+  padding: 4px 0;
+  border: 1px solid var(--fsd-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fsd-muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fsd-cam-tab:hover {
+  color: var(--fsd-ink);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.fsd-cam-tab[aria-selected="true"] {
+  color: #fff;
+  border-color: rgba(62, 106, 225, 0.9);
+  background: rgba(62, 106, 225, 0.32);
+}
+
+/* Status pills: a dot shows the state (on / waiting / off / error). */
+.fsd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--fsd-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fsd-ink);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.fsd-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3e6ae1;
+  box-shadow: 0 0 6px rgba(62, 106, 225, 0.8);
+}
+
+.fsd-chip[data-state="off"]::before {
+  background: #5b6270;
+  box-shadow: none;
+}
+
+.fsd-chip[data-state="waiting"]::before {
+  background: #d9a441;
+  box-shadow: 0 0 6px rgba(217, 164, 65, 0.7);
+}
+
+.fsd-chip[data-state="on"]::before {
+  background: #3fbf7f;
+  box-shadow: 0 0 6px rgba(63, 191, 127, 0.7);
+}
+
+.fsd-chip[data-state="error"]::before {
+  background: #e5484d;
+  box-shadow: 0 0 6px rgba(229, 72, 77, 0.8);
+}
+
+#fsd-intent.fsd-chip::before {
+  background: #3e6ae1;
+}
+
+button.fsd-chip {
+  cursor: pointer;
+}
+
+button.fsd-chip:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 #fsd-pip.fsd-pip-collapsed .fsd-pip-body {

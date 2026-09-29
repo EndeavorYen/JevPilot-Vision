@@ -15,16 +15,14 @@
   if (params.get("scenery") === "0") return;
 
   const PALETTE = {
-    glass: ["#3e4b55", "#46535c", "#505c63", "#3a4650"],
+    glass: ["#415059", "#46535c", "#505c63", "#3f4c58"],
     mullion: "#a3a9ac",
-    spandrel: "#2c3339",
+    spandrel: "#3d464e",
     stone: ["#c9c2b4", "#b9b3a6", "#d3cdc0", "#a9a59c"],
     brick: ["#86574d", "#7b5048", "#8f6253", "#6f4a42"],
     stucco: ["#d8cdb9", "#cfc6b4", "#e0d6c3", "#c8bfae"],
     siding: ["#dcd6c8", "#c9d1cc", "#d9cdb3", "#c2c9cf", "#e0d3c1"],
     trim: "#ece6d8",
-    windowDark: "#2b343b",
-    windowLight: "#6b7880",
     blind: "#cfc9ba",
     interiorWarm: "#b89f78",
     door: "#5b4636",
@@ -33,13 +31,26 @@
     parapet: "#8e9092",
     mechanical: "#9ea3a5",
     awning: ["#3f5f57", "#6a4b44", "#4a5068", "#6b6254"],
-    signBand: "#2f3437",
+    signBand: "#40474b",
     signText: "#efe8d6",
     balcony: "#a8aaa8",
-    carPaint: ["#e7e8ea", "#bfc3c8", "#8e949b", "#5f656c", "#3c4148", "#2e3a52", "#6c2a2c", "#34463d", "#c8bca3", "#f2f2ee"],
-    signalHousing: "#23272a",
-    signalBackplate: "#16181a",
+    carPaint: ["#e7e8ea", "#bfc3c8", "#8e949b", "#5f656c", "#41464e", "#2e3a52", "#6c2a2c", "#3a4f45", "#c8bca3", "#f2f2ee"],
+    signalHousing: "#40464a",
+    sportTrim: { badge: "#c9b37a", accent: "#5b6f8a", leather: "#6a3a36" },
     fog: "#c3cfd8",
+    minimap: { park: "#dbe8d3", tower: "#c9ced6", building: "#dcdfe4" },
+    misc: {
+      sill: "#bdb6a6",
+      shopFrame: "#4a5054",
+      tank: "#7d7468",
+      plinth: "#9a958a",
+      deck: "#6e5a48",
+      garage: "#8d8f90",
+      chimney: "#7a5f50",
+      porch: "#e9e4d8",
+      step: "#b3aa99",
+      sun: "#fff1dc",
+    },
   };
 
   const SHOP_NAMES = ["CAFE", "BAKERY", "BOOKS", "MARKET", "DELI", "PHARMACY", "FLOWERS", "BISTRO", "HARDWARE", "NOODLES", "OPTICS", "LAUNDRY"];
@@ -107,7 +118,7 @@
     const g = ctx.createLinearGradient(x, y, x + w * 0.3, y + h);
     g.addColorStop(0, shade(base, 1.45 + r() * 0.2));
     g.addColorStop(0.45, shade(base, 1.0));
-    g.addColorStop(1, shade(base, 0.72));
+    g.addColorStop(1, shade(base, 0.85));
     ctx.fillStyle = g;
     ctx.fillRect(x, y, w, h);
     const mode = r();
@@ -182,7 +193,7 @@
         ctx.fillStyle = PALETTE.trim;
         ctx.fillRect(x, y + h / 2 - 2, w, 4);
         ctx.fillRect(x + w / 2 - 2, y, 4, h);
-        ctx.fillStyle = "#bdb6a6";
+        ctx.fillStyle = PALETTE.misc.sill;
         ctx.fillRect(x - 8, y + h + 4, w + 16, 6);
       }
     }
@@ -253,7 +264,7 @@
       const y = H * 0.27;
       const w = bay - 16;
       const h = H * 0.7;
-      ctx.fillStyle = "#4a5054";
+      ctx.fillStyle = PALETTE.misc.shopFrame;
       ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
       if (b === 1) {
         ctx.fillStyle = PALETTE.door;
@@ -439,7 +450,7 @@
       }
     }
     if (r() < 0.5) {
-      const tank = plain("#7d7468", { roughness: 0.9 });
+      const tank = plain(PALETTE.misc.tank, { roughness: 0.9 });
       add(g, new T.CylinderGeometry(1.2, 1.2, 2.2, 10), tank, (r() - 0.5) * w * 0.5, h + 2.2, (r() - 0.5) * d * 0.5);
     }
   }
@@ -467,20 +478,20 @@
           ? facadeMaterial("punched", pick(PALETTE.stucco, r), Math.floor(r() * 3))
           : facadeMaterial("siding", pick(PALETTE.siding, r), Math.floor(r() * 3));
     add(g, facadeBox(w, wallH, d, 2.9, 0.08), mat, 0, wallH / 2, 0);
-    boxAt(g, w + 0.25, 0.4, d + 0.25, 0, 0.2, 0, plain("#9a958a"));
+    boxAt(g, w + 0.25, 0.4, d + 0.25, 0, 0.2, 0, plain(PALETTE.misc.plinth));
     if (style === "modern") {
       boxAt(g, w + 0.6, 0.35, d + 0.6, 0, wallH + 0.18, 0, plain(PALETTE.roofFlat));
-      boxAt(g, w * 0.4, 0.08, 2.2, -w * 0.2, 2.8, d / 2 + 1.1, plain("#6e5a48"));
-      boxAt(g, 2.6, 2.2, 0.1, w * 0.25, 1.1, d / 2 + 0.06, plain("#8d8f90", { metalness: 0.3, roughness: 0.5 }));
+      boxAt(g, w * 0.4, 0.08, 2.2, -w * 0.2, 2.8, d / 2 + 1.1, plain(PALETTE.misc.deck));
+      boxAt(g, 2.6, 2.2, 0.1, w * 0.25, 1.1, d / 2 + 0.06, plain(PALETTE.misc.garage, { metalness: 0.3, roughness: 0.5 }));
       return;
     }
     const roofMat = plain(pick(PALETTE.roofGable, r), { roughness: 0.92 });
     const rise = Math.min(w, d) * (0.32 + r() * 0.12);
     add(g, gableGeometry(w + 0.8, d + 0.8, rise), roofMat, 0, wallH, 0);
-    boxAt(g, 0.9, 2.2, 0.9, w * 0.26, wallH + rise * 0.6, -d * 0.12, plain("#7a5f50"));
+    boxAt(g, 0.9, 2.2, 0.9, w * 0.26, wallH + rise * 0.6, -d * 0.12, plain(PALETTE.misc.chimney));
     // Porch with a small roof on the street side.
-    const porch = plain("#e9e4d8");
-    boxAt(g, w * 0.45, 0.2, 1.8, 0, 0.3, d / 2 + 0.9, plain("#b3aa99"));
+    const porch = plain(PALETTE.misc.porch);
+    boxAt(g, w * 0.45, 0.2, 1.8, 0, 0.3, d / 2 + 0.9, plain(PALETTE.misc.step));
     boxAt(g, w * 0.5, 0.15, 2.0, 0, 2.7, d / 2 + 1.0, roofMat);
     for (const x of [-w * 0.22, w * 0.22]) boxAt(g, 0.15, 2.4, 0.15, x, 1.5, d / 2 + 1.8, porch);
     boxAt(g, 1.0, 2.1, 0.08, 0, 1.25, d / 2 + 0.04, plain(PALETTE.door));
@@ -513,7 +524,7 @@
     box(1.05, 2.05, 0.05, 0, 4.2, -0.21);
     for (let n = 0; n < 3; n++) {
       const hood = new T.CylinderGeometry(0.21, 0.21, 0.28, 12, 1, true, -Math.PI / 2, Math.PI);
-      hood.rotateX(Math.PI / 2);
+      hood.rotateX(-Math.PI / 2);
       hood.translate(0, 4.75 - n * 0.5, 0.36);
       parts.push(hood);
     }
@@ -582,81 +593,150 @@
   }
 
   // ---- traffic cars -------------------------------------------------------------------------
-  // A Model Y is about 280k triangles, so only the nearest cars get one (level of detail);
-  // farther cars keep the bundle's low-poly body. One InstancedMesh per Model Y part.
-  const NEAR_CARS = 8;
-  const NEAR_M = 90;
+  // A detailed car is about 300k triangles, so only the nearest cars get one (level of detail);
+  // farther cars keep the bundle's low-poly body. Each detailed model is one InstancedMesh per
+  // part for all the cars that show it. Most cars are a Model Y; about one in six is a sports car.
+  const NEAR_M = 140;
+  const MODELS = [
+    { name: "model-y", limit: 12 },
+    { name: "sport", limit: 4 },
+  ];
+
+  function carModel(car) {
+    return hash(`${car.id}:model`) % 6 === 0 ? "sport" : "model-y";
+  }
 
   function carPaint(car) {
     return PALETTE.carPaint[hash(car.id) % PALETTE.carPaint.length];
   }
 
-  async function upgradeTraffic(world) {
-    if (!T.loadModelY || !world.vehicles || !world.sim) return;
-    const cars = (world.sim.traffic || []).filter((car) => car.type !== "motorcycle");
-    if (!cars.length) return;
-    const model = await T.loadModelY();
-    if (world._sceneryBuild !== buildCount) return;
+  // The Ferrari 458 from the three.js examples (models/ferrari/ATTRIBUTION.md), scaled to a
+  // 4.5 m car standing on the ground with its nose toward -z, like the bundle's Model Y.
+  async function loadSportCar() {
+    const draco = new T.DRACOLoader(T.loadingManager).setDecoderPath("/jevpilot/draco/");
+    const gltf = await new T.GLTFLoader(T.loadingManager).setDRACOLoader(draco).loadAsync("/jevpilot/models/ferrari/ferrari.glb");
+    draco.dispose();
+    const model = gltf.scene;
     model.updateMatrixWorld(true);
-    const paint = T.materials && T.materials.get("model-y-paint");
+    let box = new T.Box3().setFromObject(model);
+    const size = box.getSize(new T.Vector3());
+    const root = new T.Group();
+    const turn = new T.Group();
+    // The asset's nose already points to -z when its length runs along z.
+    if (size.x > size.z) turn.rotation.y = Math.PI / 2;
+    turn.add(model);
+    root.add(turn);
+    root.updateMatrixWorld(true);
+    box = new T.Box3().setFromObject(root);
+    const length = Math.max(box.max.z - box.min.z, 0.01);
+    const scale = 4.5 / length;
+    const center = box.getCenter(new T.Vector3());
+    turn.scale.setScalar(scale);
+    turn.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
+    root.updateMatrixWorld(true);
+    const trims = {
+      Body_Color: "paint",
+      Ferrari_Yellow: PALETTE.sportTrim.badge,
+      _0098_DodgerBlue: PALETTE.sportTrim.accent,
+      Leather_red: PALETTE.sportTrim.leather,
+    };
+    root.traverse((mesh) => {
+      if (!mesh.isMesh) return;
+      const role = trims[mesh.material && mesh.material.name];
+      if (role === "paint") mesh.userData.paint = true;
+      else if (role) {
+        mesh.material = mesh.material.clone();
+        mesh.material.color.set(role);
+      }
+    });
+    return root;
+  }
+
+  function instancedParts(world, model, limit, isPaint) {
+    model.updateMatrixWorld(true);
+    const color = new T.Color();
     const parts = [];
     model.traverse((mesh) => {
-      if (mesh.isMesh) parts.push({ mesh, local: mesh.matrixWorld.clone() });
-    });
-    const matrix = new T.Object3D();
-    const color = new T.Color();
-    const batches = parts.map(({ mesh, local }) => {
-      const painted = !!paint && mesh.material === paint;
-      const material = painted ? paint.clone() : mesh.material;
+      if (!mesh.isMesh) return;
+      const painted = isPaint(mesh);
+      const material = painted ? mesh.material.clone() : mesh.material;
       if (painted) material.color.set("#ffffff");
-      const inst = new T.InstancedMesh(mesh.geometry, material, NEAR_CARS);
+      const inst = new T.InstancedMesh(mesh.geometry, material, limit);
       inst.castShadow = true;
       inst.receiveShadow = true;
       inst.frustumCulled = false;
       inst.count = 0;
-      inst.name = "traffic-model-y";
+      inst.visible = false;
+      inst.name = "traffic-model";
       if (painted) {
-        for (let i = 0; i < NEAR_CARS; i++) inst.setColorAt(i, color.set("#ffffff"));
+        for (let i = 0; i < limit; i++) inst.setColorAt(i, color.set("#ffffff"));
       }
       world.scene.add(inst);
-      return { inst, local, painted };
+      parts.push({ inst, local: mesh.matrixWorld.clone(), painted });
     });
+    return parts;
+  }
+
+  async function upgradeTraffic(world, build) {
+    if (!T.loadModelY || !world.vehicles || !world.sim) return;
+    const cars = (world.sim.traffic || []).filter((car) => car.type !== "motorcycle");
+    if (!cars.length) return;
+    const paint = T.materials && T.materials.get("model-y-paint");
+    const kinds = new Map();
+    const matrix = new T.Object3D();
+    const color = new T.Color();
     const detailed = new Set();
+
     const update = () => {
       const player = world.sim.player;
-      const near = cars
+      const struck = world.sim.crash && world.sim.crash.object_id;
+      const byDistance = cars
         .map((car) => ({ car, d: Math.hypot(car.x - player.x, car.z - player.z) }))
-        .filter((row) => row.d < NEAR_M)
-        .sort((a, b) => a.d - b.d)
-        .slice(0, NEAR_CARS)
-        .map((row) => row.car);
-      const now = new Set(near.map((car) => car.id));
+        .filter((row) => row.d < NEAR_M && row.car.id !== struck)
+        .sort((a, b) => a.d - b.d);
+      const shown = new Set();
+      for (const { name, limit } of MODELS) {
+        const kind = kinds.get(name);
+        if (!kind) continue;
+        const near = byDistance.filter((row) => carModel(row.car) === name).slice(0, limit).map((row) => row.car);
+        near.forEach((car, i) => {
+          shown.add(car.id);
+          matrix.position.set(car.x, 0, car.z);
+          matrix.rotation.set(0, -car.heading, 0);
+          matrix.updateMatrix();
+          for (const { inst, local, painted } of kind) {
+            inst.matrix.multiplyMatrices(matrix.matrix, local);
+            inst.setMatrixAt(i, inst.matrix);
+            if (painted) inst.setColorAt(i, color.set(carPaint(car)));
+          }
+        });
+        for (const { inst, painted } of kind) {
+          inst.matrix.identity();
+          inst.count = near.length;
+          inst.visible = near.length > 0;
+          inst.instanceMatrix.needsUpdate = true;
+          if (painted && inst.instanceColor) inst.instanceColor.needsUpdate = true;
+        }
+      }
       for (const car of cars) {
-        const want = now.has(car.id);
+        const want = shown.has(car.id);
         if (want === detailed.has(car.id)) continue;
         const group = world.vehicles.get(car.id);
         if (group) group.children.forEach((child) => (child.visible = !want));
         if (want) detailed.add(car.id);
         else detailed.delete(car.id);
       }
-      near.forEach((car, i) => {
-        matrix.position.set(car.x, 0, car.z);
-        matrix.rotation.set(0, -car.heading, 0);
-        matrix.updateMatrix();
-        for (const { inst, local, painted } of batches) {
-          inst.matrix.multiplyMatrices(matrix.matrix, local);
-          inst.setMatrixAt(i, inst.matrix);
-          if (painted) inst.setColorAt(i, color.set(carPaint(car)));
-        }
-      });
-      for (const { inst, painted } of batches) {
-        inst.matrix.identity();
-        inst.count = near.length;
-        inst.instanceMatrix.needsUpdate = true;
-        if (painted && inst.instanceColor) inst.instanceColor.needsUpdate = true;
-      }
     };
     world._sceneryHooks.push(update);
+
+    const modelY = await T.loadModelY();
+    if (world._sceneryBuild !== build) return;
+    kinds.set("model-y", instancedParts(world, modelY, MODELS[0].limit, (mesh) => !!paint && mesh.material === paint));
+    update();
+    if (!T.GLTFLoader || !T.DRACOLoader || !T.Box3) return;
+    const sport = await loadSportCar();
+    if (world._sceneryBuild !== build) return;
+    kinds.set("sport", instancedParts(world, sport, MODELS[1].limit, (mesh) => !!mesh.userData.paint));
     update();
   }
 
@@ -737,6 +817,8 @@
           out.setMatrixAt(at++, tmp);
         }
         scene.remove(m);
+        if (m.geometry !== list[0].geometry) m.geometry.dispose();
+        if (m.dispose) m.dispose();
       }
       out.instanceMatrix.needsUpdate = true;
       out.computeBoundingSphere();
@@ -752,7 +834,7 @@
     if (scene.fog) {
       scene.fog.color.set(PALETTE.fog);
       scene.fog.near = 260;
-      scene.fog.far = 1400;
+      scene.fog.far = 1150;
     }
     if (world.renderer) world.renderer.toneMappingExposure = 1.0;
     scene.environmentIntensity = 0.75;
@@ -760,11 +842,8 @@
     scene.backgroundBlurriness = 0.0;
     if (world.sun) {
       world.sun.intensity = 3.1;
-      world.sun.color.set("#fff1dc");
+      world.sun.color.set(PALETTE.misc.sun);
     }
-    // The onboard cameras sit at the windscreen: they see the hood, not the dashboard.
-    const leather = T.materials && T.materials.get("model-y-leather");
-    if (leather) leather.name = "Interior";
   }
 
   // ---- hooks --------------------------------------------------------------------------------
@@ -787,7 +866,8 @@
     built(world) {
       if (!T) return;
       buildCount += 1;
-      world._sceneryBuild = buildCount;
+      const build = buildCount;
+      world._sceneryBuild = build;
       world._sceneryHooks = [distanceCull(world)];
       installFrame(world);
       try {
@@ -797,11 +877,11 @@
       }
       Promise.resolve(world.ready)
         .then(() => {
-          if (world._sceneryBuild !== buildCount) return;
+          if (world._sceneryBuild !== build) return;
           atmosphere(world);
           world._sceneryBatching = consolidate(world);
           world.renderer.shadowMap.needsUpdate = true;
-          return upgradeTraffic(world);
+          return upgradeTraffic(world, build);
         })
         .catch((err) => console.warn("semif-scenery: traffic", err));
     },
@@ -813,7 +893,7 @@
         const w = (turned ? o.depth : o.width) * scale;
         const d = (turned ? o.width : o.depth) * scale;
         const [x, y] = project(o);
-        ctx.fillStyle = o.type === "parcel" ? "#dbe8d3" : o.style === "skyscraper" ? "#c9ced6" : "#dcdfe4";
+        ctx.fillStyle = o.type === "parcel" ? PALETTE.minimap.park : o.style === "skyscraper" ? PALETTE.minimap.tower : PALETTE.minimap.building;
         ctx.fillRect(x - w / 2, y - d / 2, w, d);
       }
     },

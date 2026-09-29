@@ -45,6 +45,6 @@ python demo/server.py --port 8000 --arbiter-url http://localhost:8001
 ## 畫面與地圖
 
 - **場景層：** `jevpilot_vision/web/semif-scenery.js` 負責建築立面與量體、近處交通車（Model Y）、號誌燈罩、天光與小地圖輪廓。網址加 `?scenery=0` 可以關掉，回到打包檔原本的方塊外觀。
-- **地圖尺寸：** Skyline City 與 Small town 是 7×7 個路口，約 1 km 見方。
+- **地圖尺寸：** 自由駕駛時，Skyline City 與 Small town 是 7×7 個路口，約 1 km 見方。`lap=1`（benchmark 跑圈）維持原本 5×5 的地圖，跟已發布的分數可比。`?size=3..9` 可以自訂。
 - **打包檔修補：** 修改的地方與理由都列在 [`jevpilot_vision/web/BUNDLE_PATCHES.md`](jevpilot_vision/web/BUNDLE_PATCHES.md)。
 - **配色限制：** 場景的配色不會落進相機的號誌、施工與警示燈色塊範圍，由 `tests/test_scenery.py` 檢查。

@@ -445,7 +445,7 @@ if (spec.cmd === "dom") {
         });
       },
       render(_scene, cam) {
-        shots.push({ op: "render", x: cam.position.x, y: cam.position.y, z: cam.position.z, fov: cam.fov, look: cam.look });
+        shots.push({ op: "render", x: cam.position.x, y: cam.position.y, z: cam.position.z, fov: cam.fov, look: cam.look, egoVisible: window.SEMIF_WORLD.player.visible });
       },
       readRenderTargetPixels(_t, _x, _y, w, h, buf) { buf.fill(8); },
     },
@@ -470,6 +470,7 @@ if (spec.cmd === "dom") {
   process.stdout.write(JSON.stringify({
     url,
     mode: world.mode,
+    egoAfter: world.player.visible,
     first,
     second,
     target,
@@ -891,6 +892,8 @@ def test_pip_shows_the_fixed_onboard_camera_not_the_player_view():
     assert shot["z"] == pytest.approx(-4)
     assert shot["look"]["x"] == pytest.approx(10.15 + 25)
     assert shot["look"]["z"] == pytest.approx(-4)
+    assert shot["egoVisible"] is False, "the cameras sit on the body shell; the ego car is not in view"
+    assert grabbed["egoAfter"] is not False, "the ego car is back for the main view"
     again = grabbed["second"]
     assert again["x"] == pytest.approx(shot["x"])
     assert again["z"] == pytest.approx(shot["z"])

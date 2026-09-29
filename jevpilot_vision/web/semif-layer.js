@@ -21,7 +21,18 @@
         <span id="fsd-pip-fps" class="fsd-pip-fps">-- FPS</span>
       </div>
       <div class="fsd-pip-body">
-        <canvas id="fsd-camera-canvas" width="320" height="180"></canvas>
+        <div class="fsd-pip-frame">
+          <canvas id="fsd-camera-canvas" width="320" height="180"></canvas>
+          <canvas id="fsd-camera-view" width="320" height="180"></canvas>
+          <span id="fsd-camera-label" class="fsd-camera-label">FRONT · 100°</span>
+        </div>
+        <div class="fsd-pip-tabs" role="tablist" aria-label="Onboard camera" title="Press C to cycle the onboard cameras">
+          <button type="button" class="fsd-cam-tab" id="fsd-cam-front" role="tab" aria-selected="true">Front</button>
+          <button type="button" class="fsd-cam-tab" id="fsd-cam-left" role="tab" aria-selected="false">Left</button>
+          <button type="button" class="fsd-cam-tab" id="fsd-cam-right" role="tab" aria-selected="false">Right</button>
+          <button type="button" class="fsd-cam-tab" id="fsd-cam-rear" role="tab" aria-selected="false">Rear</button>
+          <button type="button" class="fsd-cam-tab" id="fsd-cam-all" role="tab" aria-selected="false">All</button>
+        </div>
       </div>
     </div>
     <div id="fsd-status" aria-live="polite">
@@ -30,11 +41,11 @@
       </label>
       <button type="button" id="fsd-seed-apply">Apply</button>
       <button type="button" id="fsd-seed-rand">Random</button>
-      <span id="fsd-intent">SemArbiter</span>
-      <span id="fsd-vision">VISION off</span>
+      <span id="fsd-intent" class="fsd-chip">SemArbiter</span>
+      <span id="fsd-vision" class="fsd-chip" data-state="off">VISION off</span>
       <span id="fsd-latency">e2e —  P50 —  P95 —</span>
       <button type="button" id="fsd-latency-export">Export latency</button>
-      <button type="button" id="fsd-fleet" title="Fleet mode: traffic drives on the same decision core">FLEET off</button>
+      <button type="button" id="fsd-fleet" class="fsd-chip" data-state="off" title="Fleet mode: traffic drives on the same decision core">FLEET off</button>
     </div>
   `;
   document.body.appendChild(chrome);
@@ -45,6 +56,14 @@
   function dockStatus() {
     const panel = document.querySelector(".topbar");
     if (!panel || !statusEl) return;
+    if (window.innerWidth <= 900) {
+      // Narrow screens: the stylesheet's full-width layout applies.
+      if (statusDock) {
+        statusEl.style.left = statusEl.style.top = statusEl.style.width = "";
+        statusDock = "";
+      }
+      return;
+    }
     const box = panel.getBoundingClientRect();
     if (!box.width) return;
     const dock = `${Math.round(box.left)}:${Math.round(box.bottom)}:${Math.round(box.width)}`;
@@ -744,6 +763,99 @@
     ctx.putImageData(image, 0, 0);
   }
 
+  // ---- camera switcher --------------------------------------------------------------------
+  // What the PIP shows. The posted vision frames do not depend on it.
+  const CAMERA_VIEWS = ["front", "left", "right", "rear", "all"];
+  const CAMERA_LABELS = { front: "FRONT", left: "LEFT", right: "RIGHT", rear: "REAR", all: "SURROUND" };
+  const VIEW_PERIOD_MS = 66;
+  const cameraView = document.getElementById("fsd-camera-view");
+  const cameraLabel = document.getElementById("fsd-camera-label");
+  const pipView = { name: "front", nextAt: 0 };
+  window.SEMIF_PIP_VIEW = pipView;
+
+  function setCameraView(name) {
+    pipView.name = CAMERA_VIEWS.indexOf(name) >= 0 ? name : "front";
+    pipView.nextAt = 0;
+    for (const view of CAMERA_VIEWS) {
+      const tab = document.getElementById(`fsd-cam-${view}`);
+      if (tab && tab.setAttribute) tab.setAttribute("aria-selected", view === pipView.name ? "true" : "false");
+    }
+    if (cameraView && cameraView.style) cameraView.style.visibility = pipView.name === "front" ? "hidden" : "visible";
+    if (cameraLabel) {
+      cameraLabel.textContent = `${CAMERA_LABELS[pipView.name]} · 100°`;
+      if (cameraLabel.style) cameraLabel.style.visibility = pipView.name === "all" ? "hidden" : "visible";
+    }
+  }
+
+  for (const view of CAMERA_VIEWS) {
+    const tab = document.getElementById(`fsd-cam-${view}`);
+    if (!tab) continue;
+    tab.addEventListener("click", (ev) => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      setCameraView(view);
+    });
+  }
+  document.addEventListener("keydown", (ev) => {
+    if (ev.repeat || (ev.key !== "c" && ev.key !== "C")) return;
+    const tag = ev.target && ev.target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    setCameraView(CAMERA_VIEWS[(CAMERA_VIEWS.indexOf(pipView.name) + 1) % CAMERA_VIEWS.length]);
+  });
+
+  function paintCameraView(world, now) {
+    if (pipView.name === "front" || !cameraView || now < pipView.nextAt) return;
+    pipView.nextAt = now + VIEW_PERIOD_MS;
+    const ctx = cameraView.getContext("2d");
+    if (!ctx) return;
+    if (pipView.name !== "all") {
+      const side = SURROUND_SIDES.find(([name]) => name === pipView.name);
+      if (side) renderView(world, side[1], cameraView);
+      return;
+    }
+    const cells = [["front", pipCanvas, 0, 0], ["right", null, 1, 0], ["left", null, 0, 1], ["rear", null, 1, 1]];
+    const w = PIP_W / 2;
+    const h = PIP_H / 2;
+    for (const [name, source, col, row] of cells) {
+      let src = source;
+      if (!src) {
+        const side = SURROUND_SIDES.find(([n]) => n === name);
+        src = surroundCanvas(name);
+        if (!side || !renderView(world, side[1], src)) continue;
+      }
+      ctx.drawImage(src, col * w, row * h, w, h);
+      ctx.fillStyle = "rgba(8, 10, 14, 0.6)";
+      ctx.fillRect(col * w + 4, row * h + 4, 40, 13);
+      ctx.fillStyle = "#e8edf3";
+      ctx.font = "600 9px Inter, system-ui, sans-serif";
+      ctx.fillText(CAMERA_LABELS[name], col * w + 8, row * h + 14);
+    }
+    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.fillRect(w - 0.5, 0, 1, PIP_H);
+    ctx.fillRect(0, h - 0.5, PIP_W, 1);
+  }
+
+  // Pills carry their state (on / off / waiting / error) for the stylesheet.
+  function pillState(text) {
+    const t = String(text || "").toLowerCase();
+    if (t.indexOf("error") >= 0) return "error";
+    if (t.indexOf(" off") >= 0 || t === "fleet off") return "off";
+    if (t.indexOf("waiting") >= 0) return "waiting";
+    return "on";
+  }
+
+  function watchPill(el) {
+    if (!el || typeof MutationObserver === "undefined") return;
+    const sync = () => {
+      el.dataset.state = pillState(el.textContent);
+    };
+    new MutationObserver(sync).observe(el, { childList: true, characterData: true, subtree: true });
+    sync();
+  }
+
+  setCameraView("front");
+  watchPill(visionEl);
+  watchPill(fleetBtn);
+
   // Four onboard cameras, about 100° horizontal each. Yaw turns clockwise from forward.
   const ONBOARD_HFOV = 100;
   const ONBOARD_VFOV = 2 * Math.atan(Math.tan((ONBOARD_HFOV * Math.PI) / 360) / (PIP_W / PIP_H)) * (180 / Math.PI);
@@ -767,9 +879,6 @@
   function renderOnboard(world) {
     return renderView(world, 0, pipCanvas);
   }
-
-  // The onboard cameras sit at the windscreen: no glass, no dashboard in view.
-  const ONBOARD_HIDDEN = new Set(["Glass", "Interior"]);
 
   function renderView(world, yaw, canvas) {
     const player = world && world.sim && world.sim.player;
@@ -795,14 +904,11 @@
       target.texture.colorSpace = renderer.outputColorSpace || "srgb";
       target.texture.internalFormat = "RGBA8";
     }
+    // The cameras sit on the body shell, so the ego car itself is never in view.
     const hidden = [];
-    if (world.player && world.player.traverse) {
-      world.player.traverse((obj) => {
-        if (obj.isMesh && obj.material && ONBOARD_HIDDEN.has(obj.material.name) && obj.visible) {
-          hidden.push(obj);
-          obj.visible = false;
-        }
-      });
+    if (world.player && world.player.visible !== false) {
+      hidden.push(world.player);
+      world.player.visible = false;
     }
     const prev = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
     try {
@@ -917,6 +1023,7 @@
     try {
       painted = !!renderOnboard(world);
       if (painted && pipFps) pipFps.textContent = pipFpsText(performance.now());
+      if (painted) paintCameraView(world, performance.now());
     } catch (_err) {
       /* The onboard view must not kill the drive loop */
     }
