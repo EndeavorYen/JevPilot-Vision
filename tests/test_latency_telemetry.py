@@ -161,3 +161,31 @@ def test_vision_benchmark_reads_web_telemetry_json():
     assert "align_web_export" in src
     assert 'ep["latencies"]' in src or "ep['latencies']" in src
     assert 'loop_latencies.get(("flat"' in src or "loop_latencies[(\"flat\"" in src
+
+
+def test_timeline_keeps_fifteen_minutes_by_time_for_the_charts():
+    """The ring buffer above keeps the last 120 samples; the charts read a time window instead."""
+    script = r"""
+const t = require(%s);
+let clock = 0;
+const tel = t.createLatencyTelemetry({ now: () => clock });
+for (let i = 0; i < 1200; i++) { clock = i * 1000; tel.recordClassifier({ classifier_ms: i %% 50, rtt_ms: 100 + (i %% 10) }); }
+const all = tel.getTimeline("e2e_loop_ms", 20 * 60 * 1000);
+const five = tel.getTimeline("e2e_loop_ms", 5 * 60 * 1000);
+process.stdout.write(JSON.stringify({
+  retain: t.TIMELINE_MS,
+  all: all.length, first: all[0].t, last: all[all.length - 1].t,
+  five: five.length, fiveFirst: five[0].t,
+  summary: tel.summarizeWindow("e2e_loop_ms", 5 * 60 * 1000),
+  ring: tel.getHistory().e2e_loop_ms.length,
+  empty: tel.getTimeline("vision_encode_ms", 60000).length,
+}));
+""" % json.dumps(str(TELEMETRY_JS))
+    got = json.loads(subprocess.check_output(["node", "-e", script], cwd=str(REPO)))
+    assert got["retain"] == 15 * 60 * 1000
+    assert got["last"] == 1_199_000 and got["first"] >= 1_199_000 - 15 * 60 * 1000
+    assert got["all"] == 901, "everything in the last fifteen minutes, nothing older"
+    assert got["five"] == 301 and got["fiveFirst"] == 1_199_000 - 300_000
+    assert got["summary"]["n"] == 301 and 100 <= got["summary"]["p50"] <= 109
+    assert got["ring"] == LATENCY_WINDOW, "the exported ring buffer is unchanged"
+    assert got["empty"] == 0

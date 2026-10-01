@@ -43,12 +43,43 @@
       <button type="button" id="fsd-seed-rand">Random</button>
       <span id="fsd-intent" class="fsd-chip">SemArbiter</span>
       <span id="fsd-vision" class="fsd-chip" data-state="off">VISION off</span>
-      <span id="fsd-latency">e2e —  P50 —  P95 —</span>
-      <button type="button" id="fsd-latency-export">Export latency</button>
+      <button type="button" id="fsd-latency" aria-expanded="false" aria-controls="fsd-stats">
+        <canvas class="fsd-spark" aria-hidden="true"></canvas><span class="fsd-latency-text">e2e — · P95 —</span>
+      </button>
       <button type="button" id="fsd-fleet" class="fsd-chip" data-state="off" title="Fleet mode: traffic drives on the same decision core">FLEET off</button>
     </div>
   `;
   document.body.appendChild(chrome);
+
+  // Minimal view (H, or the corner button): every panel folds away except speed, limit, the
+  // autopilot switch and the next turn, so the drive fills the screen. Remembered per browser.
+  const minimalBtn = document.createElement("button");
+  minimalBtn.type = "button";
+  minimalBtn.id = "fsd-minimal";
+  minimalBtn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>`;
+  document.body.appendChild(minimalBtn);
+  let stats = null; // the latency panel, mounted below
+  function setMinimal(on) {
+    document.body.classList.toggle("semif-minimal", on);
+    if (on && stats) stats.toggle(false);
+    minimalBtn.setAttribute("aria-pressed", String(on));
+    minimalBtn.setAttribute("aria-label", on ? "Show the full interface" : "Minimal view");
+    minimalBtn.title = (on ? "Show the full interface" : "Minimal view") + " · H";
+    try {
+      localStorage.setItem("semif-minimal", on ? "1" : "0");
+    } catch (_) {}
+  }
+  let minimalSaved = null;
+  try {
+    minimalSaved = localStorage.getItem("semif-minimal");
+  } catch (_) {}
+  setMinimal(params.has("minimal") ? params.get("minimal") !== "0" : minimalSaved === "1");
+  minimalBtn.addEventListener("click", () => setMinimal(!document.body.classList.contains("semif-minimal")));
+  document.addEventListener("keydown", (ev) => {
+    if (ev.repeat || ev.code !== "KeyH" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (/input|select|textarea/i.test((ev.target && ev.target.tagName) || "")) return;
+    setMinimal(!document.body.classList.contains("semif-minimal"));
+  });
 
   // Dock the status bar under the bundle's map / strategy panel, whatever size that panel has.
   const statusEl = document.getElementById("fsd-status");
@@ -91,13 +122,7 @@
     : null;
   window.SEMIF_TELEMETRY = telemetry;
 
-  function refreshLatencyHud() {
-    if (latencyEl && telemetry && typeof telemetry.hudText === "function") {
-      latencyEl.textContent = telemetry.hudText();
-    }
-  }
-
-  document.getElementById("fsd-latency-export").addEventListener("click", () => {
+  function exportLatency() {
     if (!telemetry || typeof telemetry.exportJSON !== "function") return;
     const blob = new Blob([JSON.stringify(telemetry.exportJSON(), null, 2)], {
       type: "application/json",
@@ -107,7 +132,19 @@
     a.download = "semif-web-latency.json";
     a.click();
     URL.revokeObjectURL(a.href);
-  });
+  }
+
+  // The status strip's latency chip opens the charts (semif-stats.js); L does too.
+  stats = window.SEMIF_STATS && telemetry && typeof telemetry.getTimeline === "function"
+    ? window.SEMIF_STATS.mountStats({ telemetry, chip: latencyEl, parent: chrome, onExport: exportLatency, onOpen: () => setMinimal(false) })
+    : null;
+
+  function refreshLatencyHud() {
+    if (stats) stats.refresh();
+    else if (latencyEl && telemetry && typeof telemetry.hudText === "function") {
+      latencyEl.textContent = telemetry.hudText();
+    }
+  }
 
   function reloadWithSeed(seed) {
     const q = new URLSearchParams(location.search);
@@ -904,11 +941,14 @@
       target.texture.colorSpace = renderer.outputColorSpace || "srgb";
       target.texture.internalFormat = "RGBA8";
     }
-    // The cameras sit on the body shell, so the ego car itself is never in view.
+    // The cameras sit on the body shell, so the ego car itself is never in view; the steering
+    // candidates and the sensor cone are the driver's overlays, not part of the world.
     const hidden = [];
-    if (world.player && world.player.visible !== false) {
-      hidden.push(world.player);
-      world.player.visible = false;
+    for (const obj of [world.player, world.vectors && world.vectors.group, world.sensorCone]) {
+      if (obj && obj.visible !== false) {
+        hidden.push(obj);
+        obj.visible = false;
+      }
     }
     const prev = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
     try {

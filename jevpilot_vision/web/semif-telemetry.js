@@ -6,6 +6,9 @@
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   const LATENCY_WINDOW = 120;
+  // The charts read the last minutes by time, apart from the 120-sample ring buffer above.
+  const TIMELINE_MS = 15 * 60 * 1000;
+  const TIMELINE_CAP = 20000;
   const SERIES_KEYS = ["grab_frame_ms", "vision_encode_ms", "classifier_ms", "e2e_loop_ms"];
 
   function percentileMs(samples, pct) {
@@ -71,13 +74,37 @@
       return typeof performance !== "undefined" ? performance.now() : Date.now();
     };
     const series = {};
-    for (const key of SERIES_KEYS) series[key] = [];
+    const timeline = {};
+    for (const key of SERIES_KEYS) {
+      series[key] = [];
+      timeline[key] = [];
+    }
     function push(name, ms) {
       const value = Number(ms);
       if (!Number.isFinite(value) || value < 0) return;
+      const t = now();
       const buf = series[name];
-      buf.push({ t: now(), ms: value });
+      buf.push({ t, ms: value });
       if (buf.length > windowSize) buf.splice(0, buf.length - windowSize);
+      const line = timeline[name];
+      line.push({ t, ms: value });
+      let drop = 0;
+      while (drop < line.length && t - line[drop].t > TIMELINE_MS) drop++;
+      drop = Math.max(drop, line.length - TIMELINE_CAP);
+      if (drop > 0) line.splice(0, drop);
+    }
+
+    // Samples of one series from the last `windowMs`, oldest first.
+    function getTimeline(name, windowMs) {
+      const line = timeline[name] || [];
+      const since = now() - Math.min(windowMs, TIMELINE_MS);
+      let i = line.length;
+      while (i > 0 && line[i - 1].t >= since) i--;
+      return line.slice(i).map((row) => ({ t: row.t, ms: row.ms }));
+    }
+
+    function summarizeWindow(name, windowMs) {
+      return summarizeLatency(getTimeline(name, windowMs).map((row) => row.ms));
     }
 
     function getHistory() {
@@ -125,6 +152,8 @@
       },
       getMetrics: getMetrics,
       getHistory: getHistory,
+      getTimeline: getTimeline,
+      summarizeWindow: summarizeWindow,
       exportJSON: function () {
         return {
           schema: "semif.web_latency.v1",
@@ -140,6 +169,8 @@
 
   return {
     LATENCY_WINDOW: LATENCY_WINDOW,
+    TIMELINE_MS: TIMELINE_MS,
+    SERIES_KEYS: SERIES_KEYS,
     percentileMs: percentileMs,
     summarizeLatency: summarizeLatency,
     createLatencyTelemetry: createLatencyTelemetry,

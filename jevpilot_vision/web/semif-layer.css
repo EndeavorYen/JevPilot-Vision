@@ -373,20 +373,31 @@ button.fsd-chip:hover {
 }
 
 #fsd-latency {
-  color: var(--fsd-muted);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-}
-
-#fsd-latency-export {
   pointer-events: auto;
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 2px 4px;
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--fsd-line);
   border-radius: 6px;
-  padding: 2px 8px;
+  color: var(--fsd-muted);
   font: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
   cursor: pointer;
+}
+
+#fsd-latency:hover,
+#fsd-latency[aria-expanded="true"] {
+  color: #fff;
+  border-color: rgba(57, 135, 229, 0.6);
+}
+
+#fsd-latency .fsd-spark {
+  width: 64px;
+  height: 16px;
+  display: block;
 }
 
 #fsd-seed-box {
@@ -452,4 +463,315 @@ button.fsd-chip:hover {
   #fsd-pip {
     transition: none;
   }
+}
+
+/* ---- Latency panel (semif-stats.js) ------------------------------------------------------- */
+
+#fsd-stats {
+  --viz-surface: #141922;
+  position: fixed;
+  left: 27px;
+  top: 86px;
+  z-index: 40;
+  width: min(620px, calc(100vw - 54px));
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+  pointer-events: auto;
+  padding: 16px 18px 12px;
+  background: var(--viz-surface);
+  border: 1px solid var(--fsd-line);
+  border-radius: 14px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  color: var(--fsd-ink);
+  font-size: 12px;
+}
+
+#fsd-stats[hidden] {
+  display: none;
+}
+
+.fsd-stats-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.fsd-stats-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-right: auto;
+}
+
+.fsd-stats-title strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.fsd-stats-live {
+  color: var(--fsd-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+
+.fsd-stats-live::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #3987e5;
+  vertical-align: 1px;
+}
+
+.fsd-stats-range {
+  display: inline-flex;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.fsd-stats-range button,
+.fsd-stats-action,
+.fsd-stats-close {
+  background: transparent;
+  color: var(--fsd-muted);
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fsd-stats-range button[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.fsd-stats-action {
+  border: 1px solid var(--fsd-line);
+}
+
+.fsd-stats-range button:hover,
+.fsd-stats-action:hover,
+.fsd-stats-close:hover {
+  color: #fff;
+}
+
+.fsd-stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.fsd-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+}
+
+.fsd-tile span {
+  color: var(--fsd-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.fsd-tile strong {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.fsd-tile small {
+  margin-left: 2px;
+  color: var(--fsd-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.fsd-chart {
+  margin: 0 0 14px;
+}
+
+.fsd-chart figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+}
+
+.fsd-chart figcaption > span {
+  color: var(--fsd-muted);
+  font-size: 11px;
+}
+
+.fsd-chart-legend {
+  display: inline-flex;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.fsd-chart-legend span,
+.fsd-chart-tip div,
+.fsd-stats-table th[scope="row"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fsd-ink);
+}
+
+#fsd-stats i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.fsd-chart-box {
+  position: relative;
+}
+
+.fsd-chart-box canvas {
+  display: block;
+  width: 100%;
+  height: 150px;
+  cursor: crosshair;
+}
+
+.fsd-chart-tip {
+  position: absolute;
+  top: 6px;
+  min-width: 140px;
+  padding: 6px 8px;
+  background: rgba(7, 8, 12, 0.94);
+  border: 1px solid var(--fsd-line);
+  border-radius: 6px;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.fsd-chart-tip span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--fsd-muted);
+  font-size: 10px;
+}
+
+.fsd-chart-tip div {
+  display: flex;
+}
+
+.fsd-chart-tip b {
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.fsd-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.fsd-stats-table th,
+.fsd-stats-table td {
+  padding: 5px 6px;
+  text-align: right;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.fsd-stats-table thead th {
+  border-top: 0;
+  color: var(--fsd-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.fsd-stats-table th:first-child {
+  text-align: left;
+  font-weight: 500;
+}
+
+.fsd-stats-foot {
+  margin-top: 10px;
+  color: var(--fsd-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  #fsd-stats {
+    left: 10px;
+    right: 10px;
+    top: 56px;
+    width: auto;
+    max-height: calc(100vh - 166px);
+  }
+
+  .fsd-stats-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ---- Minimal view (H) --------------------------------------------------------------------- */
+
+#fsd-minimal {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--fsd-bg);
+  border: 1px solid var(--fsd-line);
+  border-radius: 8px;
+  color: var(--fsd-muted);
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+#fsd-minimal:hover,
+#fsd-minimal[aria-pressed="true"] {
+  color: #fff;
+}
+
+#fsd-minimal svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#fsd-minimal[aria-pressed="true"] svg {
+  transform: rotate(180deg) scale(0.85);
+}
+
+body.semif-minimal :is(.topbar, #fsd-status, #fsd-pip, #minimap, .semif-clock, #fsd-boxes, #fsd-stats, #decision-status, .dock-tools, #candidates-toggle, .dock-divider, .nav-divider, #remaining, #map-toggle) {
+  display: none !important;
+}
+
+body.semif-minimal .driver-dock {
+  gap: 14px;
+  padding: 6px 10px 6px 16px;
+}
+
+body.semif-minimal .navigation-card {
+  padding-right: 16px;
 }
