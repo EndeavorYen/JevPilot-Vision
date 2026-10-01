@@ -904,11 +904,14 @@
       target.texture.colorSpace = renderer.outputColorSpace || "srgb";
       target.texture.internalFormat = "RGBA8";
     }
-    // The cameras sit on the body shell, so the ego car itself is never in view.
+    // The cameras sit on the body shell, so the ego car itself is never in view; the steering
+    // candidates and the sensor cone are the driver's overlays, not part of the world.
     const hidden = [];
-    if (world.player && world.player.visible !== false) {
-      hidden.push(world.player);
-      world.player.visible = false;
+    for (const obj of [world.player, world.vectors && world.vectors.group, world.sensorCone]) {
+      if (obj && obj.visible !== false) {
+        hidden.push(obj);
+        obj.visible = false;
+      }
     }
     const prev = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
     try {

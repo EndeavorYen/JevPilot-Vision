@@ -428,6 +428,8 @@ if (spec.cmd === "dom") {
     canvas: worldCanvas,
     scene: {},
     player: { traverse() {} },
+    vectors: { group: { visible: true } },
+    sensorCone: { visible: true },
     sim: { player: { x: 10, z: -4, heading: Math.PI / 2 } },
     camera: makeCam(),
     sun: { shadow: { map: { constructor: RT } } },
@@ -445,7 +447,8 @@ if (spec.cmd === "dom") {
         });
       },
       render(_scene, cam) {
-        shots.push({ op: "render", x: cam.position.x, y: cam.position.y, z: cam.position.z, fov: cam.fov, look: cam.look, egoVisible: window.SEMIF_WORLD.player.visible });
+        shots.push({ op: "render", x: cam.position.x, y: cam.position.y, z: cam.position.z, fov: cam.fov, look: cam.look, egoVisible: window.SEMIF_WORLD.player.visible,
+          vectorsVisible: window.SEMIF_WORLD.vectors?.group.visible, coneVisible: window.SEMIF_WORLD.sensorCone?.visible });
       },
       readRenderTargetPixels(_t, _x, _y, w, h, buf) { buf.fill(8); },
     },
@@ -471,6 +474,7 @@ if (spec.cmd === "dom") {
     url,
     mode: world.mode,
     egoAfter: world.player.visible,
+    overlaysAfter: [world.vectors.group.visible, world.sensorCone.visible],
     first,
     second,
     target,
@@ -894,6 +898,9 @@ def test_pip_shows_the_fixed_onboard_camera_not_the_player_view():
     assert shot["look"]["z"] == pytest.approx(-4)
     assert shot["egoVisible"] is False, "the cameras sit on the body shell; the ego car is not in view"
     assert grabbed["egoAfter"] is not False, "the ego car is back for the main view"
+    assert shot["vectorsVisible"] is False, "steering candidates are a driver's overlay, not something the camera sees"
+    assert shot["coneVisible"] is False
+    assert grabbed["overlaysAfter"] == [True, True], "the overlays are back for the main view"
     again = grabbed["second"]
     assert again["x"] == pytest.approx(shot["x"])
     assert again["z"] == pytest.approx(shot["z"])
