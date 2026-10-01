@@ -121,4 +121,5 @@ export function applyLight(view, sky, hours, dt) {
     u.uTime.value = elapsed;
     if (view.camera?.position) sky.position.copy(view.camera.position);
   }
+  return L;
 }

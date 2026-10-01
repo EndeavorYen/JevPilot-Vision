@@ -6,10 +6,11 @@
 import { PALETTE, T, setKit, resetCaches } from "./kit.js";
 import { buildTerrain } from "./terrain.js";
 import { createHeightField, seaPolygon } from "./heights.js";
-import { buildSea } from "./water.js";
+import { buildSea, updateSea } from "./water.js";
 import { buildRoads } from "./roads.js";
 import { buildBuildings } from "./buildings.js";
 import { buildSky, widenShadows, placeSun, applyLight } from "./sky.js";
+import { sunDirection } from "./daylight.js";
 import { clock, mountClock, showClock, tick } from "./clock.js";
 
 const legacy = window.SEMIF_SCENERY || {};
@@ -47,10 +48,12 @@ function setFar(view, far) {
 }
 
 let sky = null;
+let sea = null;
 
 frameHooks.push((view, dt) => {
   tick(dt);
-  applyLight(view, sky, clock.hours, dt);
+  const light = applyLight(view, sky, clock.hours, dt);
+  updateSea(sea, light, sunDirection(clock.hours), dt);
 });
 
 function buildCoast(view) {
@@ -65,7 +68,9 @@ function buildCoast(view) {
   root.name = "semif-world";
   sky = buildSky();
   const field = createHeightField(world);
-  root.add(sky, buildTerrain(world, field), buildSea(world), buildRoads(world), buildBuildings(world));
+  const ground = buildTerrain(world, field);
+  sea = buildSea(ground.userData.grid);
+  root.add(sky, ground, sea, buildRoads(world), buildBuildings(world));
   view.scene.add(root);
   widenShadows(view.sun);
   mountClock();

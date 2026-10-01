@@ -217,6 +217,22 @@ def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level
     assert got["sea"] == got["level"]
 
 
+def test_the_sea_covers_every_wet_part_of_the_ground_at_sea_level():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world);"
+        "const ground = (await mod('terrain.js')).buildTerrain(world, field); const { xs, zs, heights } = ground.userData.grid;"
+        "const sea = (await mod('water.js')).buildSea(ground.userData.grid); const near = find(sea, 'semif-sea-near');"
+        "const p = near.geometry.attributes.position.array, d = near.geometry.attributes.aDepth.array;"
+        "const ys = new Set(); for (let i = 1; i < p.length; i += 3) ys.add(p[i]);"
+        "const at = new Set(); for (let i = 0; i < p.length; i += 3) at.add(p[i] + ':' + p[i + 2]);"
+        "let missing = 0; for (let j = 0; j < zs.length; j++) for (let i = 0; i < xs.length; i++) if (heights[j * xs.length + i] < H.SEA_LEVEL - 0.5 && !at.has(xs[i] + ':' + zs[j])) missing++;"
+        "out({ ys: [...ys], minDepth: Math.min(...d), maxDepth: Math.max(...d), missing, far: !!find(sea, 'semif-sea-far'), level: H.SEA_LEVEL });"
+    )
+    assert got["ys"] == [got["level"]]
+    assert got["minDepth"] >= 0 and got["maxDepth"] > 20
+    assert got["missing"] == 0 and got["far"] is True
+
+
 def _palette() -> dict:
     return _render("out((await mod('kit.js')).PALETTE);")
 

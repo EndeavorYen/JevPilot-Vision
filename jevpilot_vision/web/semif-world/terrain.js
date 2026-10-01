@@ -125,6 +125,7 @@ export function buildTerrain(world, field) {
   geo.computeVertexNormals();
   const mesh = new T.Mesh(geo, splatMaterial());
   mesh.name = "semif-terrain";
+  mesh.userData.grid = { xs, zs, heights }; // the sea is laid over the same grid
   mesh.receiveShadow = true;
   mesh.castShadow = true;
   return mesh;

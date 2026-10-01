@@ -13,7 +13,7 @@ export const PALETTE = {
   grass: ["#9aa36b", "#a7a874", "#8f9a63"],
   sand: "#d8cba6",
   seabed: "#7fa79d",
-  sea: "#3f8f93",
+  sea: { deep: "#1d5a76", shallow: "#3a9ea2", foam: "#e9eee9" },
   stucco: ["#efe6d6", "#e9d8bf", "#f2e2cf", "#dfe3d6", "#e8d2c4"],
   roof: ["#b2857c", "#a6847a", "#9c8a7c"],
   minimap: { sea: "#cfe3ea", building: "#dcdfe4" },
