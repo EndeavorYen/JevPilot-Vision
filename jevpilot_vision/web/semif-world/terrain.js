@@ -26,11 +26,13 @@ function axis(lo, hi) {
 }
 
 // Texture layers: Poly Haven CC0 maps (textures/LICENSE.md), tinted to Mediterranean tones and
-// lifted so shaded ground stays clear of the camera's dark "pedestrian" mask.
+// lifted so shaded ground stays clear of the camera's dark "pedestrian" mask. The grass and rock
+// maps have little blue; desaturated and tinted towards olive-grey and limestone, sunlit ground
+// cannot turn into the camera's orange "construction" colour.
 const LAYERS = [
-  { file: "grass-color.jpg", scale: 9, tint: [0.9, 1.02, 0.96] },
-  { file: "dry-color.jpg", scale: 4.5, tint: [1.22, 1.2, 1.1] },
-  { file: "rock-color.jpg", scale: 9, tint: [1.85, 1.85, 1.95] },
+  { file: "grass-color.jpg", scale: 9, tint: [0.92, 1.0, 1.28], saturation: 0.65 },
+  { file: "dry-color.jpg", scale: 4.5, tint: [1.1, 1.12, 1.18], saturation: 0.8 },
+  { file: "rock-color.jpg", scale: 9, tint: [1.7, 1.74, 1.9], saturation: 0.45 },
   { file: "sand-color.jpg", scale: 7, tint: [1.42, 1.4, 1.36] },
 ];
 
@@ -60,19 +62,20 @@ function splatMaterial() {
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nattribute vec4 aSplat;\nvarying vec4 vSplat;\nvarying vec3 vWorld;\nvarying vec3 vWorldNormal;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSplat = aSplat;\nvWorld = (modelMatrix * vec4(position, 1.0)).xyz;\nvWorldNormal = normalize(mat3(modelMatrix) * normal);");
-    const sample = LAYERS.map((l, i) => `vec3 c${i} = texture2D(tLayer${i}, vWorld.xz / ${l.scale.toFixed(1)}).rgb * vec3(${l.tint.map((v) => v.toFixed(3)).join(", ")});`).join("\n");
+    const tone = (l, read) => `tone(${read}, ${(l.saturation ?? 1).toFixed(2)}, vec3(${l.tint.map((v) => v.toFixed(3)).join(", ")}))`;
+    const sample = LAYERS.map((l, i) => `vec3 c${i} = ${tone(l, `texture2D(tLayer${i}, vWorld.xz / ${l.scale.toFixed(1)}).rgb`)};`).join("\n");
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        `#include <common>\n${LAYERS.map((_, i) => `uniform sampler2D tLayer${i};`).join("\n")}\nvarying vec4 vSplat;\nvarying vec3 vWorld;\nvarying vec3 vWorldNormal;`,
+        `#include <common>\n${LAYERS.map((_, i) => `uniform sampler2D tLayer${i};`).join("\n")}\nvarying vec4 vSplat;\nvarying vec3 vWorld;\nvarying vec3 vWorldNormal;\nvec3 tone(vec3 c, float saturation, vec3 tint) { return mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, saturation) * tint; }`,
       )
       .replace(
         "#include <map_fragment>",
         `${sample}
         // Rock on steep faces is projected from the side, so cliffs do not smear.
         vec3 n = abs(normalize(vWorldNormal));
-        vec3 rockSide = texture2D(tLayer2, vWorld.xy / 9.0).rgb * n.z + texture2D(tLayer2, vWorld.zy / 9.0).rgb * n.x;
-        c2 = mix(c2, rockSide * vec3(1.85, 1.85, 1.95) / max(n.x + n.z, 0.001), smoothstep(0.35, 0.75, 1.0 - n.y));
+        vec3 rockSide = (texture2D(tLayer2, vWorld.xy / 9.0).rgb * n.z + texture2D(tLayer2, vWorld.zy / 9.0).rgb * n.x) / max(n.x + n.z, 0.001);
+        c2 = mix(c2, ${tone(LAYERS[2], "rockSide")}, smoothstep(0.35, 0.75, 1.0 - n.y));
         vec3 ground = c0 * vSplat.x + c1 * vSplat.y + c2 * vSplat.z + c3 * vSplat.w;
         // Broad patches break up the tiling.
         float patches = texture2D(tLayer1, vWorld.xz / 173.0).g;
