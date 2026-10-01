@@ -165,3 +165,44 @@ def test_renderer_colours_are_all_in_the_palette():
             source = source[source.index("// The bundle's three.js classes"):]
         literals = set(re.findall(r'"#[0-9a-fA-F]{6}"', source))
         assert literals <= {'"#ffffff"'}, (path.name, literals)
+
+
+def _page_setting(search: str) -> dict:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    script = re.search(r"<script>\s*(\(function \(\) \{.*?\}\)\(\);)\s*</script>", html, re.S).group(1)
+    harness = (
+        "const window = {}; const location = { search: %s };"
+        "const HTMLCanvasElement = function () {}; HTMLCanvasElement.prototype.getContext = function () {};"
+        "%s process.stdout.write(JSON.stringify({ world: window.SEMIF_DEFAULT_WORLD ?? null, map: window.SEMIF_MAP }));"
+    ) % (json.dumps(search), script)
+    proc = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
+
+
+def test_free_driving_opens_on_the_coast_and_a_benchmark_lap_keeps_the_city():
+    assert _page_setting("?seed=42")["world"] == "coast:festival"
+    assert _page_setting("?seed=42&start=pass")["world"] == "coast:pass"
+    assert _page_setting("?start=moon")["world"] == "coast:festival"
+    lap = _page_setting("?seed=42&lap=1")
+    assert lap["world"] is None
+    assert lap["map"] == {"size": 5, "cityTraffic": 28, "townTraffic": 14}
+
+
+def test_page_start_points_match_the_generator():
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    listed = json.loads(re.search(r"var starts = (\[.*?\]);", html).group(1))
+    got = subprocess.run(
+        ["node", "-e", "require(process.argv[1]); process.stdout.write(JSON.stringify(Object.keys(globalThis.SEMIF_WORLDGEN.STARTS)))", str(WEB / "semif-worldgen.js")],
+        capture_output=True, text=True, check=True,
+    )
+    assert listed == json.loads(got.stdout)
+
+
+def test_page_loads_the_generator_and_renderer_before_the_bundle():
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    gen = html.index('<script src="/jevpilot/semif-worldgen.js')
+    render = html.index('<script type="module" src="/jevpilot/semif-world/index.js')
+    bundle = html.index('<script type="module" crossorigin src="/jevpilot/assets/index-')
+    assert gen < bundle and render < bundle
+    tag = re.search(r'<script src="/jevpilot/semif-worldgen\.js[^"]*"([^>]*)>', html).group(1)
+    assert "defer" not in tag and "async" not in tag and "module" not in tag
