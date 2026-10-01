@@ -100,15 +100,15 @@ export function buildTerrain(world, field) {
     for (let i = 0; i < nx; i++) {
       const k = j * nx + i;
       positions.set([xs[i], heights[k], zs[j]], k * 3);
-      // Near the map the weights come from the field itself; far away a cheaper slope estimate.
-      const far = xs[i] < world.bounds.minX - CORE || xs[i] > world.bounds.maxX + CORE || zs[j] < world.bounds.minZ - CORE || zs[j] > world.bounds.maxZ + CORE;
-      if (!far) {
-        splat.set(field.surface(xs[i], zs[j]), k * 4);
-        continue;
-      }
+      // Slope from the neighbouring vertices; near the map the field weighs the surface itself.
       const i0 = Math.max(0, i - 1), i1 = Math.min(nx - 1, i + 1), j0 = Math.max(0, j - 1), j1 = Math.min(nz - 1, j + 1);
       const gx = (heights[j * nx + i1] - heights[j * nx + i0]) / (xs[i1] - xs[i0]);
       const gz = (heights[j1 * nx + i] - heights[j0 * nx + i]) / (zs[j1] - zs[j0]);
+      const far = xs[i] < world.bounds.minX - CORE || xs[i] > world.bounds.maxX + CORE || zs[j] < world.bounds.minZ - CORE || zs[j] > world.bounds.maxZ + CORE;
+      if (!far) {
+        splat.set(field.weights(xs[i], zs[j], heights[k], Math.hypot(gx, gz)), k * 4);
+        continue;
+      }
       const rock = Math.min(1, Math.max(0, (Math.hypot(gx, gz) - 0.5) / 0.4));
       const sand = heights[k] < -9 ? 1 - rock : 0;
       splat.set([(1 - rock - sand) * 0.45, (1 - rock - sand) * 0.55, rock, sand], k * 4);

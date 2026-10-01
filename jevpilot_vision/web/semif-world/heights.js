@@ -5,7 +5,10 @@
 export const SEA_LEVEL = -10;
 
 const SHOULDER = 3.5; // flat ground beside the asphalt, as the simulation is flat
-const RAMP = 45; // the ground reaches its full relief this far beyond the shoulder
+// The ground reaches its full relief this far beyond the shoulder: the SS-1 and the pass open out
+// in wide valleys, so they are neither trenches nor shadowed canyons.
+const RAMP = { expressway: 110, pass: 90 };
+const DEFAULT_RAMP = 45;
 const CLIFF = 12; // along most of the coast the land drops to the water over this distance
 const BEACH = 45; // ... and over this one in the festival's bay, a sloping beach
 const COAST_FLAT = 110; // relief fades out towards the sea over this distance, so the coast road
@@ -99,7 +102,7 @@ function relief(x, z) {
   const north = smooth(-480, -980, z);
   const mountains = 70 + 190 * ridged(x / 520 - 2.3, z / 520 + 4.2);
   const pass = smooth(760, 980, x) * smooth(420, 200, z) * (1 - north);
-  const rugged = 40 + 90 * ridged(x / 240 + 1.1, z / 240 - 0.6);
+  const rugged = 25 + 60 * ridged(x / 240 + 1.1, z / 240 - 0.6);
   let h = hills;
   h = h + (rugged - h) * pass;
   h = h + (mountains - h) * north;
@@ -110,16 +113,35 @@ export function createHeightField(world) {
   const shoreline = world.visual.shoreline;
   const sea = seaPolygon(shoreline, world.bounds);
 
-  // Road samples every ~3 m, indexed by 64 m cells, for the distance to the nearest road edge.
+  // Road samples every ~3 m, indexed by 64 m cells: for the distance to the nearest road edge and
+  // how far that road's ground ramps up. Wide ramps reach two cells out.
   const cells = new Map();
   for (const road of world.connectorRoads) {
     const half = road.width / 2;
+    const ramp = RAMP[road.kind] ?? DEFAULT_RAMP;
     for (let i = 0; i < road.points.length; i += 2) {
       const p = road.points[i];
       const key = `${Math.floor(p.x / CELL)}:${Math.floor(p.z / CELL)}`;
       if (!cells.has(key)) cells.set(key, []);
-      cells.get(key).push(p.x, p.z, half);
+      cells.get(key).push(p.x, p.z, half, ramp);
     }
+  }
+  // How much of the relief stands at (x, z): 0 on a road and its shoulder, 1 beyond its ramp.
+  function openness(x, z) {
+    const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
+    let best = 1, nearest = Infinity;
+    for (let i = cx - 2; i <= cx + 2; i++) {
+      for (let j = cz - 2; j <= cz + 2; j++) {
+        const list = cells.get(`${i}:${j}`);
+        if (!list) continue;
+        for (let k = 0; k < list.length; k += 4) {
+          const edge = Math.hypot(x - list[k], z - list[k + 1]) - list[k + 2];
+          nearest = Math.min(nearest, edge);
+          best = Math.min(best, smooth(SHOULDER + 1.5, SHOULDER + list[k + 3], edge));
+        }
+      }
+    }
+    return nearest < SHOULDER + 1.5 ? 0 : best;
   }
   function roadEdge(x, z) {
     const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
@@ -128,10 +150,7 @@ export function createHeightField(world) {
       for (let j = cz - 1; j <= cz + 1; j++) {
         const list = cells.get(`${i}:${j}`);
         if (!list) continue;
-        for (let k = 0; k < list.length; k += 3) {
-          const d = Math.hypot(x - list[k], z - list[k + 1]) - list[k + 2];
-          if (d < best) best = d;
-        }
+        for (let k = 0; k < list.length; k += 4) best = Math.min(best, Math.hypot(x - list[k], z - list[k + 1]) - list[k + 2]);
       }
     }
     return best;
@@ -141,19 +160,16 @@ export function createHeightField(world) {
     const p = { x, z };
     const toShore = distanceToLine(shoreline, p);
     if (inside(sea, p)) return Math.max(-45, SEA_LEVEL - 0.6 - toShore * 0.3);
-    const edge = roadEdge(x, z);
     // Road samples are 3 m apart, so the nearest one can be up to 1.5 m off the true distance.
-    if (edge < SHOULDER + 1.5) return 0;
-    const land = relief(x, z) * smooth(SHOULDER + 1.5, SHOULDER + RAMP, edge) * smooth(15, COAST_FLAT, toShore);
+    const open = openness(x, z);
+    if (open === 0) return 0;
+    const land = relief(x, z) * open * smooth(15, COAST_FLAT, toShore);
     const shore = x > -280 && x < 260 && z > 380 ? BEACH : CLIFF;
     return SEA_LEVEL + (land - SEA_LEVEL) * smooth(0, shore, toShore);
   }
 
-  // Blend of [grass, dry grass, rock, sand] at a point, from slope, height and shore.
-  function surface(x, z) {
-    const h = heightAt(x, z);
-    const gx = (heightAt(x + 2, z) - heightAt(x - 2, z)) / 4, gz = (heightAt(x, z + 2) - heightAt(x, z - 2)) / 4;
-    const slope = Math.hypot(gx, gz);
+  // Blend of [grass, dry grass, rock, sand] at a point whose height and slope are known.
+  function weights(x, z, h, slope) {
     const toShore = distanceToLine(shoreline, { x, z });
     const sand = h < SEA_LEVEL + 0.5 ? 1 : (1 - smooth(6, 16, toShore)) * (1 - smooth(0.7, 1.1, slope));
     const rock = smooth(0.55, 0.95, slope) * (1 - sand);
@@ -162,5 +178,11 @@ export function createHeightField(world) {
     return [rest * (1 - dryness), rest * dryness, rock, sand];
   }
 
-  return { heightAt, surface, roadEdge };
+  // The same, measuring the slope itself.
+  function surface(x, z) {
+    const gx = (heightAt(x + 2, z) - heightAt(x - 2, z)) / 4, gz = (heightAt(x, z + 2) - heightAt(x, z - 2)) / 4;
+    return weights(x, z, heightAt(x, z), Math.hypot(gx, gz));
+  }
+
+  return { heightAt, surface, weights, roadEdge };
 }
