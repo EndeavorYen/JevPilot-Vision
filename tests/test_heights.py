@@ -82,9 +82,10 @@ def test_heights_are_finite_and_do_not_depend_on_the_seed():
 
 
 def test_surface_weights_follow_slope_height_and_shore():
+    """Sand on the festival's beach, rock on the cliff face east of the pass, grass inland."""
     got = _heights(
         "const w = (x, z) => field.surface(x, z);"
-        "out({ beach: w(30, 556), cliff: w(1150, 120), meadow: w(-500, -200), sum: [w(30, 556), w(1150, 120), w(-500, -200)].map((s) => s.reduce((a, b) => a + b, 0)) });"
+        "out({ beach: w(30, 556), cliff: w(1167, 120), meadow: w(-500, -200), sum: [w(30, 556), w(1167, 120), w(-500, -200)].map((s) => s.reduce((a, b) => a + b, 0)) });"
     )
     grass, dry, rock, sand = range(4)
     assert got["beach"][sand] > 0.5

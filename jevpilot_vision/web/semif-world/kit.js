@@ -6,9 +6,13 @@
 
 export const PALETTE = {
   asphalt: "#4d5257",
+  asphaltTint: "#d2d5d9", // multiplies the asphalt texture, as the bundle's own roads do
+  kerb: "#c9c3b5",
+  guardrail: "#b9bec2",
+  post: "#8d9296",
   marking: "#e9e6da",
   pavement: "#cfc6b2",
-  shoulder: "#a89c84",
+  shoulder: "#9a9283",
   median: "#a7a59d",
   grass: ["#9aa36b", "#a7a874", "#8f9a63"],
   sand: "#d8cba6",
@@ -98,6 +102,15 @@ export class Batch {
     for (const [a, b, c, d] of faces) this.positions.push(...a, ...b, ...c, ...a, ...c, ...d);
   }
 
+  // A vertical strip `offset` metres right of a polyline, from y0 to y1 (drawn double-sided).
+  wall(points, offset, y0, y1, from = 0, to = points.length - 1) {
+    for (let i = from; i < to; i++) {
+      const a = along(points[i], headingAt(points, i) + Math.PI / 2, offset);
+      const b = along(points[i + 1], headingAt(points, i + 1) + Math.PI / 2, offset);
+      this.positions.push(a.x, y0, a.z, b.x, y0, b.z, b.x, y1, b.z, a.x, y0, a.z, b.x, y1, b.z, a.x, y1, a.z);
+    }
+  }
+
   get empty() {
     return this.positions.length === 0;
   }
@@ -106,6 +119,11 @@ export class Batch {
     const geo = new T.BufferGeometry();
     geo.setAttribute("position", new T.Float32BufferAttribute(this.positions, 3));
     if (this.colors) geo.setAttribute("color", new T.Float32BufferAttribute(this.colors, 3));
+    if (this.uvScale) {
+      const uv = [];
+      for (let i = 0; i < this.positions.length; i += 3) uv.push(this.positions[i] / this.uvScale, this.positions[i + 2] / this.uvScale);
+      geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
+    }
     geo.computeVertexNormals();
     const mesh = new T.Mesh(geo, mat);
     mesh.castShadow = cast;

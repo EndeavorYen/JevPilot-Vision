@@ -166,7 +166,7 @@ def test_the_main_view_renders_through_post_processing_onto_the_screen():
 
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
     got = _render(
-        "const roads = (await mod('roads.js')).buildRoads(world); const terrain = (await mod('terrain.js')).buildTerrain(world, (await mod('heights.js')).createHeightField(world));"
+        "const roads = (await mod('roads.js')).buildRoads(world, (await mod('heights.js')).createHeightField(world)); const terrain = (await mod('terrain.js')).buildTerrain(world, (await mod('heights.js')).createHeightField(world));"
         "const area = (m) => { const p = m.geometry.attributes.position.array; let a = 0, down = 0;"
         "  for (let i = 0; i < p.length; i += 9) { const ux = p[i + 3] - p[i], uz = p[i + 5] - p[i + 2], vx = p[i + 6] - p[i], vz = p[i + 8] - p[i + 2];"
         "    const y = uz * vx - ux * vz; a += Math.abs(y) / 2; if (y < -1e-9) down++; } return { a, down }; };"
@@ -178,15 +178,37 @@ def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
         "out({ parts, expect, terrain: { down: tdown, triangles: ti.length / 3 } });"
     )
     asphalt = got["parts"][0]
-    assert asphalt["color"] == "#4d5257"
+    assert asphalt["color"] == "#d2d5d9", "the asphalt texture is tinted as the bundle tints its own"
     assert asphalt["a"] == pytest.approx(got["expect"], rel=0.05)
     assert all(p["down"] == 0 for p in got["parts"])
     assert got["terrain"]["down"] == 0
 
 
+def test_guardrails_line_the_drops_and_kerbs_line_the_town_streets():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world);"
+        "const roads = (await mod('roads.js')).buildRoads(world, field);"
+        "const rail = find(roads, 'semif-guardrails'), kerb = find(roads, 'semif-kerbs'), asphalt = find(roads, 'semif-asphalt');"
+        "const pts = (m) => { const p = m.geometry.attributes.position.array, o = []; for (let i = 0; i < p.length; i += 3) o.push([p[i], p[i + 1], p[i + 2]]); return o; };"
+        "const rails = pts(rail), kerbs = pts(kerb);"
+        "const inBox = (q, b) => q[0] > b[0] && q[0] < b[1] && q[2] > b[2] && q[2] < b[3];"
+        "const harbour = [-1090, -810, 110, 290];"
+        "out({ rails: rails.length, railsInTown: rails.filter((q) => inBox(q, harbour)).length,"
+        "  railOverDrop: rails.filter((q, i) => i % 50 === 0).every((q) => { let lo = Infinity;"
+        "    for (let a = 0; a < 16; a++) for (const d of [5, 15, 30, 45]) lo = Math.min(lo, field.heightAt(q[0] + Math.sin(a * Math.PI / 8) * d, q[2] - Math.cos(a * Math.PI / 8) * d));"
+        "    return lo < -0.5; }),"
+        "  kerbs: kerbs.length, kerbHeights: [Math.min(...kerbs.map((q) => q[1])), Math.max(...kerbs.map((q) => q[1]))],"
+        "  uv: !!asphalt.geometry.attributes.uv, map: !!asphalt.material.map });"
+    )
+    assert got["rails"] > 1000 and got["railsInTown"] == 0
+    assert got["railOverDrop"], "a guardrail stands where the ground falls away within 40 m"
+    assert got["kerbs"] > 1000 and got["kerbHeights"][0] < 0.05 and got["kerbHeights"][1] >= 0.13
+    assert got["uv"] and got["map"]
+
+
 def test_signal_junctions_get_crosswalks_and_every_approach_a_stop_bar():
     got = _render(
-        "const roads = (await mod('roads.js')).buildRoads(world);"
+        "const roads = (await mod('roads.js')).buildRoads(world, (await mod('heights.js')).createHeightField(world));"
         "const marking = meshes(roads).find((m) => m.material.color === '#e9e6da').geometry.attributes.position.array;"
         # each rectangle is two triangles (18 numbers); count rectangles by their centre's distance
         "const near = (n, r0, r1) => { let k = 0; for (let i = 0; i < marking.length; i += 18) { let x = 0, z = 0;"

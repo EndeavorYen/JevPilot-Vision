@@ -6,7 +6,10 @@ export const SEA_LEVEL = -10;
 
 const SHOULDER = 3.5; // flat ground beside the asphalt, as the simulation is flat
 const RAMP = 45; // the ground reaches its full relief this far beyond the shoulder
-const SHORE = 22; // land falls to the water over this distance from the shoreline
+const CLIFF = 12; // along most of the coast the land drops to the water over this distance
+const BEACH = 45; // ... and over this one in the festival's bay, a sloping beach
+const COAST_FLAT = 110; // relief fades out towards the sea over this distance, so the coast road
+// looks out over a drop instead of a ridge
 const CELL = 64; // road index cell
 
 const smooth = (a, b, x) => {
@@ -141,8 +144,9 @@ export function createHeightField(world) {
     const edge = roadEdge(x, z);
     // Road samples are 3 m apart, so the nearest one can be up to 1.5 m off the true distance.
     if (edge < SHOULDER + 1.5) return 0;
-    const land = relief(x, z) * smooth(SHOULDER + 1.5, SHOULDER + RAMP, edge);
-    return SEA_LEVEL + (land - SEA_LEVEL) * smooth(0, SHORE, toShore);
+    const land = relief(x, z) * smooth(SHOULDER + 1.5, SHOULDER + RAMP, edge) * smooth(15, COAST_FLAT, toShore);
+    const shore = x > -280 && x < 260 && z > 380 ? BEACH : CLIFF;
+    return SEA_LEVEL + (land - SEA_LEVEL) * smooth(0, shore, toShore);
   }
 
   // Blend of [grass, dry grass, rock, sand] at a point, from slope, height and shore.
