@@ -113,8 +113,16 @@ function el(tag) {
     add(...names) { names.forEach((n) => classes.add(n)); node.className = [...classes].join(" "); },
     remove(...names) { names.forEach((n) => classes.delete(n)); node.className = [...classes].join(" "); },
     contains(n) { return classes.has(n); },
-    toggle(n) { classes.has(n) ? classes.delete(n) : classes.add(n); node.className = [...classes].join(" "); return classes.has(n); },
+    toggle(n, force) {
+      const on = force === undefined ? !classes.has(n) : !!force;
+      on ? classes.add(n) : classes.delete(n);
+      node.className = [...classes].join(" ");
+      return on;
+    },
   };
+  const attrs = {};
+  node.setAttribute = (name, value) => { attrs[name] = String(value); };
+  node.getAttribute = (name) => (name in attrs ? attrs[name] : null);
   node.appendChild = (child) => {
     node.children.push(child);
     child.parentElement = node;
