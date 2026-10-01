@@ -8,6 +8,8 @@ import { buildTerrain, seaPolygon } from "./terrain.js";
 import { buildSea } from "./water.js";
 import { buildRoads } from "./roads.js";
 import { buildBuildings } from "./buildings.js";
+import { buildSky, widenShadows, placeSun, applyLight } from "./sky.js";
+import { clock, mountClock, showClock, tick } from "./clock.js";
 
 const legacy = window.SEMIF_SCENERY || {};
 const onCoast = () => window.SEMIF_SIM?.world?.type === "coast";
@@ -43,11 +45,12 @@ function setFar(view, far) {
   view.camera.updateProjectionMatrix();
 }
 
-// The sun keeps the bundle's offset from the player for now; the day cycle replaces it.
-function placeSun(view, player) {
-  view.sun.position.set(player.x - 55, 85, player.z + 50);
-  view.sun.target.position.set(player.x, 0, player.z);
-}
+let sky = null;
+
+frameHooks.push((view, dt) => {
+  tick(dt);
+  applyLight(view, sky, clock.hours, dt);
+});
 
 function buildCoast(view) {
   resetCaches();
@@ -59,8 +62,13 @@ function buildCoast(view) {
   const world = view.sim.world;
   const root = new T.Group();
   root.name = "semif-world";
-  root.add(buildTerrain(world), buildSea(world), buildRoads(world), buildBuildings(world));
+  sky = buildSky();
+  root.add(sky, buildTerrain(world), buildSea(world), buildRoads(world), buildBuildings(world));
   view.scene.add(root);
+  widenShadows(view.sun);
+  mountClock();
+  showClock(true);
+  applyLight(view, sky, clock.hours, 0);
   return root;
 }
 
@@ -91,6 +99,7 @@ window.SEMIF_SCENERY = {
   built(view) {
     if (!onCoast()) {
       setFar(view, BUNDLE_FAR);
+      showClock(false);
       return legacy.built?.(view);
     }
     try {
@@ -101,7 +110,7 @@ window.SEMIF_SCENERY = {
   },
   sun(view, player) {
     if (!onCoast()) return false;
-    placeSun(view, player);
+    placeSun(view.sun, player, clock.hours);
     return true;
   },
   present(view) {

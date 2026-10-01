@@ -2,8 +2,10 @@
 //
 // Plain functions of the hour (tests/test_daylight.py runs them in node). The onboard camera reads
 // signals, construction, warning lights and people by colour, and its masks were tuned in
-// daylight, so `tint` (what the light does to a surface's colour, after exposure) stays within
-// a few percent of noon's brightness and never turns a palette colour into a mask colour.
+// daylight. Its frames go to a render target, which three.js neither tone-maps nor exposes, so the
+// light itself is scaled up for a low sun: `tint` (what the light does to a surface's colour,
+// relative to noon) keeps noon's brightness and never turns a palette colour into a mask colour.
+// The darker, warmer mood of dawn and dusk is a grade on the main view only (post.js).
 
 export const DAY = {
   start: 6.25, // 06:15, the sun just up in the east
@@ -100,19 +102,20 @@ const luma = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 const NOON = rawLight(13);
 const NOON_EXPOSURE = 0.95;
 
+// How much a low sun's light is scaled up to keep noon's brightness.
+const boost = (hours) => Math.min(1.8, luma(NOON) / luma(rawLight(hours)));
+
 export function lightAt(hours) {
   const el = elevation(hours);
-  const raw = rawLight(hours);
-  // Exposure brings dawn and dusk back to noon's brightness, as an eye (or a game camera) would.
-  const exposure = NOON_EXPOSURE * Math.min(1.8, luma(NOON) / luma(raw));
-  const out = { elevation: el, exposure };
+  const out = { elevation: el, exposure: NOON_EXPOSURE };
   for (const [key, values] of Object.entries(LIGHT)) out[key] = keyed(values, el);
+  out.sunIntensity *= boost(hours);
+  out.hemiIntensity *= boost(hours);
   return out;
 }
 
-// What the light does to a surface colour relative to noon, per channel, after exposure.
+// What the light does to a surface colour relative to noon, per channel.
 export function tint(hours) {
-  const raw = rawLight(hours);
-  const k = lightAt(hours).exposure / NOON_EXPOSURE;
-  return raw.map((v, i) => (v / NOON[i]) * k);
+  const k = boost(hours);
+  return rawLight(hours).map((v, i) => (v / NOON[i]) * k);
 }

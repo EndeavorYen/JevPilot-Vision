@@ -25,12 +25,18 @@ import { pathToFileURL } from "url";
 const require = createRequire(import.meta.url);
 const [worldgen, renderDir] = process.argv.slice(1, 3);
 require(worldgen);
-class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; } add(...c) { this.children.push(...c); } }
+class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { copy(v) { this.v = v; } }; } add(...c) { this.children.push(...c); } }
 class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } computeVertexNormals() {} }
 class Mesh extends Obj { constructor(g, m) { super(); this.geometry = g; this.material = m; } }
-class Color { constructor(hex) { const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; } }
+class Color { constructor(hex) { this.set(hex || "#000000"); } set(hex) { this.hex = hex; const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; return this; } copy(c) { return this.set(c.hex); } }
+class Vec3 { constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); } set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; } copy(v) { return this.set(v.x, v.y, v.z); } }
+class ShaderMaterial { constructor(o) { Object.assign(this, o); } }
+class SphereGeometry extends Geo { constructor(r) { super(); this.radius = r; } }
 const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: function (a, n) { this.array = a; this.itemSize = n; },
-  MeshStandardMaterial: function (o) { Object.assign(this, o); }, Color };
+  MeshStandardMaterial: function (o) { Object.assign(this, o); }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry };
+globalThis.location = { search: process.argv[3] || "" };
+globalThis.document = { createElement: () => ({ style: {}, set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
+  head: { appendChild() {} }, body: { appendChild(el) { globalThis.__clock = el; } }, addEventListener() {} };
 const calls = [];
 globalThis.window = { SEMIF_SCENERY: {
   palette: { legacy: true },
@@ -42,18 +48,19 @@ const mod = (name) => import(pathToFileURL(`${renderDir}/${name}`));
 await mod("index.js");
 const api = window.SEMIF_SCENERY;
 api.kit(kit);
-const find = (o, name) => o.name === name ? o : o.children.map((c) => find(c, name)).find(Boolean);
+const find = (o, name) => o.name === name ? o : (o.children || []).map((c) => find(c, name)).find(Boolean);
 const meshes = (o) => [...(o.geometry ? [o] : []), ...o.children.flatMap(meshes)];
 const out = (v) => process.stdout.write(JSON.stringify(v));
 """
 
 
-def _render(body: str):
+def _render(body: str, search: str = ""):
     proc = subprocess.run(
-        ["node", "--input-type=module", "-e", _PRELUDE + body, str(WEB / "semif-worldgen.js"), str(RENDER)],
+        ["node", "--input-type=module", "-e", _PRELUDE + body, str(WEB / "semif-worldgen.js"), str(RENDER), search],
         cwd=str(REPO),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if proc.returncode != 0:
@@ -71,7 +78,7 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
         "out({ coast, legacy, calls, palette: api.palette });"
     )
     assert got["coast"]["root"] == "semif-world"
-    assert got["coast"]["parts"] == ["semif-terrain", "semif-sea", "semif-roads", "semif-buildings"]
+    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings"]
     assert got["coast"]["building"] is True and got["coast"]["lamp"] is False
     assert got["coast"]["calls"] == ["kit"], "the old layer only sees the kit on the coast"
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
@@ -95,6 +102,47 @@ def test_sun_and_present_hooks_take_over_only_on_the_coast():
     assert got["coast"]["far"] >= 2600, "the coast is 2.5 km across"
     assert got["coast"]["frame"] == "base", "the per-frame wrapper still runs the bundle's render"
     assert not got["city"]["sun"] and not got["city"]["present"] and got["city"]["rendered"] == 1
+
+
+_VIEW = (
+    "const hemi = { isHemisphereLight: true, color: new Color(), groundColor: new Color(), intensity: 0 };"
+    "const scene = new Obj(); scene.add(hemi); scene.fog = { color: new Color(), near: 0, far: 0 }; scene.background = 'hdr';"
+    "const sun = { position: new Vec3(), target: { position: new Vec3() }, color: new Color(), intensity: 0,"
+    "  shadow: { camera: { updateProjectionMatrix() { this.updated = true; } } } };"
+    "const view = { sim: { world }, scene, sun, camera: { far: 1200, position: new Vec3(5, 2, 7), updateProjectionMatrix() {} },"
+    "  renderer: { toneMappingExposure: 0, render() {} }, render() {} };"
+    "api.built(view); api.sun(view, { x: 100, z: -50 }); view.render(0.016, true);"
+    "const D = await mod('daylight.js');"
+)
+
+
+def test_a_fixed_time_lights_the_coast_from_the_day_model():
+    got = _render(
+        _VIEW + "const L = D.lightAt(19); const dir = D.sunDirection(19);"
+        "out({ exposure: view.renderer.toneMappingExposure, want: L.exposure, sunI: sun.intensity, wantI: L.sunIntensity,"
+        "  sunColor: sun.color.hex, wantColor: L.sun, hemi: [hemi.color.hex, hemi.groundColor.hex, hemi.intensity], wantHemi: [L.hemiSky, L.hemiGround, L.hemiIntensity],"
+        "  fog: scene.fog.color.hex, background: scene.background, sky: !!find(scene, 'semif-sky'),"
+        "  sunPos: [sun.position.x - 100, sun.position.y, sun.position.z + 50], dir, target: [sun.target.position.x, sun.target.position.z],"
+        "  shadow: sun.shadow.camera, clock: globalThis.__clock && globalThis.__clock.textContent });",
+        "?time=19:00",
+    )
+    assert got["exposure"] == pytest.approx(got["want"]) and got["sunI"] == pytest.approx(got["wantI"])
+    assert got["sunColor"] == got["wantColor"] and got["hemi"] == got["wantHemi"]
+    assert got["background"] is None and got["sky"] is True
+    for p, d in zip(got["sunPos"], (got["dir"]["x"], got["dir"]["y"], got["dir"]["z"])):
+        assert p == pytest.approx(d * 300, abs=0.01), "the sun sits 300 m from the player along its direction"
+    assert got["target"] == [100, -50]
+    assert got["shadow"]["right"] >= 120 and got["shadow"]["far"] >= 600 and got["shadow"]["updated"]
+    assert "19:00" in got["clock"]
+
+
+def test_the_clock_runs_unless_the_time_is_fixed():
+    running = _render(_VIEW + "const a = globalThis.__clock.textContent; for (let i = 0; i < 60; i++) view.render(1, true); out([a, globalThis.__clock.textContent]);")
+    fixed = _render(_VIEW + "const a = globalThis.__clock.textContent; for (let i = 0; i < 60; i++) view.render(1, true); out([a, globalThis.__clock.textContent]);", "?time=09:30")
+    paused = _render(_VIEW + "const a = globalThis.__clock.textContent; for (let i = 0; i < 60; i++) view.render(1, true); out([a, globalThis.__clock.textContent]);", "?daycycle=0")
+    assert "16:30" in running[0] and running[0] != running[1], "free driving opens at 16:30 and the clock moves"
+    assert fixed[0] == fixed[1] and "09:30" in fixed[0]
+    assert paused[0] == paused[1] and "16:30" in paused[0]
 
 
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
