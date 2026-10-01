@@ -25,7 +25,7 @@ import { pathToFileURL } from "url";
 const require = createRequire(import.meta.url);
 const [worldgen, renderDir] = process.argv.slice(1, 3);
 require(worldgen);
-class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { copy(v) { this.v = v; } }; } add(...c) { this.children.push(...c); } }
+class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { x: 0, y: 0, z: 0, copy(v) { this.v = v; }, set(x, y, z) { Object.assign(this, { x, y, z }); return this; } }; } add(...c) { this.children.push(...c); } }
 class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } setIndex(i) { this.index = i; } computeVertexNormals() {}
   translate() { return this; } scale() { return this; } rotateY() { return this; } rotateZ() { return this; } rotateX() { return this; } }
 class Mesh extends Obj { constructor(g, m) { super(); this.geometry = g; this.material = m; } }
@@ -40,9 +40,11 @@ const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: fun
   OrthographicCamera: class {}, PlaneGeometry: Geo, CylinderGeometry: Geo, BoxGeometry: Geo, ConeGeometry: Geo, mergeGeometries: () => new Geo(),
   InstancedMesh: class extends Mesh { constructor(g, m, n) { super(g, m); this.count = n; this.matrices = []; } setMatrixAt(i, m) { this.matrices[i] = m; } setColorAt() {} computeBoundingSphere() {} },
   Matrix4: class { compose() { return this; } }, Quaternion: class { setFromAxisAngle() { return this; } },
+  CanvasTexture: class { constructor(c) { this.image = c; } },
   Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } } };
 globalThis.location = { search: process.argv[3] || "" };
-globalThis.document = { createElement: () => ({ style: {}, set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
+const ctx2d = () => new Proxy({}, { get(t, k) { if (k in t) return t[k]; return () => ({ addColorStop() {} }); }, set(t, k, v) { t[k] = v; return true; } });
+globalThis.document = { createElement: () => ({ style: {}, width: 0, height: 0, getContext: () => ctx2d(), set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
   head: { appendChild() {} }, body: { appendChild(el) { globalThis.__clock = el; } }, addEventListener() {} };
 const calls = [];
 globalThis.window = { SEMIF_SCENERY: {
@@ -237,18 +239,39 @@ def test_signal_junctions_get_crosswalks_and_every_approach_a_stop_bar():
         assert n["bars"] >= n["legs"], n
 
 
-def test_buildings_stand_exactly_on_their_collision_boxes():
+def test_town_houses_stand_exactly_on_their_collision_boxes():
     got = _render(
-        "const g = (await mod('buildings.js')).buildBuildings(world);"
-        "const p = meshes(g).flatMap((m) => Array.from(m.geometry.attributes.position.array));"
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const g = (await mod('buildings.js')).buildBuildings(world, field, grid);"
+        "const town = find(g, 'semif-town'); const p = meshes(town).flatMap((m) => Array.from(m.geometry.attributes.position.array));"
         "const boxes = world.objects.filter((o) => o.type === 'building');"
         "const outside = [];"
         "for (let i = 0; i < p.length; i += 3) {"
-        "  const hit = boxes.some((b) => Math.abs(p[i] - b.x) <= b.width / 2 + 0.31 && Math.abs(p[i + 2] - b.z) <= b.depth / 2 + 0.31 && p[i + 1] <= b.height + 0.51);"
+        "  const hit = boxes.some((b) => Math.abs(p[i] - b.x) <= b.width / 2 + 1.9 && Math.abs(p[i + 2] - b.z) <= b.depth / 2 + 1.9 && p[i + 1] <= b.height + 3.6 && p[i + 1] >= -0.01);"
         "  if (!hit) outside.push([p[i], p[i + 1], p[i + 2]]); }"
-        "out({ n: boxes.length, outside: outside.slice(0, 3) });"
+        "const has = (x, y, z) => { for (let i = 0; i < p.length; i += 3) if (Math.abs(p[i] - x) < 1e-3 && Math.abs(p[i + 1] - y) < 1e-3 && Math.abs(p[i + 2] - z) < 1e-3) return true; return false; };"
+        "const cornersOk = boxes.every((b) => [[-1, -1], [1, -1], [1, 1], [-1, 1]].every(([sx, sz]) => has(b.x + sx * b.width / 2, 0, b.z + sz * b.depth / 2) && has(b.x + sx * b.width / 2, b.height, b.z + sz * b.depth / 2)));"
+        "out({ n: boxes.length, outside: outside.slice(0, 3), cornersOk });"
     )
     assert got["n"] > 50 and got["outside"] == []
+    assert got["cornersOk"], "the walls are exactly the simulation's collision boxes"
+
+
+def test_villas_stand_on_the_hills_away_from_the_roads_and_the_harbour_has_its_quay_and_lighthouse():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const B = await mod('buildings.js'); const villas = B.placeVillas(world, field, grid);"
+        "const g = B.buildBuildings(world, field, grid);"
+        "const light = find(g, 'semif-lighthouse');"
+        "const sea = H.seaPolygon(world.visual.shoreline, world.bounds);"
+        "out({ n: villas.length, near: villas.filter((v) => field.roadEdge(v.x, v.z) < 25).length, wet: villas.filter((v) => field.heightAt(v.x, v.z) < H.SEA_LEVEL + 2).length,"
+        "  sunk: villas.every((v) => v.base <= Math.min(...[[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => grid.heightAt(v.x + a * v.width / 2, v.z + b * v.depth / 2))) + 1e-6),"
+        "  lighthouse: light ? H.inside(sea, light.userData.at) : false, quay: !!find(g, 'semif-quay'), villasDrawn: !!find(g, 'semif-villas') });"
+    )
+    assert got["n"] >= 15 and got["near"] == 0 and got["wet"] == 0
+    assert got["sunk"], "a villa's plinth reaches down to its lowest corner"
+    assert got["lighthouse"] is True, "the lighthouse stands out on the breakwater"
+    assert got["quay"] and got["villasDrawn"]
 
 
 def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level():

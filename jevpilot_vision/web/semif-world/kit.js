@@ -16,10 +16,21 @@ export const PALETTE = {
   median: "#a7a59d",
   // Muted olive and grey greens: a saturated leaf green above the horizon is a "green light".
   foliage: { cypress: "#46573b", pine: "#506343", olive: "#7d8864", palm: "#67803f", shrub: "#5e6c46", vine: "#6c7b46" },
-  bark: { dark: "#5c4c3e", light: "#706253", palm: "#8a7b66" },
+  bark: { dark: "#5c4c3e", light: "#706253", palm: "#857d72" },
   sea: { deep: "#1d5a76", shallow: "#3a9ea2", foam: "#e9eee9" },
   stucco: ["#efe6d6", "#e9d8bf", "#f2e2cf", "#dfe3d6", "#e8d2c4"],
   roof: ["#b2857c", "#a6847a", "#9c8a7c"],
+  // Facades (canvas bays) and harbour: no colour dark enough, in shade, to read as a pedestrian.
+  shutter: ["#5f7d6e", "#5e7389", "#7a6a5a"],
+  trim: "#ece6d8",
+  glass: "#4a5864",
+  stone: "#b8ad98",
+  railing: "#5a6066",
+  door: "#6e5847",
+  shopFrame: "#555c61",
+  awning: ["#3f6f73", "#7a5c66", "#4a5d7a", "#8a7f6a"],
+  villa: "#f1ece2",
+  lighthouse: { white: "#eeeae2", band: "#4c5258" },
   minimap: { sea: "#cfe3ea", building: "#dcdfe4" },
 };
 

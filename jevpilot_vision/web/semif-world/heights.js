@@ -14,6 +14,7 @@ const RAMP = { expressway: 110, pass: 90 };
 const DEFAULT_RAMP = 45;
 const CLIFF = 12; // along most of the coast the land drops to the water over this distance
 const BEACH = 45; // ... and over this one in the festival's bay, a sloping beach
+const QUAY = 1; // ... while the harbour's ground runs level to its quay wall (buildings.js)
 const COAST_FLAT = 110; // relief fades out towards the sea over this distance, so the coast road
 // looks out over a drop instead of a ridge
 const CELL = 64; // road index cell
@@ -166,7 +167,7 @@ export function createHeightField(world) {
     const { open, nearest } = openness(x, z);
     if (nearest < FLAT) return 0;
     const land = relief(x, z) * open * smooth(15, COAST_FLAT, toShore);
-    const shore = x > -280 && x < 260 && z > 380 ? BEACH : CLIFF;
+    const shore = x > -280 && x < 260 && z > 380 ? BEACH : x < -740 && z > 300 && z < 400 ? QUAY : CLIFF;
     const s = smooth(0, shore, toShore);
     // The drop to the sea fades in beyond the level band too, so the ground has no step at its edge.
     return land * s + smooth(FLAT, FLAT + 10, nearest) * SEA_LEVEL * (1 - s);

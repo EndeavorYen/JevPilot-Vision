@@ -78,7 +78,7 @@ function buildCoast(view) {
   const ground = buildTerrain(world, field, grid);
   sea = buildSea(grid);
   const plants = buildVegetation(placeVegetation(world, field, grid));
-  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world), plants);
+  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world, field, grid), plants);
   view.scene.add(root);
   widenShadows(view.sun);
   mountClock();
