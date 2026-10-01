@@ -266,5 +266,6 @@ def test_the_picker_lists_start_points_on_the_coast_and_the_old_maps_elsewhere()
     for start in STARTS:
         assert f'value="coast:{start}"' in out["coast"]
     assert 'value="city"' not in out["coast"]
+    assert "Horizon" not in out["coast"] and "Solmare Festival" in out["coast"], "no Forza trademark in the UI"
     assert out["city"].count("<option") == 3 and 'value="city"' in out["city"]
     assert out["labels"] == ["Start from", "Change map"]

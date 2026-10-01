@@ -25,10 +25,11 @@ import { pathToFileURL } from "url";
 const require = createRequire(import.meta.url);
 const [worldgen, renderDir] = process.argv.slice(1, 3);
 require(worldgen);
-class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { copy(v) { this.v = v; } }; } add(...c) { this.children.push(...c); } }
-class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } setIndex(i) { this.index = i; } computeVertexNormals() {} }
+class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.rotation = { x: 0, y: 0, z: 0 }; this.position = { x: 0, y: 0, z: 0, copy(v) { this.v = v; }, set(x, y, z) { Object.assign(this, { x, y, z }); return this; } }; } add(...c) { this.children.push(...c); } }
+class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } setIndex(i) { this.index = i; } computeVertexNormals() {}
+  translate() { return this; } scale() { return this; } rotateY() { return this; } rotateZ() { return this; } rotateX() { return this; } }
 class Mesh extends Obj { constructor(g, m) { super(); this.geometry = g; this.material = m; } }
-class Color { constructor(hex) { this.set(hex || "#000000"); } set(hex) { this.hex = hex; const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; return this; } copy(c) { return this.set(c.hex); } }
+class Color { constructor(hex) { this.set(hex || "#000000"); } setRGB(r, g, b) { this.r = r; this.g = g; this.b = b; return this; } set(hex) { this.hex = hex; const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; return this; } copy(c) { return this.set(c.hex); } }
 class Vec3 { constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); } set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; } copy(v) { return this.set(v.x, v.y, v.z); } }
 class ShaderMaterial { constructor(o) { Object.assign(this, o); } }
 class SphereGeometry extends Geo { constructor(r) { super(); this.radius = r; } }
@@ -36,10 +37,14 @@ const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: fun
   MeshStandardMaterial: function (o) { Object.assign(this, o); this.userData = {}; }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry,
   TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb",
   WebGLRenderTarget: class { constructor(w, h, o) { this.width = w; this.height = h; this.options = o; this.texture = {}; } dispose() {} },
-  OrthographicCamera: class {}, PlaneGeometry: Geo,
+  OrthographicCamera: class {}, PlaneGeometry: Geo, CylinderGeometry: Geo, BoxGeometry: Geo, ConeGeometry: Geo, mergeGeometries: () => new Geo(),
+  InstancedMesh: class extends Mesh { constructor(g, m, n) { super(g, m); this.count = n; this.matrices = []; } setMatrixAt(i, m) { this.matrices[i] = m; } setColorAt() {} computeBoundingSphere() {} },
+  Matrix4: class { compose() { return this; } }, Quaternion: class { setFromAxisAngle() { return this; } },
+  CanvasTexture: class { constructor(c) { this.image = c; } },
   Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } } };
 globalThis.location = { search: process.argv[3] || "" };
-globalThis.document = { createElement: () => ({ style: {}, set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
+const ctx2d = () => new Proxy({}, { get(t, k) { if (k in t) return t[k]; return () => ({ addColorStop() {} }); }, set(t, k, v) { t[k] = v; return true; } });
+globalThis.document = { createElement: () => ({ style: {}, width: 0, height: 0, getContext: () => ctx2d(), set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
   head: { appendChild() {} }, body: { appendChild(el) { globalThis.__clock = el; } }, addEventListener() {} };
 const calls = [];
 globalThis.window = { SEMIF_SCENERY: {
@@ -82,7 +87,7 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
         "out({ coast, legacy, calls, palette: api.palette });"
     )
     assert got["coast"]["root"] == "semif-world"
-    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings"]
+    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation", "semif-festival", "semif-props"]
     assert got["coast"]["building"] is True and got["coast"]["lamp"] is False
     assert got["coast"]["calls"] == ["kit"], "the old layer only sees the kit on the coast"
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
@@ -234,18 +239,107 @@ def test_signal_junctions_get_crosswalks_and_every_approach_a_stop_bar():
         assert n["bars"] >= n["legs"], n
 
 
-def test_buildings_stand_exactly_on_their_collision_boxes():
+def test_town_houses_stand_exactly_on_their_collision_boxes():
     got = _render(
-        "const g = (await mod('buildings.js')).buildBuildings(world);"
-        "const p = meshes(g).flatMap((m) => Array.from(m.geometry.attributes.position.array));"
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const g = (await mod('buildings.js')).buildBuildings(world, field, grid);"
+        "const town = find(g, 'semif-town'); const p = meshes(town).flatMap((m) => Array.from(m.geometry.attributes.position.array));"
         "const boxes = world.objects.filter((o) => o.type === 'building');"
         "const outside = [];"
         "for (let i = 0; i < p.length; i += 3) {"
-        "  const hit = boxes.some((b) => Math.abs(p[i] - b.x) <= b.width / 2 + 0.31 && Math.abs(p[i + 2] - b.z) <= b.depth / 2 + 0.31 && p[i + 1] <= b.height + 0.51);"
+        "  const hit = boxes.some((b) => Math.abs(p[i] - b.x) <= b.width / 2 + 1.9 && Math.abs(p[i + 2] - b.z) <= b.depth / 2 + 1.9 && p[i + 1] <= b.height + 3.6 && p[i + 1] >= -0.01);"
         "  if (!hit) outside.push([p[i], p[i + 1], p[i + 2]]); }"
-        "out({ n: boxes.length, outside: outside.slice(0, 3) });"
+        "const has = (x, y, z) => { for (let i = 0; i < p.length; i += 3) if (Math.abs(p[i] - x) < 1e-3 && Math.abs(p[i + 1] - y) < 1e-3 && Math.abs(p[i + 2] - z) < 1e-3) return true; return false; };"
+        "const cornersOk = boxes.every((b) => [[-1, -1], [1, -1], [1, 1], [-1, 1]].every(([sx, sz]) => has(b.x + sx * b.width / 2, 0, b.z + sz * b.depth / 2) && has(b.x + sx * b.width / 2, b.height, b.z + sz * b.depth / 2)));"
+        "out({ n: boxes.length, outside: outside.slice(0, 3), cornersOk });"
     )
     assert got["n"] > 50 and got["outside"] == []
+    assert got["cornersOk"], "the walls are exactly the simulation's collision boxes"
+
+
+def test_villas_stand_on_the_hills_away_from_the_roads_and_the_harbour_has_its_quay_and_lighthouse():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const B = await mod('buildings.js'); const villas = B.placeVillas(world, field, grid);"
+        "const g = B.buildBuildings(world, field, grid);"
+        "const light = find(g, 'semif-lighthouse');"
+        "const sea = H.seaPolygon(world.visual.shoreline, world.bounds);"
+        "out({ n: villas.length, near: villas.filter((v) => field.roadEdge(v.x, v.z) < 25).length, wet: villas.filter((v) => field.heightAt(v.x, v.z) < H.SEA_LEVEL + 2).length,"
+        "  sunk: villas.every((v) => v.base <= Math.min(...[[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => grid.heightAt(v.x + a * v.width / 2, v.z + b * v.depth / 2))) + 1e-6),"
+        "  lighthouse: light ? H.inside(sea, light.userData.at) : false, quay: !!find(g, 'semif-quay'), villasDrawn: !!find(g, 'semif-villas') });"
+    )
+    assert got["n"] >= 15 and got["near"] == 0 and got["wet"] == 0
+    assert got["sunk"], "a villa's plinth reaches down to its lowest corner"
+    assert got["lighthouse"] is True, "the lighthouse stands out on the breakwater"
+    assert got["quay"] and got["villasDrawn"]
+
+
+def test_the_harbour_promenade_runs_level_up_to_the_quay_wall():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const dips = [];"
+        "for (let x = -1240; x <= -780; x += 20) for (const z of [330, 336, 340, 342, 343, 344, 344.5, 344.9]) {"
+        "  const h = grid.heightAt(x, z); if (Math.abs(h) > 0.1) dips.push([x, z, +h.toFixed(2)]); }"
+        "out({ dips: dips.slice(0, 5), n: dips.length, wall: grid.heightAt(-1000, 346) });"
+    )
+    assert got["n"] == 0, got["dips"]
+    assert got["wall"] < -8, "past the wall is the harbour basin"
+
+
+def test_festival_structures_reach_the_ground_at_every_corner_and_keep_their_height():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const F = await mod('festival.js'); const spots = F.placeFestival(grid);"
+        "const bad = [];"
+        "for (const s of spots) {"
+        "  const g = [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, 0]].map(([a, b]) => grid.heightAt(s.x + a * s.w / 2, s.z + b * s.d / 2));"
+        "  if (s.base > Math.min(...g) + 1e-6) bad.push([s.kind, 'floats', +(s.base - Math.min(...g)).toFixed(2)]);"
+        "  if (s.top < Math.max(...g) + s.height - 1e-6) bad.push([s.kind, 'sunk', +(Math.max(...g) + s.height - s.top).toFixed(2)]); }"
+        "out({ kinds: [...new Set(spots.map((s) => s.kind))].sort(), bad: bad.slice(0, 6) });"
+    )
+    assert got["kinds"] == ["flag", "podium", "stage", "tent"]
+    assert got["bad"] == []
+
+
+def test_the_festival_stands_in_its_grounds_clear_of_the_roads_and_its_wheel_turns():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const F = await mod('festival.js'); const fest = F.buildFestival(world, field, grid);"
+        "const parts = {}; for (const c of fest.children) parts[c.name] = c;"
+        "const pts = (o) => { const out = []; const walk = (n, ox, oz) => { const x = ox + (n.position?.x || 0), z = oz + (n.position?.z || 0);"
+        "  if (n.geometry?.attributes?.position) { const p = n.geometry.attributes.position.array; for (let i = 0; i < p.length; i += 3) out.push([x + p[i], z + p[i + 2]]); }"
+        "  else if (n.position && !n.children.length) out.push([x, z]); (n.children || []).forEach((c) => walk(c, x, z)); }; walk(o, 0, 0); return out; };"
+        "const clear = {}; for (const [name, part] of Object.entries(parts)) { if (name === 'semif-festival-arch') continue;"
+        "  clear[name] = Math.min(...pts(part).filter((_, i) => i % 7 === 0).map(([x, z]) => field.roadEdge(x, z))); }"
+        "const wheel = parts['semif-festival-wheel']; const before = wheel.userData.rim.rotation.z; F.updateFestival(10); const after = wheel.userData.rim.rotation.z;"
+        "out({ names: Object.keys(parts).sort(), clear, turned: after - before, arch: !!parts['semif-festival-arch'] });"
+    )
+    assert got["names"] == sorted([
+        "semif-festival-arch", "semif-festival-stage", "semif-festival-tents", "semif-festival-flags",
+        "semif-festival-wheel", "semif-festival-podiums",
+    ])
+    for name, edge in got["clear"].items():
+        assert edge >= 6, (name, edge)
+    assert got["turned"] > 0.01, "the wheel turns as time passes"
+
+
+def test_lamps_line_the_town_streets_and_boats_float_and_bob_in_the_harbour():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const P = await mod('props.js'); const spots = P.placeProps(world, field, grid);"
+        "const buildings = world.objects.filter((o) => o.type === 'building');"
+        "const inB = (x, z) => buildings.some((b) => Math.abs(x - b.x) < b.width / 2 + 0.5 && Math.abs(z - b.z) < b.depth / 2 + 0.5);"
+        "const sea = H.seaPolygon(world.visual.shoreline, world.bounds);"
+        "const g = P.buildProps(spots); const boat = g.userData.boats[0]; const y0 = boat.position.y; P.updateProps(1.3); const y1 = boat.position.y;"
+        "out({ lamps: spots.lamps.length, lampOnRoad: spots.lamps.filter((l) => field.roadEdge(l.x, l.z) < 2).length, lampInBuilding: spots.lamps.filter((l) => inB(l.x, l.z)).length,"
+        "  cafes: spots.cafes.length, cafeOnRoad: spots.cafes.filter((c) => field.roadEdge(c.x, c.z) < 3).length,"
+        "  boats: spots.boats.length, dry: spots.boats.filter((b) => !H.inside(sea, b) || field.heightAt(b.x, b.z) > H.SEA_LEVEL - 2).length,"
+        "  bob: Math.abs(y1 - y0) });"
+    )
+    assert got["lamps"] > 60 and got["lampOnRoad"] == 0 and got["lampInBuilding"] == 0
+    assert got["cafes"] > 8 and got["cafeOnRoad"] == 0
+    assert got["boats"] >= 10 and got["dry"] == 0
+    assert got["bob"] > 0.01
 
 
 def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level():

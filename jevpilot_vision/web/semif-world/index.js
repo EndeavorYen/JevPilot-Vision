@@ -4,7 +4,10 @@
 // (semif-scenery.js): on the coast map it draws the world itself, on every other map it hands each
 // hook to the old layer unchanged.
 import { PALETTE, T, setKit, resetCaches } from "./kit.js";
-import { buildTerrain } from "./terrain.js";
+import { buildTerrain, groundGrid } from "./terrain.js";
+import { placeVegetation, buildVegetation, updateVegetation } from "./vegetation.js";
+import { buildFestival, updateFestival } from "./festival.js";
+import { placeProps, buildProps, updateProps } from "./props.js";
 import { createHeightField, seaPolygon } from "./heights.js";
 import { buildSea, updateSea } from "./water.js";
 import { buildRoads } from "./roads.js";
@@ -58,6 +61,9 @@ frameHooks.push((view, dt) => {
   tick(dt);
   const light = applyLight(view, sky, clock.hours, dt);
   updateSea(sea, light, sunDirection(clock.hours), dt);
+  updateVegetation(dt);
+  updateFestival(dt);
+  updateProps(dt);
 });
 
 function buildCoast(view) {
@@ -72,9 +78,11 @@ function buildCoast(view) {
   root.name = "semif-world";
   sky = buildSky();
   const field = createHeightField(world);
-  const ground = buildTerrain(world, field);
-  sea = buildSea(ground.userData.grid);
-  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world));
+  const grid = groundGrid(world, field);
+  const ground = buildTerrain(world, field, grid);
+  sea = buildSea(grid);
+  const plants = buildVegetation(placeVegetation(world, field, grid));
+  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world, field, grid), plants, buildFestival(world, field, grid), buildProps(placeProps(world, field, grid)));
   view.scene.add(root);
   widenShadows(view.sun);
   mountClock();

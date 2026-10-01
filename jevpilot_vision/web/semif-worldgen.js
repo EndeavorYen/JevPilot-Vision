@@ -98,7 +98,7 @@
     highway: ["ss1-e400", "ss1-junction"],
   };
   const DESTINATIONS = ["festival-gate", "harbour-quay", "coast-bay", "pass-belvedere", "ss1-e400"];
-  const START_LABELS = { festival: "Horizon festival", harbour: "Porto Solmare", coast: "Lungomare", pass: "Passo del Falco", highway: "SS-1 Costiera" };
+  const START_LABELS = { festival: "Solmare Festival", harbour: "Porto Solmare", coast: "Lungomare", pass: "Passo del Falco", highway: "SS-1 Costiera" };
 
   // The sea lies south and east of this line.
   const SHORELINE = [[-1300, 345], [-760, 345], [-600, 380], [-430, 500], [-240, 560], [220, 560], [450, 650], [660, 650], [800, 600], [960, 470], [980, 330], [1170, 250], [1180, -200], [1300, -300]];
