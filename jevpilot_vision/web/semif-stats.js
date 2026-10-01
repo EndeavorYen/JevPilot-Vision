@@ -66,6 +66,40 @@
     return ticks;
   }
 
+  // Summary of one window: sorted once, percentiles interpolated as semif-telemetry.js does.
+  function summarize(values) {
+    const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+    const n = v.length;
+    if (!n) return { n: 0, min: null, max: null, p50: null, p95: null };
+    const pct = (p) => {
+      const rank = (p / 100) * (n - 1), lo = Math.floor(rank), hi = Math.ceil(rank);
+      return v[lo] + (v[hi] - v[lo]) * (rank - lo);
+    };
+    return { n, min: v[0], max: v[n - 1], p50: pct(50), p95: pct(95) };
+  }
+
+  // Every series of the window, each read from the telemetry once.
+  function windowStats(telemetry, range) {
+    const lines = {}, sums = {};
+    for (const s of SERIES) {
+      lines[s.key] = telemetry.getTimeline(s.key, range);
+      sums[s.key] = summarize(lines[s.key].map((row) => row.ms));
+    }
+    return { lines, sums };
+  }
+
+  // The long window changes slowly and costs the most to draw.
+  function redrawEvery(range) {
+    return range >= 15 * 60 * 1000 ? 2000 : range >= 5 * 60 * 1000 ? 1000 : 500;
+  }
+
+  // Samples per minute over the part of the window that has samples, not the whole window.
+  function perMinute(n, firstT, t1, range) {
+    if (!n || firstT == null) return null;
+    const span = Math.max(1000, Math.min(range, t1 - firstT));
+    return Math.round((n / (span / 60000)) * 10) / 10;
+  }
+
   function fmtMs(v) {
     if (v == null || !Number.isFinite(v)) return "—";
     return v >= 100 ? String(Math.round(v)) : v.toFixed(1);
@@ -274,6 +308,7 @@
       if (RANGES.some((r) => r.ms === saved)) range = saved;
     } catch (_) {}
 
+    let timer = null;
     const panel = document.createElement("section");
     panel.id = "fsd-stats";
     panel.setAttribute("role", "dialog");
@@ -295,6 +330,10 @@
         localStorage.setItem("semif-latency-range", String(ms));
       } catch (_) {}
       for (const b of panel.querySelectorAll("[data-range]")) b.setAttribute("aria-selected", String(Number(b.dataset.range) === ms));
+      if (!panel.hidden) {
+        clearInterval(timer);
+        timer = setInterval(draw, redrawEvery(range));
+      }
       draw();
     }
     for (const b of panel.querySelectorAll("[data-range]")) b.addEventListener("click", () => setRange(Number(b.dataset.range)));
@@ -308,18 +347,14 @@
     function draw() {
       if (panel.hidden || !telemetry) return;
       const t1 = now(), t0 = t1 - range;
-      const lines = {}, sums = {};
-      for (const s of SERIES) {
-        lines[s.key] = telemetry.getTimeline(s.key, range);
-        sums[s.key] = telemetry.summarizeWindow(s.key, range);
-      }
+      const { lines, sums } = windowStats(telemetry, range);
       const e2e = sums.e2e_loop_ms, cls = sums.classifier_ms, vis = sums.vision_encode_ms;
-      const minutes = range / 60000;
+      const rate = perMinute(e2e.n, e2e.n ? lines.e2e_loop_ms[0].t : null, t1, range);
       tiles.innerHTML =
         tile("E2E P50", fmtMs(e2e.p50), "ms") +
         tile("E2E P95", fmtMs(e2e.p95), "ms") +
         tile("E2E max", fmtMs(e2e.max), "ms") +
-        tile("Decisions", e2e.n ? (e2e.n / minutes).toFixed(e2e.n / minutes >= 10 ? 0 : 1) : "—", "/min") +
+        tile("Decisions", rate == null ? "—" : rate.toFixed(rate >= 10 ? 0 : 1), "/min") +
         tile("Classifier P50", fmtMs(cls.p50), "ms") +
         tile("Vision P50", fmtMs(vis.p50), "ms");
       for (const row of panel.querySelectorAll(".fsd-stats-table tbody tr")) {
@@ -393,7 +428,6 @@
       });
     }
 
-    let timer = null;
     function toggle(open) {
       const show = open == null ? panel.hidden : open;
       panel.hidden = !show;
@@ -401,12 +435,16 @@
       clearInterval(timer);
       timer = null;
       if (show) {
+        if (opts.onOpen) opts.onOpen();
         setRange(range);
-        timer = setInterval(draw, 500);
       }
     }
 
-    if (chip) chip.addEventListener("click", () => toggle());
+    if (chip) {
+      // The chip never takes focus, so Space and Enter keep braking and driving.
+      chip.addEventListener("mousedown", (ev) => ev.preventDefault());
+      chip.addEventListener("click", () => toggle());
+    }
     document.addEventListener("keydown", (ev) => {
       if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
       if (/input|select|textarea/i.test((ev.target && ev.target.tagName) || "")) return;
@@ -439,5 +477,5 @@
     return { panel, toggle, refresh, draw };
   }
 
-  return { SERIES, RANGES, bucketize, niceScale, timeTicks, fmtMs, mountStats };
+  return { SERIES, RANGES, bucketize, niceScale, timeTicks, fmtMs, summarize, windowStats, redrawEvery, perMinute, mountStats };
 });

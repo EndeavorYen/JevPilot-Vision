@@ -713,9 +713,9 @@ button.fsd-chip:hover {
   #fsd-stats {
     left: 10px;
     right: 10px;
-    top: 10px;
+    top: 56px;
     width: auto;
-    max-height: calc(100vh - 120px);
+    max-height: calc(100vh - 166px);
   }
 
   .fsd-stats-tiles {

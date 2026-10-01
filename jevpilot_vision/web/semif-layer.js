@@ -58,8 +58,10 @@
   minimalBtn.id = "fsd-minimal";
   minimalBtn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>`;
   document.body.appendChild(minimalBtn);
+  let stats = null; // the latency panel, mounted below
   function setMinimal(on) {
     document.body.classList.toggle("semif-minimal", on);
+    if (on && stats) stats.toggle(false);
     minimalBtn.setAttribute("aria-pressed", String(on));
     minimalBtn.setAttribute("aria-label", on ? "Show the full interface" : "Minimal view");
     minimalBtn.title = (on ? "Show the full interface" : "Minimal view") + " · H";
@@ -133,8 +135,8 @@
   }
 
   // The status strip's latency chip opens the charts (semif-stats.js); L does too.
-  const stats = window.SEMIF_STATS && telemetry && typeof telemetry.getTimeline === "function"
-    ? window.SEMIF_STATS.mountStats({ telemetry, chip: latencyEl, parent: chrome, onExport: exportLatency })
+  stats = window.SEMIF_STATS && telemetry && typeof telemetry.getTimeline === "function"
+    ? window.SEMIF_STATS.mountStats({ telemetry, chip: latencyEl, parent: chrome, onExport: exportLatency, onOpen: () => setMinimal(false) })
     : null;
 
   function refreshLatencyHud() {

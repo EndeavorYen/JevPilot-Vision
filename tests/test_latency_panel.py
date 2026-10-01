@@ -101,3 +101,60 @@ def test_minimal_view_collapses_the_interface_but_keeps_the_drive():
     # What is left: speed, limit, the autopilot switch and the next turn.
     for kept in ["#speed", "#autopilot", ".navigation-card", ".bottom-hud"]:
         assert kept not in hidden.group(1), kept
+
+
+def test_window_stats_read_each_series_once_per_redraw():
+    """Review: the panel fetched every series twice per tick and sorted it once per percentile."""
+    got = run_node(
+        r"""
+const calls = {};
+const rows = Array.from({ length: 50 }, (_, i) => ({ t: i * 1000, ms: 100 + i }));
+const tel = { getTimeline(key, w) { calls[key] = (calls[key] || 0) + 1; return rows; },
+              summarizeWindow() { throw new Error("re-reads the series"); } };
+const st = s.windowStats(tel, 60000);
+process.stdout.write(JSON.stringify({ calls, e2e: st.sums.e2e_loop_ms, n: st.lines.classifier_ms.length }));
+"""
+    )
+    assert got["calls"] == {k: 1 for k in ["e2e_loop_ms", "classifier_ms", "vision_encode_ms", "grab_frame_ms"]}
+    assert got["e2e"]["n"] == 50 and got["e2e"]["p50"] == 124.5 and got["e2e"]["max"] == 149
+    assert got["n"] == 50
+
+
+def test_the_fifteen_minute_view_redraws_less_often():
+    got = run_node("process.stdout.write(JSON.stringify(s.RANGES.map((r) => s.redrawEvery(r.ms))));")
+    assert got[0] == 500 and got[1] <= 1000 and got[2] >= 2000
+
+
+def test_decision_rate_counts_only_the_time_with_samples():
+    """Review: two minutes into a session at 5 Hz the 15-minute view said 40/min, not 300/min."""
+    got = run_node(
+        r"""
+process.stdout.write(JSON.stringify([
+  s.perMinute(600, 0, 120000, 900000),
+  s.perMinute(600, -900000, 0, 60000 * 15),
+  s.perMinute(0, null, 1000, 60000),
+]));
+"""
+    )
+    assert got[0] == 300
+    assert got[1] == 40
+    assert got[2] is None
+
+
+def test_on_narrow_screens_the_panel_clears_the_minimal_button():
+    css = (WEB / "semif-layer.css").read_text(encoding="utf-8")
+    narrow = css[css.index("@media (max-width: 900px) {\n  #fsd-stats"):]
+    top = int(re.search(r"#fsd-stats \{[^}]*?top: (\d+)px", narrow).group(1))
+    button = re.search(r"#fsd-minimal \{[^}]*?top: (\d+)px;[^}]*?height: (\d+)px", css)
+    assert top >= int(button.group(1)) + int(button.group(2)) + 6, "the panel's close button sits below the corner button"
+
+
+def test_minimal_view_and_the_panel_stay_in_step_and_the_chip_keeps_the_keyboard():
+    js = (WEB / "semif-layer.js").read_text(encoding="utf-8")
+    stats = STATS_JS.read_text(encoding="utf-8")
+    # Folding the interface closes the panel; opening the panel unfolds it.
+    assert re.search(r"function setMinimal\(on\) \{[\s\S]*?stats\.toggle\(false\)", js)
+    assert "onOpen: () => setMinimal(false)" in js
+    assert "opts.onOpen" in stats
+    # Clicking the chip must not take focus, or Space (brake) would press the chip instead.
+    assert re.search(r'chip\.addEventListener\("mousedown", \(ev\) => ev\.preventDefault\(\)\)', stats)
