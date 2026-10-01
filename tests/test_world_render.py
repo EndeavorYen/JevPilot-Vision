@@ -25,7 +25,7 @@ import { pathToFileURL } from "url";
 const require = createRequire(import.meta.url);
 const [worldgen, renderDir] = process.argv.slice(1, 3);
 require(worldgen);
-class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { x: 0, y: 0, z: 0, copy(v) { this.v = v; }, set(x, y, z) { Object.assign(this, { x, y, z }); return this; } }; } add(...c) { this.children.push(...c); } }
+class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.rotation = { x: 0, y: 0, z: 0 }; this.position = { x: 0, y: 0, z: 0, copy(v) { this.v = v; }, set(x, y, z) { Object.assign(this, { x, y, z }); return this; } }; } add(...c) { this.children.push(...c); } }
 class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } setIndex(i) { this.index = i; } computeVertexNormals() {}
   translate() { return this; } scale() { return this; } rotateY() { return this; } rotateZ() { return this; } rotateX() { return this; } }
 class Mesh extends Obj { constructor(g, m) { super(); this.geometry = g; this.material = m; } }
@@ -87,7 +87,7 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
         "out({ coast, legacy, calls, palette: api.palette });"
     )
     assert got["coast"]["root"] == "semif-world"
-    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation"]
+    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation", "semif-festival"]
     assert got["coast"]["building"] is True and got["coast"]["lamp"] is False
     assert got["coast"]["calls"] == ["kit"], "the old layer only sees the kit on the coast"
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
@@ -272,6 +272,28 @@ def test_villas_stand_on_the_hills_away_from_the_roads_and_the_harbour_has_its_q
     assert got["sunk"], "a villa's plinth reaches down to its lowest corner"
     assert got["lighthouse"] is True, "the lighthouse stands out on the breakwater"
     assert got["quay"] and got["villasDrawn"]
+
+
+def test_the_festival_stands_in_its_grounds_clear_of_the_roads_and_its_wheel_turns():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const F = await mod('festival.js'); const fest = F.buildFestival(world, field, grid);"
+        "const parts = {}; for (const c of fest.children) parts[c.name] = c;"
+        "const pts = (o) => { const out = []; const walk = (n, ox, oz) => { const x = ox + (n.position?.x || 0), z = oz + (n.position?.z || 0);"
+        "  if (n.geometry?.attributes?.position) { const p = n.geometry.attributes.position.array; for (let i = 0; i < p.length; i += 3) out.push([x + p[i], z + p[i + 2]]); }"
+        "  else if (n.position && !n.children.length) out.push([x, z]); (n.children || []).forEach((c) => walk(c, x, z)); }; walk(o, 0, 0); return out; };"
+        "const clear = {}; for (const [name, part] of Object.entries(parts)) { if (name === 'semif-festival-arch') continue;"
+        "  clear[name] = Math.min(...pts(part).filter((_, i) => i % 7 === 0).map(([x, z]) => field.roadEdge(x, z))); }"
+        "const wheel = parts['semif-festival-wheel']; const before = wheel.userData.rim.rotation.z; F.updateFestival(10); const after = wheel.userData.rim.rotation.z;"
+        "out({ names: Object.keys(parts).sort(), clear, turned: after - before, arch: !!parts['semif-festival-arch'] });"
+    )
+    assert got["names"] == sorted([
+        "semif-festival-arch", "semif-festival-stage", "semif-festival-tents", "semif-festival-flags",
+        "semif-festival-wheel", "semif-festival-podiums",
+    ])
+    for name, edge in got["clear"].items():
+        assert edge >= 6, (name, edge)
+    assert got["turned"] > 0.01, "the wheel turns as time passes"
 
 
 def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level():

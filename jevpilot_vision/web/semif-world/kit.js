@@ -31,6 +31,8 @@ export const PALETTE = {
   awning: ["#3f6f73", "#7a5c66", "#4a5d7a", "#8a7f6a"],
   villa: "#f1ece2",
   lighthouse: { white: "#eeeae2", band: "#4c5258" },
+  // The festival's colours: sea teal, blue, purple, sand; no signal red, green or cone orange.
+  festival: { ink: "#36414f", sand: "#e8d9b5", teal: "#2f8f8f", blue: "#3a5f9a", purple: "#6b5a9a", white: "#f4f1ea" },
   minimap: { sea: "#cfe3ea", building: "#dcdfe4" },
 };
 
