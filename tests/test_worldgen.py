@@ -222,7 +222,7 @@ def test_pedestrians_use_the_bundle_format_on_straight_pavements_and_signal_cros
 def test_free_driving_goes_round_the_destinations_in_order():
     out = _js(
         "const w = G.generate(3, 'coast:harbour'); const seen = [w.destination];"
-        "for (let i = 0; i < 6; i++) seen.push(w.nextDestination().id);"
+        "for (let i = 0; i < 6; i++) { const t = w.peekDestination(); w.commitDestination(t.id); seen.push(t.id); }"
         "process.stdout.write(JSON.stringify({ seen, last: w.destination, chain: G.DESTINATIONS }));"
     )
     chain = out["chain"]
@@ -230,6 +230,20 @@ def test_free_driving_goes_round_the_destinations_in_order():
     for a, b in zip(out["seen"], out["seen"][1:]):
         assert chain.index(b) == (chain.index(a) + 1) % len(chain)
     assert out["last"] == out["seen"][-1]
+
+
+def test_the_chain_moves_on_only_when_a_route_to_the_next_stop_is_committed():
+    """The bundle asks for the next stop every tick until a route to it builds; asking must not
+    skip stops, or a failed reroute would race the chain ahead."""
+    out = _js(
+        "const w = G.generate(3, 'coast:harbour');"
+        "const asked = [w.peekDestination().id, w.peekDestination().id, w.peekDestination().id];"
+        "const before = w.destination; w.commitDestination(asked[0]);"
+        "process.stdout.write(JSON.stringify({ asked, before, after: w.destination, next: w.peekDestination().id }));"
+    )
+    assert out["asked"] == ["pass-belvedere"] * 3
+    assert out["before"] == "coast-bay" and out["after"] == "pass-belvedere"
+    assert out["next"] == "ss1-e400"
 
 
 def test_navigation_and_crossings_cover_every_road_kind(world):

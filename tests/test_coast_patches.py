@@ -123,7 +123,10 @@ COAST_PATCHES = [
      "async function ng(r=Q.world.seed,i=Q.world.selectValue??Q.world.type)"),
     ("coast-next-destination", MAIN,
      "let t=e[Math.floor(this.planRandom()*e.length)];",
-     "let t=this.world.nextDestination?.()??e[Math.floor(this.planRandom()*e.length)];"),
+     "let t=this.world.peekDestination?.()??e[Math.floor(this.planRandom()*e.length)];"),
+    ("coast-commit-destination", MAIN,
+     "if(n&&n.route){r.route=this.world.route=n.route;",
+     "if(n&&n.route){this.world.commitDestination?.(t.id);r.route=this.world.route=n.route;"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",

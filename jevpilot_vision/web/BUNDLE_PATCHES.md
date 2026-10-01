@@ -37,5 +37,5 @@
 | `map-size-city-worker`、`map-size-town-worker` | wk | worker 的城市、小鎮尺寸改讀 `SEMIF_MAP`（getter） | 修正 #11 的問題：自由駕駛 7×7 時，worker 原本一直在 5×5 地圖上規劃。`lap=1` 本來就是 5×5，不受影響 |
 | `coast-default-world`、`coast-world-fallback` | main | 沒指定 `world` 時，改用 `index.html` 設的 `SEMIF_DEFAULT_WORLD`；`coast:<出發地點>` 是合法的地圖名稱 | 自由駕駛預設開新地圖，`lap=1` 維持城市 |
 | `coast-world-picker`、`coast-picker-value`、`coast-new-layout` | main | 新地圖上，選單改為「Start from」加 5 個出發地點；「New layout」保留出發地點 | 舊地圖不再列在新地圖的選單裡 |
-| `coast-next-destination` | main | 抵達後的下一站依固定的目的地鏈 | 原本是隨機挑一個節點 |
+| `coast-next-destination`、`coast-commit-destination` | main | 抵達後的下一站依固定的目的地鏈；路線排得出來才確認換站 | 原本是隨機挑一個節點；路線失敗時打包檔每個 tick 都會再問一次，先換站會一路跳站 |
 | `coast-ground`、`coast-roads-off`、`coast-pads-off`、`coast-streetlights-off` | main | `coast` 不畫打包檔的地面、直線路面、路口方塊和 glb 路燈 | 這些都由 `semif-world/` 負責 |

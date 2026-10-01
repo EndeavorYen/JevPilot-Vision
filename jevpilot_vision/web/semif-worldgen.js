@@ -298,11 +298,12 @@
       visual: { shoreline: SHORELINE.map(([x, z]) => ({ x, z })) },
     };
     world.pedestrians = (sim) => pedestrians(world, sim);
-    // Free driving: the next destination after an arrival is the next one round the coast.
-    world.nextDestination = () => {
-      destinationIndex = (destinationIndex + 1) % DESTINATIONS.length;
-      world.destination = DESTINATIONS[destinationIndex];
-      return byId[world.destination];
+    // Free driving: after an arrival the bundle asks for the next stop round the coast every tick
+    // until a route to it builds, and commits it only then, so a failed reroute never skips a stop.
+    world.peekDestination = () => byId[DESTINATIONS[(destinationIndex + 1) % DESTINATIONS.length]];
+    world.commitDestination = (id) => {
+      destinationIndex = DESTINATIONS.indexOf(id);
+      world.destination = id;
     };
     return world;
   }
