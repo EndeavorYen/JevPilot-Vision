@@ -178,6 +178,8 @@ def test_renderer_palette_stays_out_of_the_camera_colour_masks():
 def test_renderer_colours_are_all_in_the_palette():
     """A colour literal outside PALETTE would escape the mask test above."""
     for path in RENDER.glob("*.js"):
+        if path.name == "daylight.js":
+            continue  # light, sky and fog colours, checked hour by hour in tests/test_daylight.py
         source = path.read_text(encoding="utf-8")
         if path.name == "kit.js":
             source = source[source.index("// The bundle's three.js classes"):]

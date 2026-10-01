@@ -15,7 +15,7 @@ export const PALETTE = {
   seabed: "#7fa79d",
   sea: "#3f8f93",
   stucco: ["#efe6d6", "#e9d8bf", "#f2e2cf", "#dfe3d6", "#e8d2c4"],
-  roof: ["#b8826f", "#a9806f", "#9c8a7c"],
+  roof: ["#b2857c", "#a6847a", "#9c8a7c"],
   minimap: { sea: "#cfe3ea", building: "#dcdfe4" },
 };
 
