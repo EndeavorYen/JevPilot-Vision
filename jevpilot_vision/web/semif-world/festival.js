@@ -44,22 +44,40 @@ function banner(text) {
   });
 }
 
+// The stage screen glows: its texels add `emissive` times themselves on top of the light, so its
+// colours are checked against the camera masks with that glow (tests/test_daylight.py).
+export const SCREEN = { colours: [PALETTE.festival.purple, PALETTE.festival.teal, PALETTE.festival.white], emissive: 0.35 };
+
 function screenTexture() {
-  const F = PALETTE.festival;
   return canvasTexture(512, 256, (g, w, h) => {
+    const [purple, teal, white] = SCREEN.colours;
     const grad = g.createLinearGradient(0, 0, w, h);
-    grad.addColorStop(0, F.purple);
-    grad.addColorStop(0.55, F.blue);
-    grad.addColorStop(1, F.teal);
+    grad.addColorStop(0, purple);
+    grad.addColorStop(1, teal);
     g.fillStyle = grad;
     g.fillRect(0, 0, w, h);
-    g.fillStyle = F.white;
+    g.fillStyle = white;
     g.font = "bold 64px system-ui, sans-serif";
     g.textAlign = "center";
     g.fillText("SOLMARE", w / 2, h / 2 - 10);
     g.font = "600 34px system-ui, sans-serif";
     g.fillText("FESTIVAL", w / 2, h / 2 + 44);
   });
+}
+
+// Where each structure stands: the ground under the grounds is not quite level, so each one
+// reaches down to the lowest ground under its footprint and keeps its full height above the
+// highest ({ kind, x, z, w, d, height, base, top }).
+export function placeFestival(grid) {
+  const spot = (kind, x, z, w, d, height) => {
+    const g = [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, 0]].map(([a, b]) => grid.heightAt(x + (a * w) / 2, z + (b * d) / 2));
+    return { kind, x, z, w, d, height, base: Math.min(...g), top: Math.max(...g) + height };
+  };
+  const spots = [spot("stage", STAGE.x, STAGE.z, STAGE.w, STAGE.d, 1.6)];
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) spots.push(spot("tent", 28 + i * 13, 288 + j * 22, 8, 8, 2.6));
+  for (let z = 276; z <= 500; z += 18) for (const side of [-1, 1]) spots.push(spot("flag", side * 13, z, 0.2, 0.2, 7));
+  for (const p of PODIUMS) spots.push(spot("podium", p.x, p.z, 12, 12, 0.7));
+  return spots;
 }
 
 function mesh(geometry, mat, x, y, z, cast = true) {
@@ -88,41 +106,40 @@ function buildArch(y0) {
   return group;
 }
 
-function buildStage(y0) {
+function buildStage(stage) {
   const F = PALETTE.festival;
   const group = new T.Group();
   group.name = "semif-festival-stage";
-  const { x, z, w, d } = STAGE;
-  group.add(mesh(new T.BoxGeometry(w, 1.6, d), material(F.ink, { roughness: 0.8 }), x, y0 + 0.8, z));
+  const { x, z, w, d, base, top } = stage;
+  group.add(mesh(new T.BoxGeometry(w, top - base, d), material(F.ink, { roughness: 0.8 }), x, (base + top) / 2, z));
   const truss = material(PALETTE.guardrail, { metalness: 0.5, roughness: 0.4 });
-  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) group.add(mesh(new T.BoxGeometry(0.8, 13, 0.8), truss, x + (sx * (w - 2)) / 2, y0 + 6.5, z + (sz * (d - 2)) / 2));
-  group.add(mesh(new T.BoxGeometry(w + 1, 0.9, d + 1), truss, x, y0 + 13.2, z));
-  group.add(mesh(new T.BoxGeometry(w - 2, 0.4, d - 2), material(F.white, { roughness: 0.9 }), x, y0 + 13.8, z));
+  const roof = top + 11.6;
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) group.add(mesh(new T.BoxGeometry(0.8, roof - base, 0.8), truss, x + (sx * (w - 2)) / 2, (base + roof) / 2, z + (sz * (d - 2)) / 2));
+  group.add(mesh(new T.BoxGeometry(w + 1, 0.9, d + 1), truss, x, roof, z));
+  group.add(mesh(new T.BoxGeometry(w - 2, 0.4, d - 2), material(F.white, { roughness: 0.9 }), x, roof + 0.6, z));
   // The screen faces the crowd to the east, towards the avenue.
-  const screen = new T.Mesh(new T.PlaneGeometry(14, 7), material("#ffffff", { map: screenTexture(), emissive: "#ffffff", emissiveMap: screenTexture(), emissiveIntensity: 0.35, roughness: 0.4 }));
-  screen.position.set(x + w / 2 - 1.2, y0 + 7, z);
+  const face = screenTexture();
+  const screen = new T.Mesh(new T.PlaneGeometry(14, 7), material("#ffffff", { map: face, emissive: "#ffffff", emissiveMap: face, emissiveIntensity: SCREEN.emissive, roughness: 0.4 }));
+  screen.position.set(x + w / 2 - 1.2, top + 5.4, z);
   screen.rotation.y = Math.PI / 2;
   group.add(screen);
   return group;
 }
 
-function buildTents(y0) {
+function buildTents(tents) {
   const F = PALETTE.festival;
   const walls = new Batch();
   const cones = [];
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 3; j++) {
-      const x = 28 + i * 13, z = 288 + j * 22;
-      walls.box(x, z, 8, 8, 2.6, y0);
-      cones.push([x, z, (i + j) % 2]);
-    }
-  }
+  tents.forEach((t, k) => {
+    walls.box(t.x, t.z, t.w, t.d, t.top - t.base, t.base);
+    cones.push([t.x, t.z, t.top, (k + Math.floor(k / 3)) % 2]);
+  });
   const group = new T.Group();
   group.name = "semif-festival-tents";
   group.add(walls.mesh(material(F.white, { roughness: 0.9 }), { cast: true }));
   const roofMats = [material(F.white, { roughness: 0.85 }), material(F.teal, { roughness: 0.85 })];
-  for (const [x, z, k] of cones) {
-    const roof = mesh(new T.ConeGeometry(6.4, 3.4, 4), roofMats[k], x, y0 + 2.6 + 1.7, z);
+  for (const [x, z, top, k] of cones) {
+    const roof = mesh(new T.ConeGeometry(6.4, 3.4, 4), roofMats[k], x, top + 1.7, z);
     roof.rotation.y = Math.PI / 4;
     group.add(roof);
   }
@@ -144,32 +161,28 @@ function flagMaterial(colour) {
   return mat;
 }
 
-function buildFlags(y0) {
+function buildFlags(flags) {
   const F = PALETTE.festival;
   const colours = [F.teal, F.blue, F.purple, F.sand, F.white];
   const group = new T.Group();
   group.name = "semif-festival-flags";
   const pole = material(PALETTE.guardrail, { metalness: 0.4, roughness: 0.5 });
-  let k = 0;
-  for (let z = 276; z <= 500; z += 18) {
-    for (const side of [-1, 1]) {
-      const x = side * 13;
-      group.add(mesh(new T.CylinderGeometry(0.07, 0.09, 7, 6), pole, x, y0 + 3.5, z, false));
-      const cloth = new T.Mesh(new T.PlaneGeometry(1.8, 1.1, 8, 3).translate(0.9, 0, 0), flagMaterial(colours[k++ % colours.length]));
-      cloth.position.set(x, y0 + 6.2, z);
-      cloth.rotation.y = side > 0 ? 0 : Math.PI;
-      group.add(cloth);
-    }
-  }
+  flags.forEach((f, k) => {
+    group.add(mesh(new T.CylinderGeometry(0.07, 0.09, f.top - f.base, 6), pole, f.x, (f.base + f.top) / 2, f.z, false));
+    const cloth = new T.Mesh(new T.PlaneGeometry(1.8, 1.1, 8, 3).translate(0.9, 0, 0), flagMaterial(colours[k % colours.length]));
+    cloth.position.set(f.x, f.top - 0.8, f.z);
+    cloth.rotation.y = f.x > 0 ? 0 : Math.PI;
+    group.add(cloth);
+  });
   return group;
 }
 
-function buildPodiums(y0) {
+function buildPodiums(podiums) {
   const group = new T.Group();
   group.name = "semif-festival-podiums";
-  for (const p of PODIUMS) {
-    group.add(mesh(new T.CylinderGeometry(5.5, 6, 0.7, 40), material(PALETTE.festival.ink, { roughness: 0.5, metalness: 0.2 }), p.x, y0 + 0.35, p.z));
-    group.add(mesh(new T.CylinderGeometry(5.6, 5.6, 0.08, 40), material(PALETTE.festival.white, { roughness: 0.4 }), p.x, y0 + 0.74, p.z, false));
+  for (const p of podiums) {
+    group.add(mesh(new T.CylinderGeometry(5.5, 6, p.top - p.base, 40), material(PALETTE.festival.ink, { roughness: 0.5, metalness: 0.2 }), p.x, (p.base + p.top) / 2, p.z));
+    group.add(mesh(new T.CylinderGeometry(5.6, 5.6, 0.08, 40), material(PALETTE.festival.white, { roughness: 0.4 }), p.x, p.top + 0.04, p.z, false));
   }
   return group;
 }
@@ -235,10 +248,11 @@ function placeCars(group) {
 }
 
 export function buildFestival(world, field, grid) {
-  const y0 = grid.heightAt(0, 400);
+  const spots = placeFestival(grid);
+  const of = (kind) => spots.filter((s) => s.kind === kind);
   const group = new T.Group();
   group.name = "semif-festival";
-  group.add(buildArch(grid.heightAt(0, ARCH_Z)), buildStage(y0), buildTents(y0), buildFlags(y0), buildPodiums(y0), buildWheel(grid.heightAt(WHEEL.x, WHEEL.z)));
+  group.add(buildArch(grid.heightAt(0, ARCH_Z)), buildStage(of("stage")[0]), buildTents(of("tent")), buildFlags(of("flag")), buildPodiums(of("podium")), buildWheel(grid.heightAt(WHEEL.x, WHEEL.z)));
   return group;
 }
 

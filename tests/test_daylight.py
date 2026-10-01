@@ -185,3 +185,31 @@ def test_onboard_pixels_stay_out_of_the_masks_after_lighting_and_aces(day):
                 if hits:
                     offenders.append((a["h"], cosine, name, hex_colour, (r, g, b), hits))
     assert offenders[:10] == []
+
+
+def test_derived_and_glowing_colours_stay_out_of_the_masks_after_lighting_and_aces(day):
+    """The facade shades (shade() of walls, shutters, doors) and the festival screen, which adds its
+    own glow on top of the light, through the same lighting and ACES as the palette above."""
+    extra = _day(
+        "const B = await import(pathToFileURL(process.argv[1] + '/buildings.js'));"
+        "const F = await import(pathToFileURL(process.argv[1] + '/festival.js'));"
+        "out({ shades: B.derivedColours(), screen: F.SCREEN });"
+    )
+    surfaces = [(f"shade {h}", h, 0.0) for h in extra["shades"]]
+    surfaces += [(f"screen {h}", h, extra["screen"]["emissive"]) for h in extra["screen"]["colours"]]
+    assert len(extra["shades"]) >= 6 and extra["screen"]["colours"]
+    offenders = []
+    for a in day["at"]:
+        light = a["light"]
+        sun = [_to_linear(c) for c in _rgb(light["sun"])]
+        sky = [_to_linear(c) for c in _rgb(light["hemiSky"])]
+        for cosine in (1.0, 0.6, 0.3, 0.0):
+            irradiance = [light["sunIntensity"] * cosine * s + light["hemiIntensity"] * k for s, k in zip(sun, sky)]
+            for name, hex_colour, glow in surfaces:
+                albedo = [_to_linear(c) for c in _rgb(hex_colour)]
+                radiance = [al * e / math.pi + glow * al for al, e in zip(albedo, irradiance)]
+                r, g, b = (_to_srgb(c) for c in _aces(radiance, light["exposure"]))
+                hits = [m for m in _hits_camera_mask(r, g, b) if cosine >= 0.6 or glow or m != "pedestrian"]
+                if hits:
+                    offenders.append((a["h"], cosine, name, (r, g, b), hits))
+    assert offenders[:10] == []

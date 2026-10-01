@@ -274,6 +274,33 @@ def test_villas_stand_on_the_hills_away_from_the_roads_and_the_harbour_has_its_q
     assert got["quay"] and got["villasDrawn"]
 
 
+def test_the_harbour_promenade_runs_level_up_to_the_quay_wall():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const dips = [];"
+        "for (let x = -1240; x <= -780; x += 20) for (const z of [330, 336, 340, 342, 343, 344, 344.5, 344.9]) {"
+        "  const h = grid.heightAt(x, z); if (Math.abs(h) > 0.1) dips.push([x, z, +h.toFixed(2)]); }"
+        "out({ dips: dips.slice(0, 5), n: dips.length, wall: grid.heightAt(-1000, 346) });"
+    )
+    assert got["n"] == 0, got["dips"]
+    assert got["wall"] < -8, "past the wall is the harbour basin"
+
+
+def test_festival_structures_reach_the_ground_at_every_corner_and_keep_their_height():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const F = await mod('festival.js'); const spots = F.placeFestival(grid);"
+        "const bad = [];"
+        "for (const s of spots) {"
+        "  const g = [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, 0]].map(([a, b]) => grid.heightAt(s.x + a * s.w / 2, s.z + b * s.d / 2));"
+        "  if (s.base > Math.min(...g) + 1e-6) bad.push([s.kind, 'floats', +(s.base - Math.min(...g)).toFixed(2)]);"
+        "  if (s.top < Math.max(...g) + s.height - 1e-6) bad.push([s.kind, 'sunk', +(Math.max(...g) + s.height - s.top).toFixed(2)]); }"
+        "out({ kinds: [...new Set(spots.map((s) => s.kind))].sort(), bad: bad.slice(0, 6) });"
+    )
+    assert got["kinds"] == ["flag", "podium", "stage", "tent"]
+    assert got["bad"] == []
+
+
 def test_the_festival_stands_in_its_grounds_clear_of_the_roads_and_its_wheel_turns():
     got = _render(
         "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"

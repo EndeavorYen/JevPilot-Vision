@@ -86,6 +86,12 @@ function splatMaterial() {
   return mat;
 }
 
+// Extra vertex rows where the height field has a sharp edge (the quay wall), merged into an axis.
+function withSeams(axisValues, seams) {
+  if (!seams || !seams.length) return axisValues;
+  return [...axisValues.filter((v) => seams.every((s) => Math.abs(v - s) > 0.01)), ...seams].sort((a, b) => a - b);
+}
+
 // Index of the cell of a sorted axis that holds v.
 function cellOf(axisValues, v) {
   let lo = 0, hi = axisValues.length - 1;
@@ -103,7 +109,7 @@ function cellOf(axisValues, v) {
 // same two triangles per cell as the mesh, so whatever stands on it sits exactly on the surface.
 export function groundGrid(world, field) {
   const xs = axis(world.bounds.minX, world.bounds.maxX);
-  const zs = axis(world.bounds.minZ, world.bounds.maxZ);
+  const zs = withSeams(axis(world.bounds.minZ, world.bounds.maxZ), field.seams?.z);
   const nx = xs.length, nz = zs.length;
   const heights = new Float32Array(nx * nz);
   for (let j = 0; j < nz; j++) {

@@ -3,6 +3,7 @@
 // skips the chunks out of view, with crowns that sway a little in the breeze.
 import { PALETTE, T, material } from "./kit.js";
 import { SEA_LEVEL, fbm, distanceToLine } from "./heights.js";
+import { placeVillas } from "./buildings.js";
 
 export const SPECIES = ["cypress", "pine", "olive", "palm", "shrub", "vine"];
 
@@ -31,7 +32,8 @@ export function placeVegetation(world, field, grid) {
   const seed = Number(world.seed) >>> 0;
   const rand = (ix, iz, k) => hash(ix * 31 + k, iz * 17 - k, seed + k * 101);
   const shoreline = world.visual.shoreline;
-  const buildings = world.objects.filter((o) => o.type === "building");
+  // The town's houses and the hillside villas (placed by buildings.js, which draws them).
+  const buildings = [...world.objects.filter((o) => o.type === "building"), ...placeVillas(world, field, grid)];
   const inBuilding = (x, z, pad) => buildings.some((b) => Math.abs(x - b.x) < b.width / 2 + pad && Math.abs(z - b.z) < b.depth / 2 + pad);
   const inFestival = (x, z) => x > FESTIVAL.x0 && x < FESTIVAL.x1 && z > FESTIVAL.z0 && z < FESTIVAL.z1;
   const slopeAt = (x, z) => Math.hypot(grid.heightAt(x + 2, z) - grid.heightAt(x - 2, z), grid.heightAt(x, z + 2) - grid.heightAt(x, z - 2)) / 4;
@@ -102,7 +104,7 @@ export function placeVegetation(world, field, grid) {
       for (let a = -22; a <= 22; a += 2.6) {
         for (let b = -22; b <= 22; b += 2.5) {
           const x = cx + (angle ? b : a), z = cz + (angle ? a : b);
-          if (field.roadEdge(x, z) < CLEAR) continue;
+          if (field.roadEdge(x, z) < CLEAR || inBuilding(x, z, 1.5)) continue;
           plants.push({ species: "vine", x, z, y: ground(x, z), scale: 1, rotation: angle });
         }
       }

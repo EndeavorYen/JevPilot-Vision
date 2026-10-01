@@ -49,7 +49,9 @@ def summary() -> dict:
         "  if (field.heightAt(p.x, p.z) < H.SEA_LEVEL + 1) wet++;"
         "  if (buildings.some((b) => Math.abs(p.x - b.x) < b.width / 2 + 1 && Math.abs(p.z - b.z) < b.depth / 2 + 1)) inBuilding++;"
         "  if (Math.abs(p.y - grid.heightAt(p.x, p.z)) > 0.05) floating++; }"
-        "out({ counts, total: plants.length, onRoad, nearRoad, wet, inBuilding, floating, species: V.SPECIES });"
+        "const villas = (await mod('buildings.js')).placeVillas(world, field, grid);"
+        "const inVilla = plants.filter((p) => villas.some((v) => Math.abs(p.x - v.x) < v.width / 2 + 1 && Math.abs(p.z - v.z) < v.depth / 2 + 1)).length;"
+        "out({ counts, total: plants.length, onRoad, nearRoad, wet, inBuilding, inVilla, floating, species: V.SPECIES });"
     )
 
 
@@ -66,6 +68,7 @@ def test_nothing_grows_on_a_road_in_the_sea_or_inside_a_building(summary):
     assert summary["nearRoad"] == 0, "only street palms stand on the pavement"
     assert summary["wet"] == 0
     assert summary["inBuilding"] == 0
+    assert summary["inVilla"] == 0, "no tree grows through a hillside villa"
 
 
 def test_every_plant_stands_on_the_ground(summary):

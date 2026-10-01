@@ -14,10 +14,26 @@ function hash(text) {
   return h;
 }
 
+// The facades' derived colours: plaster blotches, shutter slats and the door's edge are the
+// palette's own colours scaled by these factors (checked against the camera masks with the
+// palette, tests/test_daylight.py).
+const PLASTER = [0.94, 1.04];
+const SLAT = 0.78;
+const DOOR_EDGE = 0.75;
+
 function shade(hex, f) {
   const n = parseInt(hex.slice(1), 16);
   const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => Math.max(0, Math.min(255, Math.round(v * f))));
-  return `rgb(${c.join(",")})`;
+  return "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+export function derivedColours() {
+  const walls = [...PALETTE.stucco, PALETTE.villa];
+  return [
+    ...walls.flatMap((w) => PLASTER.map((f) => shade(w, f))),
+    ...PALETTE.shutter.map((c) => shade(c, SLAT)),
+    shade(PALETTE.door, DOOR_EDGE),
+  ];
 }
 
 // --- facades -------------------------------------------------------------------------------
@@ -39,7 +55,7 @@ function facade(wall, shutter, kind) {
   let seed = hash(key);
   const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
   for (let i = 0; i < 70; i++) {
-    g.fillStyle = shade(wall, 0.94 + rnd() * 0.1);
+    g.fillStyle = shade(wall, PLASTER[0] + rnd() * (PLASTER[1] - PLASTER[0]));
     g.globalAlpha = 0.35;
     g.beginPath();
     g.arc(rnd() * PX, rnd() * PX, 6 + rnd() * 22, 0, Math.PI * 2);
@@ -57,7 +73,7 @@ function facade(wall, shutter, kind) {
     for (const sx of [x0 - 0.5 * m - 4, x1 + 4]) {
       g.fillStyle = shutter;
       g.fillRect(sx, y0, 0.5 * m, y1 - y0);
-      g.fillStyle = shade(shutter, 0.78);
+      g.fillStyle = shade(shutter, SLAT);
       for (let y = y0 + 6; y < y1; y += 9) g.fillRect(sx + 4, y, 0.5 * m - 8, 3);
     }
     g.fillStyle = PALETTE.stone;
@@ -76,7 +92,7 @@ function facade(wall, shutter, kind) {
     g.beginPath();
     g.arc(1.5 * m, 0.95 * m, 0.45 * m, Math.PI, 0);
     g.fill();
-    g.fillStyle = shade(PALETTE.door, 0.75);
+    g.fillStyle = shade(PALETTE.door, DOOR_EDGE);
     g.fillRect(1.48 * m, 0.95 * m, 4, 1.6 * m);
   } else {
     g.fillStyle = PALETTE.stone;
