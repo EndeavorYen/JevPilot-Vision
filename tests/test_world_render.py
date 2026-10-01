@@ -87,7 +87,7 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
         "out({ coast, legacy, calls, palette: api.palette });"
     )
     assert got["coast"]["root"] == "semif-world"
-    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation", "semif-festival"]
+    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation", "semif-festival", "semif-props"]
     assert got["coast"]["building"] is True and got["coast"]["lamp"] is False
     assert got["coast"]["calls"] == ["kit"], "the old layer only sees the kit on the coast"
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
@@ -294,6 +294,25 @@ def test_the_festival_stands_in_its_grounds_clear_of_the_roads_and_its_wheel_tur
     for name, edge in got["clear"].items():
         assert edge >= 6, (name, edge)
     assert got["turned"] > 0.01, "the wheel turns as time passes"
+
+
+def test_lamps_line_the_town_streets_and_boats_float_and_bob_in_the_harbour():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world); const grid = (await mod('terrain.js')).groundGrid(world, field);"
+        "const P = await mod('props.js'); const spots = P.placeProps(world, field, grid);"
+        "const buildings = world.objects.filter((o) => o.type === 'building');"
+        "const inB = (x, z) => buildings.some((b) => Math.abs(x - b.x) < b.width / 2 + 0.5 && Math.abs(z - b.z) < b.depth / 2 + 0.5);"
+        "const sea = H.seaPolygon(world.visual.shoreline, world.bounds);"
+        "const g = P.buildProps(spots); const boat = g.userData.boats[0]; const y0 = boat.position.y; P.updateProps(1.3); const y1 = boat.position.y;"
+        "out({ lamps: spots.lamps.length, lampOnRoad: spots.lamps.filter((l) => field.roadEdge(l.x, l.z) < 2).length, lampInBuilding: spots.lamps.filter((l) => inB(l.x, l.z)).length,"
+        "  cafes: spots.cafes.length, cafeOnRoad: spots.cafes.filter((c) => field.roadEdge(c.x, c.z) < 3).length,"
+        "  boats: spots.boats.length, dry: spots.boats.filter((b) => !H.inside(sea, b) || field.heightAt(b.x, b.z) > H.SEA_LEVEL - 2).length,"
+        "  bob: Math.abs(y1 - y0) });"
+    )
+    assert got["lamps"] > 60 and got["lampOnRoad"] == 0 and got["lampInBuilding"] == 0
+    assert got["cafes"] > 8 and got["cafeOnRoad"] == 0
+    assert got["boats"] >= 10 and got["dry"] == 0
+    assert got["bob"] > 0.01
 
 
 def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level():

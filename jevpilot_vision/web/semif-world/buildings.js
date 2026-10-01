@@ -263,7 +263,7 @@ function buildVillas(villas) {
 // --- the harbour: quay wall, breakwater, lighthouse ---------------------------------------------
 
 const QUAY_WEST = -1300, QUAY_EAST = -760;
-const BREAKWATER = [{ x: -985, z: 345 }, { x: -960, z: 430 }, { x: -920, z: 520 }];
+export const BREAKWATER = [{ x: -985, z: 345 }, { x: -960, z: 430 }, { x: -920, z: 520 }];
 
 function buildHarbour(world) {
   const quay = new Batch();
