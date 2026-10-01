@@ -44,7 +44,8 @@ python demo/server.py --port 8000 --arbiter-url http://localhost:8001
 
 ## 畫面與地圖
 
+- **Solmare Coast：** 自由駕駛預設開這張地中海海岸的開放世界（約 2.4 × 1.6 km、11 km 道路）：港口小鎮 Porto Solmare、海岸公路、葡萄園山谷、Passo del Falco 山口與 SS-1 快速道路。左上角「Start from」選出發地點，網址也可以用 `?start=festival|harbour|coast|pass|highway`。地圖由 `jevpilot_vision/web/semif-worldgen.js` 生成（道路固定，seed 只改變號誌相位、建築、交通與行人），畫面由 `jevpilot_vision/web/semif-world/` 繪製。舊的 Skyline City、Small town、Interstate 08 只在 `lap=1` 或 `?world=city|town|highway` 時出現。截圖在 [`docs/visual/solmare-coast/`](docs/visual/solmare-coast/)。
 - **場景層：** `jevpilot_vision/web/semif-scenery.js` 負責建築立面與量體、近處交通車（Model Y）、號誌燈罩、天光與小地圖輪廓。網址加 `?scenery=0` 可以關掉，回到打包檔原本的方塊外觀。
-- **地圖尺寸：** 自由駕駛時，Skyline City 與 Small town 是 7×7 個路口，約 1 km 見方。`lap=1`（benchmark 跑圈）維持原本 5×5 的地圖，跟已發布的分數可比。`?size=3..9` 可以自訂。
+- **舊地圖尺寸：** 自由駕駛時，Skyline City 與 Small town 是 7×7 個路口，約 1 km 見方。`lap=1`（benchmark 跑圈）維持原本 5×5 的地圖，跟已發布的分數可比。`?size=3..9` 可以自訂。
 - **打包檔修補：** 修改的地方與理由都列在 [`jevpilot_vision/web/BUNDLE_PATCHES.md`](jevpilot_vision/web/BUNDLE_PATCHES.md)。
 - **配色限制：** 場景的配色不會落進相機的號誌、施工與警示燈色塊範圍，由 `tests/test_scenery.py` 檢查。

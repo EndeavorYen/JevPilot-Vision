@@ -35,6 +35,10 @@
         if (!(size >= 3 && size <= 9)) size = q.get("lap") === "1" ? 5 : 7;
         size = Math.round(size);
         window.SEMIF_MAP = { size: size, cityTraffic: 28 + (size - 5) * 6, townTraffic: 14 + (size - 5) * 4 };
+        // Free driving opens on the Solmare coast; a benchmark lap keeps its published map.
+        var start = q.get("start");
+        var starts = ["festival", "harbour", "coast", "pass", "highway"];
+        window.SEMIF_DEFAULT_WORLD = q.get("lap") === "1" ? null : "coast:" + (starts.indexOf(start) >= 0 ? start : "festival");
         var proto = HTMLCanvasElement.prototype;
         var origGetContext = proto.getContext;
         proto.getContext = function (kind, attrs) {
@@ -48,6 +52,8 @@
       })();
     </script>
     <link rel="stylesheet" href="/jevpilot/semif-layer.css" />
+    <script src="/jevpilot/semif-worldgen.js?v=20261001a"></script>
+    <script type="module" src="/jevpilot/semif-world/index.js?v=20261001a"></script>
     <script type="module" crossorigin src="/jevpilot/assets/index-DC8fTtby.js?v=20260922b"></script>
     <script src="/jevpilot/semif-telemetry.js?v=20260921i"></script>
     <script src="/jevpilot/semif-scenery.js?v=20260929a"></script>
@@ -56,7 +62,7 @@
   <body class="loading">
     <div id="scene-loader" role="status" aria-live="polite">
       <strong>⚡ Loading SemArbiter JevPilot…</strong>
-      <p id="loading-message">Preparing Cedar Town, Millbrook & Interstate 08…</p>
+      <p id="loading-message">Preparing the map…</p>
       <span class="loading-spinner" aria-hidden="true"></span>
       <button id="loading-retry" hidden>Try again</button>
     </div>
