@@ -64,10 +64,10 @@ const KEYS = [2, 8, 20, 45];
 const LIGHT = {
   sun: ["#ffb48c", "#ffbf8f", "#ffd9ad", "#fff6ea"],
   sunIntensity: [3.4, 3.4, 3.4, 3.4],
-  zenith: ["#5f78ab", "#5c88bf", "#4f87c7", "#4380c8"],
-  horizon: ["#f2c6b0", "#f1d6bf", "#dfe5e8", "#d3e1ea"],
+  zenith: ["#5a74ab", "#4f7fbf", "#3d76c1", "#3170c2"],
+  horizon: ["#f2c6b0", "#ecd3c2", "#c8d9e8", "#b8d1ea"],
   glow: ["#ffd0b4", "#ffdfbf", "#fff0dc", "#fff8ee"],
-  fog: ["#d8c4b8", "#dbcfc4", "#cfdae0", "#c6d5df"],
+  fog: ["#d8c4b8", "#d6cfca", "#c3d3e0", "#b9cee0"],
   hemiSky: ["#d2b8b6", "#d0c0bc", "#c6cfdc", "#c9daef"],
   hemiGround: ["#5f544c", "#615a50", "#5c5b4f", "#585c4e"],
   hemiIntensity: [1.25, 1.0, 0.7, 0.55],
@@ -118,4 +118,19 @@ export function lightAt(hours) {
 export function tint(hours) {
   const k = boost(hours);
   return rawLight(hours).map((v, i) => (v / NOON[i]) * k);
+}
+
+// The main view's grade (post.js), never the cameras': noon neutral and crisp, a low sun warmer,
+// a touch darker and more contrasty, like a film look rather than a lux meter.
+export function gradeAt(hours) {
+  const el = elevation(hours);
+  const low = 1 - Math.min(1, Math.max(0, (el - 4) / 50)); // 1 at the horizon, 0 from 54 degrees
+  return {
+    exposure: 1 - 0.2 * low * low,
+    warmth: 0.16 * low,
+    contrast: 1.06 + 0.12 * low,
+    saturation: 1.04 + 0.14 * low,
+    vignette: 0.22 + 0.14 * low,
+    bloom: 0.55 + 0.45 * low,
+  };
 }

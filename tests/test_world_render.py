@@ -34,7 +34,10 @@ class ShaderMaterial { constructor(o) { Object.assign(this, o); } }
 class SphereGeometry extends Geo { constructor(r) { super(); this.radius = r; } }
 const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: function (a, n) { this.array = a; this.itemSize = n; },
   MeshStandardMaterial: function (o) { Object.assign(this, o); this.userData = {}; }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry,
-  TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb" };
+  TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb",
+  WebGLRenderTarget: class { constructor(w, h, o) { this.width = w; this.height = h; this.options = o; this.texture = {}; } dispose() {} },
+  OrthographicCamera: class {}, PlaneGeometry: Geo,
+  Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } } };
 globalThis.location = { search: process.argv[3] || "" };
 globalThis.document = { createElement: () => ({ style: {}, set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
   head: { appendChild() {} }, body: { appendChild(el) { globalThis.__clock = el; } }, addEventListener() {} };
@@ -90,19 +93,21 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
 def test_sun_and_present_hooks_take_over_only_on_the_coast():
     got = _render(
         "const pos = { set(x, y, z) { this.v = [x, y, z]; return this; } };"
-        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} }, renderer: { render(s, c) { view.rendered = (view.rendered || 0) + 1; } },"
-        "  sun: { position: pos, target: { position: { set() {} } }, shadow: { camera: {} }, color: { setRGB() {} } }, render(dt, draw) { return 'base'; } };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} },"
+        "  renderer: { getDrawingBufferSize(v) { return v.set(64, 32); }, setRenderTarget(t) { this.target = t; }, render(s, c) { view.rendered = (view.rendered || 0) + 1; view.last = this.target; } },"
+        "  sun: { position: pos, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() }, render(dt, draw) { return 'base'; } };"
         "api.built(view);"
-        "const coast = { sun: api.sun(view, { x: 10, z: 20 }), sunAt: pos.v, present: api.present(view), rendered: view.rendered, far: view.camera.far, frame: view.render(0.016, true) };"
+        "const coast = { sun: api.sun(view, { x: 10, z: 20 }), sunAt: pos.v, present: api.present(view), rendered: view.rendered, toScreen: view.last === null, far: view.camera.far, frame: view.render(0.016, true) };"
+        "view.rendered = 0;"
         "window.SEMIF_SIM = { world: { type: 'city' } };"
         "const city = { sun: api.sun(view, { x: 10, z: 20 }), present: api.present(view), rendered: view.rendered };"
         "out({ coast, city });"
     )
     assert got["coast"]["sun"] is True and got["coast"]["sunAt"] is not None
-    assert got["coast"]["present"] is True and got["coast"]["rendered"] == 1
+    assert got["coast"]["present"] is True and got["coast"]["rendered"] >= 1 and got["coast"]["toScreen"]
     assert got["coast"]["far"] >= 2600, "the coast is 2.5 km across"
     assert got["coast"]["frame"] == "base", "the per-frame wrapper still runs the bundle's render"
-    assert not got["city"]["sun"] and not got["city"]["present"] and got["city"]["rendered"] == 1
+    assert not got["city"]["sun"] and not got["city"]["present"] and got["city"]["rendered"] == 0
 
 
 _VIEW = (
@@ -144,6 +149,19 @@ def test_the_clock_runs_unless_the_time_is_fixed():
     assert "16:30" in running[0] and running[0] != running[1], "free driving opens at 16:30 and the clock moves"
     assert fixed[0] == fixed[1] and "09:30" in fixed[0]
     assert paused[0] == paused[1] and "16:30" in paused[0]
+
+
+def test_the_main_view_renders_through_post_processing_onto_the_screen():
+    got = _render(
+        "const targets = []; const renderer = { getDrawingBufferSize(v) { return v.set(1280, 720); }, setRenderTarget(t) { this.target = t; },"
+        "  render(scene, camera) { targets.push(this.target ? this.target.width + 'x' + this.target.height : 'screen'); } };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, position: new Vec3(), updateProjectionMatrix() {} }, renderer, render() {},"
+        "  sun: { position: new Vec3(), target: { position: new Vec3() }, color: new Color(), shadow: { camera: { updateProjectionMatrix() {} } } } };"
+        "api.built(view); api.present(view); out(targets);"
+    )
+    assert got[0] == "1280x720", "the scene goes to a full-size target first"
+    assert got[-1] == "screen", "the graded picture lands on the screen last"
+    assert "640x360" in got, "bloom works at half size and below"
 
 
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():

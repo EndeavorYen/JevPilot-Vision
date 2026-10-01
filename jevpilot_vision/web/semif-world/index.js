@@ -10,10 +10,13 @@ import { buildSea, updateSea } from "./water.js";
 import { buildRoads } from "./roads.js";
 import { buildBuildings } from "./buildings.js";
 import { buildSky, widenShadows, placeSun, applyLight } from "./sky.js";
-import { sunDirection } from "./daylight.js";
+import { sunDirection, gradeAt } from "./daylight.js";
+import { createPost } from "./post.js";
 import { clock, mountClock, showClock, tick } from "./clock.js";
 
 const legacy = window.SEMIF_SCENERY || {};
+// ?post=0 draws the main view straight to the screen, without bloom or grade.
+const POST = new URLSearchParams(globalThis.location?.search || "").get("post") !== "0";
 const onCoast = () => window.SEMIF_SIM?.world?.type === "coast";
 
 // The coast is about 2.5 km across; the bundle's camera stops at 1.2 km.
@@ -49,6 +52,7 @@ function setFar(view, far) {
 
 let sky = null;
 let sea = null;
+let post = null;
 
 frameHooks.push((view, dt) => {
   tick(dt);
@@ -122,7 +126,9 @@ window.SEMIF_SCENERY = {
   },
   present(view) {
     if (!onCoast()) return false;
-    view.renderer.render(view.scene, view.camera);
+    if (!POST) return false;
+    post ??= createPost();
+    post.render(view, gradeAt(clock.hours));
     return true;
   },
   minimap(ctx, world, project, scale) {

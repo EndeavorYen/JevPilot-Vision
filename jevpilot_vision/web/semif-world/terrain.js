@@ -28,7 +28,7 @@ function axis(lo, hi) {
 // Texture layers: Poly Haven CC0 maps (textures/LICENSE.md), tinted to Mediterranean tones and
 // lifted so shaded ground stays clear of the camera's dark "pedestrian" mask.
 const LAYERS = [
-  { file: "grass-color.jpg", scale: 9, tint: [0.98, 1.22, 1.1] },
+  { file: "grass-color.jpg", scale: 9, tint: [0.9, 1.02, 0.96] },
   { file: "dry-color.jpg", scale: 4.5, tint: [1.22, 1.2, 1.1] },
   { file: "rock-color.jpg", scale: 9, tint: [1.85, 1.85, 1.95] },
   { file: "sand-color.jpg", scale: 7, tint: [1.42, 1.4, 1.36] },

@@ -121,3 +121,14 @@ def test_low_sun_is_warm_and_high_sun_is_near_white(day):
     golden, noon = at[19.0], at[13.0]
     assert golden[0] > golden[2] + 0.12, "golden hour is warm"
     assert abs(noon[0] - noon[2]) < 0.06, "noon is neutral"
+
+
+def test_the_main_view_grade_is_neutral_at_noon_and_warm_and_moody_at_dusk():
+    got = _day("out([13, 17.75, 19.5, 6.5].map((h) => D.gradeAt(h)));")
+    noon, golden, dusk, dawn = got
+    assert noon["exposure"] == pytest.approx(1.0) and noon["warmth"] == pytest.approx(0, abs=0.02)
+    for g in (golden, dusk, dawn):
+        assert g["warmth"] > 0.05 and g["contrast"] >= noon["contrast"]
+    assert dusk["exposure"] < golden["exposure"] < noon["exposure"] + 1e-9
+    for g in got:
+        assert 0.75 <= g["exposure"] <= 1.05 and 0.9 <= g["saturation"] <= 1.35 and 0 <= g["vignette"] <= 0.5
