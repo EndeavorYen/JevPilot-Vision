@@ -25,8 +25,8 @@
 範圍約 2.4 km × 1.6 km，北為 −z，南側為海。
 
 ```
- 北  ══════════ SS-1 濱海高速（雙向四線，100 km/h）══════════
-       ╲ 匝道                                       匝道 ╱
+ 北  ═══════ SS-1 Costiera 快速道路（雙向四線，100 km/h）═══╦═══════
+       ║                                     號誌路口 ║        ╲
    ┌─────┴─────┐      葡萄園山谷        ╭─╮  ╭─╮   Passo del Falco
    │ Porto     │   Via delle Vigne     │ ╰──╯ │  懸崖髮夾彎
    │ Solmare   ├──── S 形彎道 ───┐     ╰╮      ╰─╮
@@ -36,8 +36,10 @@
  南 ~~~~~~~~~~ 海岸公路 Lungomare（沿海灣與岬角彎曲）~~~~~~ 海 ~~~~~~
 ```
 
-- **路網：** 全部雙向，組成多個環路，強連通、無死路。路口只有 T 字與十字；港口鎮用號誌，鄉間用停車標誌。每個路口的各路臂分成兩組（南北向、東西向），符合打包檔號誌相位 `Math.abs(Math.cos(approach))>.5` 的分法。高速公路只以匝道併入和駛出，沒有任何不經路口的交叉。
-- **限速：** 港口小鎮 50 km/h、海岸 80 km/h、山谷彎道依彎度 45–60 km/h、髮夾彎 35 km/h、高速 100 km/h。彎道各自是獨立 edge，自駕靠打包檔既有的減速邏輯在彎前降速。限速與彎度須滿足：限速下的側向加速度不超過 3 m/s²。
+- **路網：** 道路是固定設計（seed 只改變號誌相位、建築、交通車與行人，「New layout」重擲的是這些）。全部雙向，組成多個環路，強連通、無死路。路口只有 T 字與十字；港口鎮與節慶區用號誌，山口腳用停車標誌。每條路在路口的最後 25 m 是正南北或正東西的直線（打包檔的轉彎平滑與號誌相位 `Math.abs(Math.cos(approach))>.5` 都以軸向為前提），彎道放在路段中間。所有道路只在路口相交。
+- **SS-1 Costiera：** 北側的快速道路，畫成雙向四線，模擬裡每個方向一條車道（內側），外側車道只是畫面。平面世界沒有立體交叉，對向匝道必然穿越另一側車道，所以 SS-1 不做匝道：西端下坡接港口，東端接山口，中間以一個號誌路口連到節慶區，路口前後各 400 m 限速 80 km/h。
+- **路邊停車：** 打包檔會把第 2、6 號交通車停在車道上當障礙物，後車不會超車而永久排隊，所以新地圖不產生模擬用的路邊停車；路邊停車改為第 4 期的裝飾物件。
+- **限速：** 港口小鎮與節慶區 50 km/h、海岸 80 km/h（彎道處 68–76）、山谷道路 70 km/h（彎道處 59–68）、山口 35 km/h、SS-1 100 km/h。彎道各自是獨立 edge，自駕靠打包檔既有的減速邏輯在彎前降速。限速與彎度須滿足：限速下的側向加速度不超過 3 m/s²。
 - **地形：** 路面固定 y=0，路邊 3–6 m 路肩過渡。路肩以外由高度場決定：北側山丘最高約 150 m，山谷兩側起坡，海岸與髮夾彎外側降到約 −12 m 形成斷崖，崖邊設護欄。地形只影響畫面，物理仍是平的。
 - **出生與路線：** 自由駕駛預設從節慶據點出發。原「Change map」下拉選單改為「出發地點」：節慶據點、港口、海岸、山口、高速，對應網址 `?start=festival|harbour|coast|pass|highway`。目的地鏈固定為節慶據點 → 港口 → 海岸 → 山口 → 高速 → 節慶據點，從所選出發地點的下一站開始，到達後自動接續下一站。
 - **舊地圖：** City／Town／Interstate 只在 `lap=1` 或網址明確寫 `?world=city|town|highway` 時出現，下拉選單不再列出。
@@ -60,7 +62,7 @@
 
 - 以 IIFE 寫成、只用 `globalThis`，主執行緒用 `<script>` 載入，worker 用檔頭 `import "/jevpilot/semif-worldgen.js";` 載入。全域名稱 `globalThis.SEMIF_WORLDGEN`（`SEMIF_WORLD` 已被打包檔的 renderer 佔用）。
 - `generate(seed, {start})` 回傳 `type: "coast"` 的世界，欄位與打包檔 `dt()` 相同：`seed, type, theme, nodes, byId, edges, objects, connectorRoads, bounds, startNode, nextNode, destination, route`。
-  - 每條 edge 帶 `path`；雙向 edge 另帶 `centerline` 與 `laneOffset`，`kind` 與 `laneHalfWidth` 每條自訂。
+  - 每條 edge 都是雙向，帶 `path`、`centerline` 與 `laneOffset`（一律 3 m，所以在路口直行或經過路段分界點時車道路徑都連續），`kind` 與 `laneHalfWidth` 每條自訂。
   - 路口節點 `townJunction: true`，帶 `control`（`signal`／`stop`）與 `offset`，並產生對應的 `traffic_light`／`stop_sign` 物件（`{nodeId, approach, height}`）。
   - 碰撞用 `building` 物件：只產生離路 25 m 內的建築，維持軸對齊，涵蓋可見量體。
   - 不產生 `roadSamples`；打包檔裡依賴它的地方由補丁改走 `path`。
@@ -101,6 +103,9 @@
 | 路線 | 道路多邊形：帶 `path` 的 edge 不再以直線 `It(` 生成 | main、wk |
 | 導航 | 導航文字表補上新路段類型 `harbour`、`coastal`、`valley`、`pass`（高速沿用既有的 `onramp`／`merge`／`interstate`／`exit`／`offramp`） | main、wk |
 | 模擬 | 行人生成：`coast` 時改用 `visual` 的人行道路徑 | main、wk |
+| 模擬 | `coast` 不產生路邊停車的交通車 | main、wk |
+| 模擬 | 號誌路口轉彎限速在 `coast` 照常生效（打包檔在有路段資訊時會關掉它） | main、wk |
+| 模擬 | 自由駕駛抵達後依固定的目的地鏈前往下一站 | main |
 | 模擬 | worker 訊息帶 `SEMIF_MAP`，worker 用它重建世界（同時修正 7×7 自由駕駛時 worker 用 5×5 規劃的既有 bug） | main、wk |
 | 畫面 | `coast` 時跳過打包檔的路面、路口墊、地面、glb 植被與路燈 | main |
 | 畫面 | `th()`：`coast` 時不下載 `daylight.hdr` | main |
