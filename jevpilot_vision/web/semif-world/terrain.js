@@ -1,83 +1,131 @@
-// Ground and seabed: one height-field mesh. Land is flat at the road's level (the simulation is
-// flat); below the shoreline the ground shelves down under the sea surface.
-import { PALETTE, T, Batch, material } from "./kit.js";
+// Ground mesh: one height-field over the map and well beyond it (mountains to the north, sea floor
+// to the south), fine near the roads and coarser towards the horizon. Its material blends grass,
+// dry grass, rock and sand by the weights heights.js gives each vertex.
+import { T, material } from "./kit.js";
 
-const CELL = 10;
-const MARGIN = 300; // ground beyond the drivable bounds, so the horizon is not an edge
-const SHELF = 0.12; // seabed drop per metre from the shoreline
-const SEABED = -6;
+const FINE = 6; // metres between vertices over the drivable map
+const COARSE = 48; // metres between vertices at the far edge
+const CORE = 100; // fine spacing reaches this far past the map's bounds
+const REACH = 900; // the ground reaches this far past the bounds
 
-// The sea is the polygon closed by the shoreline and the map's south-east corner beyond it.
-export function seaPolygon(shoreline, bounds) {
-  const far = 4000;
-  const first = shoreline[0], last = shoreline.at(-1);
-  return [...shoreline, { x: last.x + far, z: last.z }, { x: last.x + far, z: bounds.maxZ + far }, { x: first.x - far, z: bounds.maxZ + far }, { x: first.x - far, z: first.z }];
-}
-
-export function inside(poly, p) {
-  let hit = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[i], b = poly[j];
-    if (a.z > p.z !== b.z > p.z && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) hit = !hit;
-  }
-  return hit;
-}
-
-export function distanceToLine(line, p) {
-  let best = Infinity;
-  for (let i = 0; i < line.length - 1; i++) {
-    const a = line[i], b = line[i + 1], dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz;
-    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2));
-    best = Math.min(best, Math.hypot(p.x - a.x - t * dx, p.z - a.z - t * dz));
-  }
-  return best;
-}
-
-// Height of the ground at p: 0 on land, shelving to SEABED under the sea.
-export function groundHeight(world, p, sea = seaPolygon(world.visual.shoreline, world.bounds)) {
-  if (!inside(sea, p)) return -0.05;
-  return Math.max(SEABED, -0.05 - distanceToLine(world.visual.shoreline, p) * SHELF);
-}
-
-// Linear RGB for a vertex colour; three.js converts the sRGB hex when it builds the Color.
-function linear(hex) {
-  const c = new T.Color(hex);
-  return [c.r, c.g, c.b];
-}
-
-export function buildTerrain(world) {
-  const { bounds } = world;
-  const sea = seaPolygon(world.visual.shoreline, bounds);
-  const x0 = bounds.minX - MARGIN, x1 = bounds.maxX + MARGIN, z0 = bounds.minZ - MARGIN, z1 = bounds.maxZ + MARGIN;
-  const nx = Math.round((x1 - x0) / CELL), nz = Math.round((z1 - z0) / CELL);
-  const grass = PALETTE.grass.map(linear), sand = linear(PALETTE.sand), seabed = linear(PALETTE.seabed);
-  const vertex = [];
-  for (let j = 0; j <= nz; j++) {
-    const row = [];
-    for (let i = 0; i <= nx; i++) {
-      const p = { x: x0 + i * CELL, z: z0 + j * CELL };
-      const wet = inside(sea, p);
-      const shore = distanceToLine(world.visual.shoreline, p);
-      const y = wet ? Math.max(SEABED, -0.05 - shore * SHELF) : -0.05;
-      const colour = wet ? (shore < 12 ? sand : seabed) : shore < 25 ? sand : grass[(i * 7 + j * 13) % grass.length];
-      row.push({ x: p.x, y, z: p.z, colour });
+// Vertex positions along one axis: FINE inside [lo, hi], growing to COARSE out to [lo-REACH, hi+REACH].
+function axis(lo, hi) {
+  const inner = [];
+  for (let v = lo - CORE; v <= hi + CORE + 1e-6; v += FINE) inner.push(v);
+  const out = (start, dir) => {
+    const list = [];
+    let v = start, step = FINE;
+    while (Math.abs(v - start) < REACH - CORE) {
+      step = Math.min(COARSE, step * 1.12);
+      v += dir * step;
+      list.push(v);
     }
-    vertex.push(row);
+    return list;
+  };
+  return [...out(inner[0], -1).reverse(), ...inner, ...out(inner.at(-1), 1)];
+}
+
+// Texture layers: Poly Haven CC0 maps (textures/LICENSE.md), tinted to Mediterranean tones and
+// lifted so shaded ground stays clear of the camera's dark "pedestrian" mask.
+const LAYERS = [
+  { file: "grass-color.jpg", scale: 9, tint: [0.98, 1.22, 1.1] },
+  { file: "dry-color.jpg", scale: 4.5, tint: [1.22, 1.2, 1.1] },
+  { file: "rock-color.jpg", scale: 9, tint: [1.85, 1.85, 1.95] },
+  { file: "sand-color.jpg", scale: 7, tint: [1.42, 1.4, 1.36] },
+];
+
+let textures = null;
+function layerTextures() {
+  if (textures) return textures;
+  const loader = new T.TextureLoader();
+  textures = LAYERS.map((layer) => {
+    const t = loader.load(`/jevpilot/textures/${layer.file}`);
+    t.wrapS = t.wrapT = T.RepeatWrapping;
+    t.colorSpace = T.SRGBColorSpace;
+    t.anisotropy = 8;
+    return t;
+  });
+  return textures;
+}
+
+function splatMaterial() {
+  const mat = material("#ffffff", { roughness: 0.96 });
+  if (mat.userData.splat) return mat;
+  mat.userData.splat = true;
+  const maps = layerTextures();
+  mat.onBeforeCompile = (shader) => {
+    LAYERS.forEach((layer, i) => {
+      shader.uniforms[`tLayer${i}`] = { value: maps[i] };
+    });
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec4 aSplat;\nvarying vec4 vSplat;\nvarying vec3 vWorld;\nvarying vec3 vWorldNormal;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSplat = aSplat;\nvWorld = (modelMatrix * vec4(position, 1.0)).xyz;\nvWorldNormal = normalize(mat3(modelMatrix) * normal);");
+    const sample = LAYERS.map((l, i) => `vec3 c${i} = texture2D(tLayer${i}, vWorld.xz / ${l.scale.toFixed(1)}).rgb * vec3(${l.tint.map((v) => v.toFixed(3)).join(", ")});`).join("\n");
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>\n${LAYERS.map((_, i) => `uniform sampler2D tLayer${i};`).join("\n")}\nvarying vec4 vSplat;\nvarying vec3 vWorld;\nvarying vec3 vWorldNormal;`,
+      )
+      .replace(
+        "#include <map_fragment>",
+        `${sample}
+        // Rock on steep faces is projected from the side, so cliffs do not smear.
+        vec3 n = abs(normalize(vWorldNormal));
+        vec3 rockSide = texture2D(tLayer2, vWorld.xy / 9.0).rgb * n.z + texture2D(tLayer2, vWorld.zy / 9.0).rgb * n.x;
+        c2 = mix(c2, rockSide * vec3(1.85, 1.85, 1.95) / max(n.x + n.z, 0.001), smoothstep(0.35, 0.75, 1.0 - n.y));
+        vec3 ground = c0 * vSplat.x + c1 * vSplat.y + c2 * vSplat.z + c3 * vSplat.w;
+        // Broad patches break up the tiling.
+        float patches = texture2D(tLayer1, vWorld.xz / 173.0).g;
+        ground *= 0.86 + 0.28 * patches;
+        diffuseColor.rgb *= ground;`,
+      );
+  };
+  return mat;
+}
+
+export function buildTerrain(world, field) {
+  const xs = axis(world.bounds.minX, world.bounds.maxX);
+  const zs = axis(world.bounds.minZ, world.bounds.maxZ);
+  const nx = xs.length, nz = zs.length;
+  const positions = new Float32Array(nx * nz * 3);
+  const splat = new Float32Array(nx * nz * 4);
+  const heights = new Float32Array(nx * nz);
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) heights[j * nx + i] = field.heightAt(xs[i], zs[j]);
   }
-  const batch = new Batch();
-  batch.colors = [];
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) {
-      const a = vertex[j][i], b = vertex[j][i + 1], c = vertex[j + 1][i + 1], d = vertex[j + 1][i];
-      for (const [p, q, r] of [[a, d, c], [a, c, b]]) {
-        for (const v of [p, q, r]) {
-          batch.positions.push(v.x, v.y, v.z);
-          batch.colors.push(...v.colour);
-        }
+      const k = j * nx + i;
+      positions.set([xs[i], heights[k], zs[j]], k * 3);
+      // Near the map the weights come from the field itself; far away a cheaper slope estimate.
+      const far = xs[i] < world.bounds.minX - CORE || xs[i] > world.bounds.maxX + CORE || zs[j] < world.bounds.minZ - CORE || zs[j] > world.bounds.maxZ + CORE;
+      if (!far) {
+        splat.set(field.surface(xs[i], zs[j]), k * 4);
+        continue;
       }
+      const i0 = Math.max(0, i - 1), i1 = Math.min(nx - 1, i + 1), j0 = Math.max(0, j - 1), j1 = Math.min(nz - 1, j + 1);
+      const gx = (heights[j * nx + i1] - heights[j * nx + i0]) / (xs[i1] - xs[i0]);
+      const gz = (heights[j1 * nx + i] - heights[j0 * nx + i]) / (zs[j1] - zs[j0]);
+      const rock = Math.min(1, Math.max(0, (Math.hypot(gx, gz) - 0.5) / 0.4));
+      const sand = heights[k] < -9 ? 1 - rock : 0;
+      splat.set([(1 - rock - sand) * 0.45, (1 - rock - sand) * 0.55, rock, sand], k * 4);
     }
   }
-  const mesh = batch.mesh(material("#ffffff", { vertexColors: true }));
+  const index = [];
+  for (let j = 0; j < nz - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const a = j * nx + i, b = a + 1, c = a + nx + 1, d = a + nx;
+      index.push(a, d, c, a, c, b);
+    }
+  }
+  const geo = new T.BufferGeometry();
+  geo.setAttribute("position", new T.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("aSplat", new T.Float32BufferAttribute(splat, 4));
+  geo.setIndex(index);
+  geo.computeVertexNormals();
+  const mesh = new T.Mesh(geo, splatMaterial());
   mesh.name = "semif-terrain";
+  mesh.receiveShadow = true;
+  mesh.castShadow = true;
   return mesh;
 }

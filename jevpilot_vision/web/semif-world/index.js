@@ -4,7 +4,8 @@
 // (semif-scenery.js): on the coast map it draws the world itself, on every other map it hands each
 // hook to the old layer unchanged.
 import { PALETTE, T, setKit, resetCaches } from "./kit.js";
-import { buildTerrain, seaPolygon } from "./terrain.js";
+import { buildTerrain } from "./terrain.js";
+import { createHeightField, seaPolygon } from "./heights.js";
 import { buildSea } from "./water.js";
 import { buildRoads } from "./roads.js";
 import { buildBuildings } from "./buildings.js";
@@ -63,7 +64,8 @@ function buildCoast(view) {
   const root = new T.Group();
   root.name = "semif-world";
   sky = buildSky();
-  root.add(sky, buildTerrain(world), buildSea(world), buildRoads(world), buildBuildings(world));
+  const field = createHeightField(world);
+  root.add(sky, buildTerrain(world, field), buildSea(world), buildRoads(world), buildBuildings(world));
   view.scene.add(root);
   widenShadows(view.sun);
   mountClock();

@@ -26,14 +26,15 @@ const require = createRequire(import.meta.url);
 const [worldgen, renderDir] = process.argv.slice(1, 3);
 require(worldgen);
 class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { copy(v) { this.v = v; } }; } add(...c) { this.children.push(...c); } }
-class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } computeVertexNormals() {} }
+class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } setIndex(i) { this.index = i; } computeVertexNormals() {} }
 class Mesh extends Obj { constructor(g, m) { super(); this.geometry = g; this.material = m; } }
 class Color { constructor(hex) { this.set(hex || "#000000"); } set(hex) { this.hex = hex; const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; return this; } copy(c) { return this.set(c.hex); } }
 class Vec3 { constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); } set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; } copy(v) { return this.set(v.x, v.y, v.z); } }
 class ShaderMaterial { constructor(o) { Object.assign(this, o); } }
 class SphereGeometry extends Geo { constructor(r) { super(); this.radius = r; } }
 const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: function (a, n) { this.array = a; this.itemSize = n; },
-  MeshStandardMaterial: function (o) { Object.assign(this, o); }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry };
+  MeshStandardMaterial: function (o) { Object.assign(this, o); this.userData = {}; }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry,
+  TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb" };
 globalThis.location = { search: process.argv[3] || "" };
 globalThis.document = { createElement: () => ({ style: {}, set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
   head: { appendChild() {} }, body: { appendChild(el) { globalThis.__clock = el; } }, addEventListener() {} };
@@ -147,13 +148,16 @@ def test_the_clock_runs_unless_the_time_is_fixed():
 
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
     got = _render(
-        "const roads = (await mod('roads.js')).buildRoads(world); const terrain = (await mod('terrain.js')).buildTerrain(world);"
+        "const roads = (await mod('roads.js')).buildRoads(world); const terrain = (await mod('terrain.js')).buildTerrain(world, (await mod('heights.js')).createHeightField(world));"
         "const area = (m) => { const p = m.geometry.attributes.position.array; let a = 0, down = 0;"
         "  for (let i = 0; i < p.length; i += 9) { const ux = p[i + 3] - p[i], uz = p[i + 5] - p[i + 2], vx = p[i + 6] - p[i], vz = p[i + 8] - p[i + 2];"
         "    const y = uz * vx - ux * vz; a += Math.abs(y) / 2; if (y < -1e-9) down++; } return { a, down }; };"
         "const parts = meshes(roads).map((m) => ({ color: m.material.color, ...area(m) }));"
         "const expect = world.connectorRoads.reduce((s, r) => s + r.points.at(-1).s * r.width, 0);"
-        "out({ parts, expect, terrain: area(terrain) });"
+        "const tp = terrain.geometry.attributes.position.array, ti = terrain.geometry.index; let tdown = 0;"
+        "for (let k = 0; k < ti.length; k += 3) { const [a, b, c] = [ti[k] * 3, ti[k + 1] * 3, ti[k + 2] * 3];"
+        "  const ux = tp[b] - tp[a], uz = tp[b + 2] - tp[a + 2], vx = tp[c] - tp[a], vz = tp[c + 2] - tp[a + 2]; if (uz * vx - ux * vz < -1e-9) tdown++; }"
+        "out({ parts, expect, terrain: { down: tdown, triangles: ti.length / 3 } });"
     )
     asphalt = got["parts"][0]
     assert asphalt["color"] == "#4d5257"
@@ -193,17 +197,24 @@ def test_buildings_stand_exactly_on_their_collision_boxes():
     assert got["n"] > 50 and got["outside"] == []
 
 
-def test_the_ground_is_flat_on_land_and_shelves_down_under_the_sea():
+def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level():
     got = _render(
-        "const t = await mod('terrain.js');"
-        "out({ festival: t.groundHeight(world, { x: 0, z: 250 }), harbour: t.groundHeight(world, { x: -950, z: 200 }),"
-        "  shore: t.groundHeight(world, { x: 0, z: 570 }), offshore: t.groundHeight(world, { x: 0, z: 900 }),"
-        "  sea: (await mod('water.js')).SEA_LEVEL });"
+        "const H = await mod('heights.js'); const field = H.createHeightField(world);"
+        "const mesh = (await mod('terrain.js')).buildTerrain(world, field);"
+        "const p = mesh.geometry.attributes.position.array, s = mesh.geometry.attributes.aSplat.array;"
+        "let worst = 0, splatOff = 0, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;"
+        "for (let i = 0; i < p.length; i += 3 * 97) worst = Math.max(worst, Math.abs(p[i + 1] - field.heightAt(p[i], p[i + 2])));"
+        "for (let i = 0; i < s.length; i += 4) splatOff = Math.max(splatOff, Math.abs(s[i] + s[i + 1] + s[i + 2] + s[i + 3] - 1));"
+        "for (let i = 0; i < p.length; i += 3) { minX = Math.min(minX, p[i]); maxX = Math.max(maxX, p[i]); minZ = Math.min(minZ, p[i + 2]); maxZ = Math.max(maxZ, p[i + 2]); }"
+        "out({ worst, splatOff, extent: [minX, maxX, minZ, maxZ], vertices: p.length / 3, sea: (await mod('water.js')).SEA_LEVEL, level: H.SEA_LEVEL, bounds: world.bounds });"
     )
-    assert got["festival"] == got["harbour"] == -0.05
-    assert got["sea"] < got["festival"]
-    assert got["offshore"] < got["shore"] < got["festival"]
-    assert got["offshore"] < got["sea"], "open water is deeper than the surface"
+    assert got["worst"] < 1e-4
+    assert got["splatOff"] < 1e-4
+    b = got["bounds"]
+    assert got["extent"][0] <= b["minX"] - 800 and got["extent"][1] >= b["maxX"] + 800
+    assert got["extent"][2] <= b["minZ"] - 800 and got["extent"][3] >= b["maxZ"] + 800
+    assert got["vertices"] < 260_000
+    assert got["sea"] == got["level"]
 
 
 def _palette() -> dict:

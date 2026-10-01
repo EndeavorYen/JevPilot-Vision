@@ -1,7 +1,8 @@
 // The sea surface: one flat sheet just below the road level, reaching past the far plane.
 import { PALETTE, Batch, material } from "./kit.js";
+import { SEA_LEVEL } from "./heights.js";
 
-export const SEA_LEVEL = -0.6;
+export { SEA_LEVEL };
 const REACH = 6000;
 
 export function buildSea() {
