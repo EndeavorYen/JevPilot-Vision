@@ -39,3 +39,6 @@
 | `coast-world-picker`、`coast-picker-value`、`coast-new-layout` | main | 新地圖上，選單改為「Start from」加 5 個出發地點；「New layout」保留出發地點 | 舊地圖不再列在新地圖的選單裡 |
 | `coast-next-destination`、`coast-commit-destination` | main | 抵達後的下一站依固定的目的地鏈；路線排得出來才確認換站 | 原本是隨機挑一個節點；路線失敗時打包檔每個 tick 都會再問一次，先換站會一路跳站 |
 | `coast-ground`、`coast-roads-off`、`coast-pads-off`、`coast-streetlights-off` | main | `coast` 不畫打包檔的地面、直線路面、路口方塊和 glb 路燈 | 這些都由 `semif-world/` 負責 |
+| `coast-kit-classes` | main | `kit()` 多交出 ShaderMaterial、RenderTarget、正交相機、向量與矩陣、DataTexture、TextureLoader、Fog、HemisphereLight、InstancedBufferAttribute | 渲染器要自己寫天空、海、後製與 instancing；壓縮名稱由 `test_kit_classes_are_the_classes_they_claim_to_be` 核對 |
+| `coast-sun` | main | 太陽位置先問 `SEMIF_SCENERY.sun(view, player)` | 日照循環：太陽方向依時間改變 |
+| `coast-present` | main | 主畫面輸出先問 `SEMIF_SCENERY.present(view)` | 後製只作用在主畫面；車載相機另外渲染，不受影響 |

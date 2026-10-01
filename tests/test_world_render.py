@@ -25,12 +25,22 @@ import { pathToFileURL } from "url";
 const require = createRequire(import.meta.url);
 const [worldgen, renderDir] = process.argv.slice(1, 3);
 require(worldgen);
-class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; } add(...c) { this.children.push(...c); } }
-class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } computeVertexNormals() {} }
+class Obj { constructor() { this.children = []; this.userData = {}; this.name = ""; this.position = { copy(v) { this.v = v; } }; } add(...c) { this.children.push(...c); } }
+class Geo { constructor() { this.attributes = {}; } setAttribute(k, v) { this.attributes[k] = v; } setIndex(i) { this.index = i; } computeVertexNormals() {} }
 class Mesh extends Obj { constructor(g, m) { super(); this.geometry = g; this.material = m; } }
-class Color { constructor(hex) { const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; } }
+class Color { constructor(hex) { this.set(hex || "#000000"); } set(hex) { this.hex = hex; const n = parseInt(hex.slice(1), 16); this.r = (n >> 16) / 255; this.g = ((n >> 8) & 255) / 255; this.b = (n & 255) / 255; return this; } copy(c) { return this.set(c.hex); } }
+class Vec3 { constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); } set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; } copy(v) { return this.set(v.x, v.y, v.z); } }
+class ShaderMaterial { constructor(o) { Object.assign(this, o); } }
+class SphereGeometry extends Geo { constructor(r) { super(); this.radius = r; } }
 const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: function (a, n) { this.array = a; this.itemSize = n; },
-  MeshStandardMaterial: function (o) { Object.assign(this, o); }, Color };
+  MeshStandardMaterial: function (o) { Object.assign(this, o); this.userData = {}; }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry,
+  TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb",
+  WebGLRenderTarget: class { constructor(w, h, o) { this.width = w; this.height = h; this.options = o; this.texture = {}; } dispose() {} },
+  OrthographicCamera: class {}, PlaneGeometry: Geo,
+  Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } } };
+globalThis.location = { search: process.argv[3] || "" };
+globalThis.document = { createElement: () => ({ style: {}, set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {} }),
+  head: { appendChild() {} }, body: { appendChild(el) { globalThis.__clock = el; } }, addEventListener() {} };
 const calls = [];
 globalThis.window = { SEMIF_SCENERY: {
   palette: { legacy: true },
@@ -42,18 +52,19 @@ const mod = (name) => import(pathToFileURL(`${renderDir}/${name}`));
 await mod("index.js");
 const api = window.SEMIF_SCENERY;
 api.kit(kit);
-const find = (o, name) => o.name === name ? o : o.children.map((c) => find(c, name)).find(Boolean);
+const find = (o, name) => o.name === name ? o : (o.children || []).map((c) => find(c, name)).find(Boolean);
 const meshes = (o) => [...(o.geometry ? [o] : []), ...o.children.flatMap(meshes)];
 const out = (v) => process.stdout.write(JSON.stringify(v));
 """
 
 
-def _render(body: str):
+def _render(body: str, search: str = ""):
     proc = subprocess.run(
-        ["node", "--input-type=module", "-e", _PRELUDE + body, str(WEB / "semif-worldgen.js"), str(RENDER)],
+        ["node", "--input-type=module", "-e", _PRELUDE + body, str(WEB / "semif-worldgen.js"), str(RENDER), search],
         cwd=str(REPO),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if proc.returncode != 0:
@@ -63,7 +74,7 @@ def _render(body: str):
 
 def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_layer():
     got = _render(
-        "const scene = new Obj(); api.built({ sim: { world }, scene, _sceneryHooks: ['old'] });"
+        "const scene = new Obj(); api.built({ sim: { world }, scene, _sceneryHooks: ['old'], render() {} });"
         "const root = scene.children[0]; const coast = { root: root.name, parts: root.children.map((c) => c.name),"
         "  building: api.object(null, { type: 'building' }, null), lamp: api.object(null, { type: 'streetlight' }, null), calls: calls.slice() };"
         "window.SEMIF_SIM = { world: { type: 'city' } }; const city = new Obj();"
@@ -71,7 +82,7 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
         "out({ coast, legacy, calls, palette: api.palette });"
     )
     assert got["coast"]["root"] == "semif-world"
-    assert got["coast"]["parts"] == ["semif-terrain", "semif-sea", "semif-roads", "semif-buildings"]
+    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings"]
     assert got["coast"]["building"] is True and got["coast"]["lamp"] is False
     assert got["coast"]["calls"] == ["kit"], "the old layer only sees the kit on the coast"
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
@@ -79,26 +90,136 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
     assert got["palette"] == {"legacy": True}
 
 
+def test_sun_and_present_hooks_take_over_only_on_the_coast():
+    got = _render(
+        "const pos = { set(x, y, z) { this.v = [x, y, z]; return this; } };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} },"
+        "  renderer: { getDrawingBufferSize(v) { return v.set(64, 32); }, setRenderTarget(t) { this.target = t; }, render(s, c) { view.rendered = (view.rendered || 0) + 1; view.last = this.target; } },"
+        "  sun: { position: pos, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() }, render(dt, draw) { return 'base'; } };"
+        "api.built(view);"
+        "const coast = { sun: api.sun(view, { x: 10, z: 20 }), sunAt: pos.v, present: api.present(view), rendered: view.rendered, toScreen: view.last === null, far: view.camera.far, frame: view.render(0.016, true) };"
+        "view.rendered = 0;"
+        "window.SEMIF_SIM = { world: { type: 'city' } };"
+        "const city = { sun: api.sun(view, { x: 10, z: 20 }), present: api.present(view), rendered: view.rendered };"
+        "out({ coast, city });"
+    )
+    assert got["coast"]["sun"] is True and got["coast"]["sunAt"] is not None
+    assert got["coast"]["present"] is True and got["coast"]["rendered"] >= 1 and got["coast"]["toScreen"]
+    assert got["coast"]["far"] >= 2600, "the coast is 2.5 km across"
+    assert got["coast"]["frame"] == "base", "the per-frame wrapper still runs the bundle's render"
+    assert not got["city"]["sun"] and not got["city"]["present"] and got["city"]["rendered"] == 0
+
+
+_VIEW = (
+    "const hemi = { isHemisphereLight: true, color: new Color(), groundColor: new Color(), intensity: 0 };"
+    "const scene = new Obj(); scene.add(hemi); scene.fog = { color: new Color(), near: 0, far: 0 }; scene.background = 'hdr';"
+    "const sun = { position: new Vec3(), target: { position: new Vec3() }, color: new Color(), intensity: 0,"
+    "  shadow: { camera: { updateProjectionMatrix() { this.updated = true; } } } };"
+    "const view = { sim: { world }, scene, sun, camera: { far: 1200, position: new Vec3(5, 2, 7), updateProjectionMatrix() {} },"
+    "  renderer: { toneMappingExposure: 0, render() {} }, render() {} };"
+    "api.built(view); api.sun(view, { x: 100, z: -50 }); view.render(0.016, true);"
+    "const D = await mod('daylight.js');"
+)
+
+
+def test_a_fixed_time_lights_the_coast_from_the_day_model():
+    got = _render(
+        _VIEW + "const L = D.lightAt(19); const dir = D.sunDirection(19);"
+        "out({ exposure: view.renderer.toneMappingExposure, want: L.exposure, sunI: sun.intensity, wantI: L.sunIntensity,"
+        "  sunColor: sun.color.hex, wantColor: L.sun, hemi: [hemi.color.hex, hemi.groundColor.hex, hemi.intensity], wantHemi: [L.hemiSky, L.hemiGround, L.hemiIntensity],"
+        "  fog: scene.fog.color.hex, background: scene.background, sky: !!find(scene, 'semif-sky'),"
+        "  sunPos: [sun.position.x - 100, sun.position.y, sun.position.z + 50], dir, target: [sun.target.position.x, sun.target.position.z],"
+        "  shadow: sun.shadow.camera, clock: globalThis.__clock && globalThis.__clock.textContent });",
+        "?time=19:00",
+    )
+    assert got["exposure"] == pytest.approx(got["want"]) and got["sunI"] == pytest.approx(got["wantI"])
+    assert got["sunColor"] == got["wantColor"] and got["hemi"] == got["wantHemi"]
+    assert got["background"] is None and got["sky"] is True
+    for p, d in zip(got["sunPos"], (got["dir"]["x"], got["dir"]["y"], got["dir"]["z"])):
+        assert p == pytest.approx(d * 300, abs=0.01), "the sun sits 300 m from the player along its direction"
+    assert got["target"] == [100, -50]
+    assert got["shadow"]["right"] >= 120 and got["shadow"]["far"] >= 600 and got["shadow"]["updated"]
+    assert "19:00" in got["clock"]
+
+
+def test_the_clock_runs_unless_the_time_is_fixed():
+    running = _render(_VIEW + "const a = globalThis.__clock.textContent; for (let i = 0; i < 60; i++) view.render(1, true); out([a, globalThis.__clock.textContent]);")
+    fixed = _render(_VIEW + "const a = globalThis.__clock.textContent; for (let i = 0; i < 60; i++) view.render(1, true); out([a, globalThis.__clock.textContent]);", "?time=09:30")
+    paused = _render(_VIEW + "const a = globalThis.__clock.textContent; for (let i = 0; i < 60; i++) view.render(1, true); out([a, globalThis.__clock.textContent]);", "?daycycle=0")
+    assert "16:30" in running[0] and running[0] != running[1], "free driving opens at 16:30 and the clock moves"
+    assert fixed[0] == fixed[1] and "09:30" in fixed[0]
+    assert paused[0] == paused[1] and "16:30" in paused[0]
+
+
+def test_the_main_view_renders_through_post_processing_onto_the_screen():
+    got = _render(
+        "const targets = []; const renderer = { getDrawingBufferSize(v) { return v.set(1280, 720); }, setRenderTarget(t) { this.target = t; },"
+        "  render(scene, camera) { targets.push(this.target ? this.target.width + 'x' + this.target.height : 'screen'); } };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, position: new Vec3(), updateProjectionMatrix() {} }, renderer, render() {},"
+        "  sun: { position: new Vec3(), target: { position: new Vec3() }, color: new Color(), shadow: { camera: { updateProjectionMatrix() {} } } } };"
+        "api.built(view); api.present(view); out(targets);"
+    )
+    assert got[0] == "1280x720", "the scene goes to a full-size target first"
+    assert got[-1] == "screen", "the graded picture lands on the screen last"
+    assert "640x360" in got, "bloom works at half size and below"
+
+
+def test_without_float_render_targets_the_main_view_falls_back_to_the_bundle():
+    got = _render(
+        "const warnings = []; console.warn = (...a) => warnings.push(String(a[0]));"
+        "const renderer = { getDrawingBufferSize(v) { return v.set(64, 32); }, setRenderTarget(t) { if (t) throw Error('EXT_color_buffer_float missing'); }, render() {} };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, position: new Vec3(), updateProjectionMatrix() {} }, renderer, render() {},"
+        "  sun: { position: new Vec3(), target: { position: new Vec3() }, color: new Color(), shadow: { camera: { updateProjectionMatrix() {} } } } };"
+        "api.built(view); out({ first: api.present(view), second: api.present(view), warnings: warnings.filter((w) => w.includes('post')).length });"
+    )
+    assert got == {"first": False, "second": False, "warnings": 1}
+
+
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
     got = _render(
-        "const roads = (await mod('roads.js')).buildRoads(world); const terrain = (await mod('terrain.js')).buildTerrain(world);"
+        "const roads = (await mod('roads.js')).buildRoads(world, (await mod('heights.js')).createHeightField(world)); const terrain = (await mod('terrain.js')).buildTerrain(world, (await mod('heights.js')).createHeightField(world));"
         "const area = (m) => { const p = m.geometry.attributes.position.array; let a = 0, down = 0;"
         "  for (let i = 0; i < p.length; i += 9) { const ux = p[i + 3] - p[i], uz = p[i + 5] - p[i + 2], vx = p[i + 6] - p[i], vz = p[i + 8] - p[i + 2];"
         "    const y = uz * vx - ux * vz; a += Math.abs(y) / 2; if (y < -1e-9) down++; } return { a, down }; };"
         "const parts = meshes(roads).map((m) => ({ color: m.material.color, ...area(m) }));"
         "const expect = world.connectorRoads.reduce((s, r) => s + r.points.at(-1).s * r.width, 0);"
-        "out({ parts, expect, terrain: area(terrain) });"
+        "const tp = terrain.geometry.attributes.position.array, ti = terrain.geometry.index; let tdown = 0;"
+        "for (let k = 0; k < ti.length; k += 3) { const [a, b, c] = [ti[k] * 3, ti[k + 1] * 3, ti[k + 2] * 3];"
+        "  const ux = tp[b] - tp[a], uz = tp[b + 2] - tp[a + 2], vx = tp[c] - tp[a], vz = tp[c + 2] - tp[a + 2]; if (uz * vx - ux * vz < -1e-9) tdown++; }"
+        "out({ parts, expect, terrain: { down: tdown, triangles: ti.length / 3 } });"
     )
     asphalt = got["parts"][0]
-    assert asphalt["color"] == "#4d5257"
+    assert asphalt["color"] == "#d2d5d9", "the asphalt texture is tinted as the bundle tints its own"
     assert asphalt["a"] == pytest.approx(got["expect"], rel=0.05)
     assert all(p["down"] == 0 for p in got["parts"])
     assert got["terrain"]["down"] == 0
 
 
+def test_guardrails_line_the_drops_and_kerbs_line_the_town_streets():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world);"
+        "const roads = (await mod('roads.js')).buildRoads(world, field);"
+        "const rail = find(roads, 'semif-guardrails'), kerb = find(roads, 'semif-kerbs'), asphalt = find(roads, 'semif-asphalt');"
+        "const pts = (m) => { const p = m.geometry.attributes.position.array, o = []; for (let i = 0; i < p.length; i += 3) o.push([p[i], p[i + 1], p[i + 2]]); return o; };"
+        "const rails = pts(rail), kerbs = pts(kerb);"
+        "const inBox = (q, b) => q[0] > b[0] && q[0] < b[1] && q[2] > b[2] && q[2] < b[3];"
+        "const harbour = [-1090, -810, 110, 290];"
+        "out({ rails: rails.length, railsInTown: rails.filter((q) => inBox(q, harbour)).length,"
+        "  railOverDrop: rails.filter((q, i) => i % 50 === 0).every((q) => { let lo = Infinity;"
+        "    for (let a = 0; a < 16; a++) for (const d of [5, 15, 30, 45]) lo = Math.min(lo, field.heightAt(q[0] + Math.sin(a * Math.PI / 8) * d, q[2] - Math.cos(a * Math.PI / 8) * d));"
+        "    return lo < -0.5; }),"
+        "  kerbs: kerbs.length, kerbHeights: [Math.min(...kerbs.map((q) => q[1])), Math.max(...kerbs.map((q) => q[1]))],"
+        "  uv: !!asphalt.geometry.attributes.uv, map: !!asphalt.material.map });"
+    )
+    assert got["rails"] > 1000 and got["railsInTown"] == 0
+    assert got["railOverDrop"], "a guardrail stands where the ground falls away within 40 m"
+    assert got["kerbs"] > 1000 and got["kerbHeights"][0] < 0.05 and got["kerbHeights"][1] >= 0.13
+    assert got["uv"] and got["map"]
+
+
 def test_signal_junctions_get_crosswalks_and_every_approach_a_stop_bar():
     got = _render(
-        "const roads = (await mod('roads.js')).buildRoads(world);"
+        "const roads = (await mod('roads.js')).buildRoads(world, (await mod('heights.js')).createHeightField(world));"
         "const marking = meshes(roads).find((m) => m.material.color === '#e9e6da').geometry.attributes.position.array;"
         # each rectangle is two triangles (18 numbers); count rectangles by their centre's distance
         "const near = (n, r0, r1) => { let k = 0; for (let i = 0; i < marking.length; i += 18) { let x = 0, z = 0;"
@@ -127,17 +248,40 @@ def test_buildings_stand_exactly_on_their_collision_boxes():
     assert got["n"] > 50 and got["outside"] == []
 
 
-def test_the_ground_is_flat_on_land_and_shelves_down_under_the_sea():
+def test_the_terrain_mesh_follows_the_height_field_and_the_sea_sits_at_sea_level():
     got = _render(
-        "const t = await mod('terrain.js');"
-        "out({ festival: t.groundHeight(world, { x: 0, z: 250 }), harbour: t.groundHeight(world, { x: -950, z: 200 }),"
-        "  shore: t.groundHeight(world, { x: 0, z: 570 }), offshore: t.groundHeight(world, { x: 0, z: 900 }),"
-        "  sea: (await mod('water.js')).SEA_LEVEL });"
+        "const H = await mod('heights.js'); const field = H.createHeightField(world);"
+        "const mesh = (await mod('terrain.js')).buildTerrain(world, field);"
+        "const p = mesh.geometry.attributes.position.array, s = mesh.geometry.attributes.aSplat.array;"
+        "let worst = 0, splatOff = 0, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;"
+        "for (let i = 0; i < p.length; i += 3 * 97) worst = Math.max(worst, Math.abs(p[i + 1] - field.heightAt(p[i], p[i + 2])));"
+        "for (let i = 0; i < s.length; i += 4) splatOff = Math.max(splatOff, Math.abs(s[i] + s[i + 1] + s[i + 2] + s[i + 3] - 1));"
+        "for (let i = 0; i < p.length; i += 3) { minX = Math.min(minX, p[i]); maxX = Math.max(maxX, p[i]); minZ = Math.min(minZ, p[i + 2]); maxZ = Math.max(maxZ, p[i + 2]); }"
+        "out({ worst, splatOff, extent: [minX, maxX, minZ, maxZ], vertices: p.length / 3, sea: (await mod('water.js')).SEA_LEVEL, level: H.SEA_LEVEL, bounds: world.bounds });"
     )
-    assert got["festival"] == got["harbour"] == -0.05
-    assert got["sea"] < got["festival"]
-    assert got["offshore"] < got["shore"] < got["festival"]
-    assert got["offshore"] < got["sea"], "open water is deeper than the surface"
+    assert got["worst"] < 1e-4
+    assert got["splatOff"] < 1e-4
+    b = got["bounds"]
+    assert got["extent"][0] <= b["minX"] - 800 and got["extent"][1] >= b["maxX"] + 800
+    assert got["extent"][2] <= b["minZ"] - 800 and got["extent"][3] >= b["maxZ"] + 800
+    assert got["vertices"] < 260_000
+    assert got["sea"] == got["level"]
+
+
+def test_the_sea_covers_every_wet_part_of_the_ground_at_sea_level():
+    got = _render(
+        "const H = await mod('heights.js'); const field = H.createHeightField(world);"
+        "const ground = (await mod('terrain.js')).buildTerrain(world, field); const { xs, zs, heights } = ground.userData.grid;"
+        "const sea = (await mod('water.js')).buildSea(ground.userData.grid); const near = find(sea, 'semif-sea-near');"
+        "const p = near.geometry.attributes.position.array, d = near.geometry.attributes.aDepth.array;"
+        "const ys = new Set(); for (let i = 1; i < p.length; i += 3) ys.add(p[i]);"
+        "const at = new Set(); for (let i = 0; i < p.length; i += 3) at.add(p[i] + ':' + p[i + 2]);"
+        "let missing = 0; for (let j = 0; j < zs.length; j++) for (let i = 0; i < xs.length; i++) if (heights[j * xs.length + i] < H.SEA_LEVEL - 0.5 && !at.has(xs[i] + ':' + zs[j])) missing++;"
+        "out({ ys: [...ys], minDepth: Math.min(...d), maxDepth: Math.max(...d), missing, far: !!find(sea, 'semif-sea-far'), level: H.SEA_LEVEL });"
+    )
+    assert got["ys"] == [got["level"]]
+    assert got["minDepth"] >= 0 and got["maxDepth"] > 20
+    assert got["missing"] == 0 and got["far"] is True
 
 
 def _palette() -> dict:
@@ -160,6 +304,8 @@ def test_renderer_palette_stays_out_of_the_camera_colour_masks():
 def test_renderer_colours_are_all_in_the_palette():
     """A colour literal outside PALETTE would escape the mask test above."""
     for path in RENDER.glob("*.js"):
+        if path.name == "daylight.js":
+            continue  # light, sky and fog colours, checked hour by hour in tests/test_daylight.py
         source = path.read_text(encoding="utf-8")
         if path.name == "kit.js":
             source = source[source.index("// The bundle's three.js classes"):]

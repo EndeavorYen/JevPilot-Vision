@@ -4,24 +4,82 @@
 // (semif-scenery.js): on the coast map it draws the world itself, on every other map it hands each
 // hook to the old layer unchanged.
 import { PALETTE, T, setKit, resetCaches } from "./kit.js";
-import { buildTerrain, seaPolygon } from "./terrain.js";
-import { buildSea } from "./water.js";
+import { buildTerrain } from "./terrain.js";
+import { createHeightField, seaPolygon } from "./heights.js";
+import { buildSea, updateSea } from "./water.js";
 import { buildRoads } from "./roads.js";
 import { buildBuildings } from "./buildings.js";
+import { buildSky, widenShadows, placeSun, applyLight } from "./sky.js";
+import { sunDirection, gradeAt } from "./daylight.js";
+import { createPost } from "./post.js";
+import { clock, mountClock, showClock, tick } from "./clock.js";
 
 const legacy = window.SEMIF_SCENERY || {};
+// ?post=0 draws the main view straight to the screen, without bloom or grade.
+const POST = new URLSearchParams(globalThis.location?.search || "").get("post") !== "0";
 const onCoast = () => window.SEMIF_SIM?.world?.type === "coast";
+
+// The coast is about 2.5 km across; the bundle's camera stops at 1.2 km.
+const COAST_FAR = 3000;
+const BUNDLE_FAR = 1200;
+
+// Work done every frame on the coast, as (view, dt), before the bundle draws.
+const frameHooks = [];
+
+function installFrame(view) {
+  if (view._semifWorldFrame) return;
+  view._semifWorldFrame = true;
+  const render = view.render.bind(view);
+  view.render = function (dt, draw) {
+    if (onCoast()) {
+      for (const hook of frameHooks) {
+        try {
+          hook(view, dt);
+        } catch (err) {
+          console.warn("semif-world: frame", err);
+        }
+      }
+    }
+    return render(dt, draw);
+  };
+}
+
+function setFar(view, far) {
+  if (!view.camera || view.camera.far === far) return;
+  view.camera.far = far;
+  view.camera.updateProjectionMatrix();
+}
+
+let sky = null;
+let sea = null;
+let post = null;
+
+frameHooks.push((view, dt) => {
+  tick(dt);
+  const light = applyLight(view, sky, clock.hours, dt);
+  updateSea(sea, light, sunDirection(clock.hours), dt);
+});
 
 function buildCoast(view) {
   resetCaches();
   // Stop the old layer's per-frame work and any upgrade it still has pending from an old map.
   view._sceneryBuild = {};
   view._sceneryHooks = [];
+  installFrame(view);
+  setFar(view, COAST_FAR);
   const world = view.sim.world;
   const root = new T.Group();
   root.name = "semif-world";
-  root.add(buildTerrain(world), buildSea(world), buildRoads(world), buildBuildings(world));
+  sky = buildSky();
+  const field = createHeightField(world);
+  const ground = buildTerrain(world, field);
+  sea = buildSea(ground.userData.grid);
+  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world));
   view.scene.add(root);
+  widenShadows(view.sun);
+  mountClock();
+  showClock(true);
+  applyLight(view, sky, clock.hours, 0);
   return root;
 }
 
@@ -50,11 +108,35 @@ window.SEMIF_SCENERY = {
     return obj?.type === "building"; // drawn by buildBuildings
   },
   built(view) {
-    if (!onCoast()) return legacy.built?.(view);
+    if (!onCoast()) {
+      setFar(view, BUNDLE_FAR);
+      showClock(false);
+      return legacy.built?.(view);
+    }
     try {
       buildCoast(view);
     } catch (err) {
       console.error("semif-world: build", err);
+    }
+  },
+  sun(view, player) {
+    if (!onCoast()) return false;
+    placeSun(view.sun, player, clock.hours);
+    return true;
+  },
+  present(view) {
+    if (!onCoast()) return false;
+    if (!POST || post === false) return false;
+    try {
+      post ??= createPost();
+      post.render(view, gradeAt(clock.hours));
+      return true;
+    } catch (err) {
+      // No float render targets on this GPU, or the like: the bundle draws the view directly.
+      console.warn("semif-world: post-processing off", err);
+      post = false;
+      view.renderer.setRenderTarget?.(null);
+      return false;
     }
   },
   minimap(ctx, world, project, scale) {
