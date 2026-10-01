@@ -86,16 +86,44 @@ function splatMaterial() {
   return mat;
 }
 
-export function buildTerrain(world, field) {
+// Index of the cell of a sorted axis that holds v.
+function cellOf(axisValues, v) {
+  let lo = 0, hi = axisValues.length - 1;
+  if (v <= axisValues[0]) return 0;
+  if (v >= axisValues[hi]) return hi - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (axisValues[mid] <= v) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+// The ground as drawn: heights at the grid's vertices, and heightAt(x, z) interpolated across the
+// same two triangles per cell as the mesh, so whatever stands on it sits exactly on the surface.
+export function groundGrid(world, field) {
   const xs = axis(world.bounds.minX, world.bounds.maxX);
   const zs = axis(world.bounds.minZ, world.bounds.maxZ);
   const nx = xs.length, nz = zs.length;
-  const positions = new Float32Array(nx * nz * 3);
-  const splat = new Float32Array(nx * nz * 4);
   const heights = new Float32Array(nx * nz);
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) heights[j * nx + i] = field.heightAt(xs[i], zs[j]);
   }
+  function heightAt(x, z) {
+    const i = cellOf(xs, x), j = cellOf(zs, z);
+    const u = Math.min(1, Math.max(0, (x - xs[i]) / (xs[i + 1] - xs[i])));
+    const v = Math.min(1, Math.max(0, (z - zs[j]) / (zs[j + 1] - zs[j])));
+    const a = heights[j * nx + i], b = heights[j * nx + i + 1], c = heights[(j + 1) * nx + i + 1], d = heights[(j + 1) * nx + i];
+    return u <= v ? a + (c - d) * u + (d - a) * v : a + (b - a) * u + (c - b) * v;
+  }
+  return { xs, zs, heights, heightAt };
+}
+
+export function buildTerrain(world, field, grid = groundGrid(world, field)) {
+  const { xs, zs, heights } = grid;
+  const nx = xs.length, nz = zs.length;
+  const positions = new Float32Array(nx * nz * 3);
+  const splat = new Float32Array(nx * nz * 4);
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) {
       const k = j * nx + i;
@@ -128,7 +156,7 @@ export function buildTerrain(world, field) {
   geo.computeVertexNormals();
   const mesh = new T.Mesh(geo, splatMaterial());
   mesh.name = "semif-terrain";
-  mesh.userData.grid = { xs, zs, heights }; // the sea is laid over the same grid
+  mesh.userData.grid = grid; // the sea is laid over the same grid
   mesh.receiveShadow = true;
   mesh.castShadow = true;
   return mesh;

@@ -92,3 +92,34 @@ def test_surface_weights_follow_slope_height_and_shore():
     assert got["cliff"][rock] > 0.4
     assert got["meadow"][grass] + got["meadow"][dry] > 0.6
     assert got["sum"] == pytest.approx([1, 1, 1])
+
+
+def test_the_ground_leaves_the_flat_road_band_without_a_step():
+    """Beyond the level band the ground may climb or fall steeply, but never in a step the
+    shoulder would float over (review: 3.9 m within half a metre on the coast road)."""
+    worst = _heights(
+        "let worst = 0;"
+        "for (const r of world.connectorRoads) for (let i = 0; i < r.points.length; i += 3) {"
+        "  const p = r.points[i], q = r.points[Math.min(i + 1, r.points.length - 1)], o = r.points[Math.max(i - 1, 0)];"
+        "  const h = Math.atan2(q.x - o.x, o.z - q.z) + Math.PI / 2;"
+        "  for (const side of [-1, 1]) { let last = null;"
+        "    for (let d = r.width / 2 + 3; d <= r.width / 2 + 14; d += 0.5) {"
+        "      const y = field.heightAt(p.x + Math.sin(h) * side * d, p.z - Math.cos(h) * side * d);"
+        "      if (last !== null) worst = Math.max(worst, Math.abs(y - last)); last = y; } } }"
+        "out(worst);"
+    )
+    assert worst <= 1.0
+
+
+def test_the_drawn_ground_never_rises_through_a_road_shoulder():
+    got = _heights(
+        "const G = await import(pathToFileURL(process.argv[2] + '/terrain.js')); const grid = G.groundGrid(world, field);"
+        "let worst = -Infinity;"
+        "for (const r of world.connectorRoads) for (let i = 0; i < r.points.length; i += 2) {"
+        "  const p = r.points[i], q = r.points[Math.min(i + 1, r.points.length - 1)], o = r.points[Math.max(i - 1, 0)];"
+        "  const h = Math.atan2(q.x - o.x, o.z - q.z) + Math.PI / 2;"
+        "  for (const side of [-1, 1]) for (let d = 0; d <= r.width / 2 + 2; d += 0.5) {"
+        "    worst = Math.max(worst, grid.heightAt(p.x + Math.sin(h) * side * d, p.z - Math.cos(h) * side * d)); } }"
+        "out(worst);"
+    )
+    assert got <= 0.02, "the shoulder ribbon lies at 0.02 m"

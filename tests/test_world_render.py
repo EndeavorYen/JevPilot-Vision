@@ -164,6 +164,17 @@ def test_the_main_view_renders_through_post_processing_onto_the_screen():
     assert "640x360" in got, "bloom works at half size and below"
 
 
+def test_without_float_render_targets_the_main_view_falls_back_to_the_bundle():
+    got = _render(
+        "const warnings = []; console.warn = (...a) => warnings.push(String(a[0]));"
+        "const renderer = { getDrawingBufferSize(v) { return v.set(64, 32); }, setRenderTarget(t) { if (t) throw Error('EXT_color_buffer_float missing'); }, render() {} };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, position: new Vec3(), updateProjectionMatrix() {} }, renderer, render() {},"
+        "  sun: { position: new Vec3(), target: { position: new Vec3() }, color: new Color(), shadow: { camera: { updateProjectionMatrix() {} } } } };"
+        "api.built(view); out({ first: api.present(view), second: api.present(view), warnings: warnings.filter((w) => w.includes('post')).length });"
+    )
+    assert got == {"first": False, "second": False, "warnings": 1}
+
+
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
     got = _render(
         "const roads = (await mod('roads.js')).buildRoads(world, (await mod('heights.js')).createHeightField(world)); const terrain = (await mod('terrain.js')).buildTerrain(world, (await mod('heights.js')).createHeightField(world));"

@@ -5,7 +5,7 @@
 // tests/test_world_render.py can keep it out of those masks; no other colour literal is allowed.
 
 export const PALETTE = {
-  asphalt: "#4d5257",
+  asphalt: "#4d5257", // the textured asphalt's average tone, kept for the mask tests
   asphaltTint: "#d2d5d9", // multiplies the asphalt texture, as the bundle's own roads do
   kerb: "#c9c3b5",
   guardrail: "#b9bec2",
@@ -14,9 +14,6 @@ export const PALETTE = {
   pavement: "#cfc6b2",
   shoulder: "#9a9283",
   median: "#a7a59d",
-  grass: ["#9aa36b", "#a7a874", "#8f9a63"],
-  sand: "#d8cba6",
-  seabed: "#7fa79d",
   sea: { deep: "#1d5a76", shallow: "#3a9ea2", foam: "#e9eee9" },
   stucco: ["#efe6d6", "#e9d8bf", "#f2e2cf", "#dfe3d6", "#e8d2c4"],
   roof: ["#b2857c", "#a6847a", "#9c8a7c"],

@@ -2,10 +2,11 @@
 //
 // Plain functions of the hour (tests/test_daylight.py runs them in node). The onboard camera reads
 // signals, construction, warning lights and people by colour, and its masks were tuned in
-// daylight. Its frames go to a render target, which three.js neither tone-maps nor exposes, so the
-// light itself is scaled up for a low sun: `tint` (what the light does to a surface's colour,
-// relative to noon) keeps noon's brightness and never turns a palette colour into a mask colour.
-// The darker, warmer mood of dawn and dusk is a grade on the main view only (post.js).
+// daylight. Its frames go to a render target that semif-layer.js flags as XR, which three.js
+// tone-maps like the screen (ACES at the renderer's exposure, kept at the bundle's 0.95). So a low
+// sun's light is made up in the light itself: the sun is allowed a little more, the bluish sky
+// light the rest, keeping noon's brightness without pushing warm walls into the "construction"
+// orange. The darker, warmer mood of dawn and dusk is a grade on the main view only (post.js).
 
 export const DAY = {
   start: 6.25, // 06:15, the sun just up in the east
@@ -90,38 +91,47 @@ function keyed(values, el) {
   return hex(rgb(a).map((v, k) => v + (rgb(b)[k] - v) * t));
 }
 
-// Direct sun on the ground and on walls, plus sky light, per channel (0..255 scale).
-function rawLight(hours) {
+// Direct sun on the ground and on walls, and sky light, per channel (0..255 scale).
+function sunLight(hours) {
   const el = elevation(hours);
-  const sun = rgb(keyed(LIGHT.sun, el)).map((v) => v * keyed(LIGHT.sunIntensity, el) * Math.max(Math.sin(rad(el)), 0.3));
-  const sky = rgb(keyed(LIGHT.hemiSky, el)).map((v) => v * keyed(LIGHT.hemiIntensity, el) * 1.6);
-  return sun.map((v, k) => v + sky[k]);
+  return rgb(keyed(LIGHT.sun, el)).map((v) => v * keyed(LIGHT.sunIntensity, el) * Math.max(Math.sin(rad(el)), 0.3));
+}
+function skyLight(hours) {
+  const el = elevation(hours);
+  return rgb(keyed(LIGHT.hemiSky, el)).map((v) => v * keyed(LIGHT.hemiIntensity, el) * 1.6);
 }
 
 const luma = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-const NOON = rawLight(13);
+const NOON = sunLight(13).map((v, i) => v + skyLight(13)[i]);
 const NOON_EXPOSURE = 0.95;
+const MAX_SUN_BOOST = 1.2;
 
-// How much a low sun's light is scaled up to keep noon's brightness.
-const boost = (hours) => Math.min(1.8, luma(NOON) / luma(rawLight(hours)));
+// How much a low sun's light and the sky light are scaled up to keep noon's brightness.
+function boosts(hours) {
+  const sun = sunLight(hours), sky = skyLight(hours);
+  const total = luma(NOON) / luma(sun.map((v, i) => v + sky[i]));
+  const sunBoost = Math.min(total, MAX_SUN_BOOST);
+  const skyBoost = Math.max(1, (luma(NOON) - sunBoost * luma(sun)) / luma(sky));
+  return { sunBoost, skyBoost: Math.min(skyBoost, 2.6) };
+}
 
 export function lightAt(hours) {
   const el = elevation(hours);
   const out = { elevation: el, exposure: NOON_EXPOSURE };
   for (const [key, values] of Object.entries(LIGHT)) out[key] = keyed(values, el);
-  out.sunIntensity *= boost(hours);
-  out.hemiIntensity *= boost(hours);
+  const { sunBoost, skyBoost } = boosts(hours);
+  out.sunIntensity *= sunBoost;
+  out.hemiIntensity *= skyBoost;
   return out;
 }
 
 // What the light does to a surface colour relative to noon, per channel.
 export function tint(hours) {
-  const k = boost(hours);
-  return rawLight(hours).map((v, i) => (v / NOON[i]) * k);
+  const { sunBoost, skyBoost } = boosts(hours);
+  const sun = sunLight(hours), sky = skyLight(hours);
+  return sun.map((v, i) => (v * sunBoost + sky[i] * skyBoost) / NOON[i]);
 }
 
-// The main view's grade (post.js), never the cameras': noon neutral and crisp, a low sun warmer,
-// a touch darker and more contrasty, like a film look rather than a lux meter.
 export function gradeAt(hours) {
   const el = elevation(hours);
   const low = 1 - Math.min(1, Math.max(0, (el - 4) / 50)); // 1 at the horizon, 0 from 54 degrees

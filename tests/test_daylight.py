@@ -119,7 +119,9 @@ def test_exposure_keeps_every_hour_about_as_bright_as_noon(day):
 def test_low_sun_is_warm_and_high_sun_is_near_white(day):
     at = {round(a["h"], 2): a["tint"] for a in day["at"]}
     golden, noon = at[19.0], at[13.0]
-    assert golden[0] > golden[2] + 0.12, "golden hour is warm"
+    # Mildly: the bluish sky light makes up for a low sun, and the strong warm look is the main
+    # view's grade (gradeAt), which the cameras never see.
+    assert golden[0] > golden[2] + 0.06, "golden hour is warm"
     assert abs(noon[0] - noon[2]) < 0.06, "noon is neutral"
 
 
@@ -132,3 +134,54 @@ def test_the_main_view_grade_is_neutral_at_noon_and_warm_and_moody_at_dusk():
     assert dusk["exposure"] < golden["exposure"] < noon["exposure"] + 1e-9
     for g in got:
         assert 0.75 <= g["exposure"] <= 1.05 and 0.9 <= g["saturation"] <= 1.35 and 0 <= g["vignette"] <= 0.5
+
+
+# The onboard cameras render to a target semif-layer.js flags as XR, which the bundle's three.js
+# tone-maps like the screen: ACES Filmic at toneMappingExposure. This is three's own fit.
+def _aces(rgb, exposure):
+    v = [c * exposure / 0.6 for c in rgb]
+    cols_in = ((0.59719, 0.07600, 0.02840), (0.35458, 0.90834, 0.13383), (0.04823, 0.01566, 0.83777))
+    v = [sum(cols_in[k][i] * v[k] for k in range(3)) for i in range(3)]
+    v = [(x * (x + 0.0245786) - 0.000090537) / (x * (0.983729 * x + 0.4329510) + 0.238081) for x in v]
+    cols_out = ((1.60475, -0.10208, -0.00327), (-0.53108, 1.10813, -0.07276), (-0.07367, -0.00605, 1.07602))
+    v = [sum(cols_out[k][i] * v[k] for k in range(3)) for i in range(3)]
+    return [min(1.0, max(0.0, x)) for x in v]
+
+
+def _to_linear(c):
+    c = c / 255
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _to_srgb(c):
+    c = 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return round(max(0.0, min(1.0, c)) * 255)
+
+
+def _rgb(hex_colour):
+    n = int(hex_colour[1:], 16)
+    return ((n >> 16) & 255, (n >> 8) & 255, n & 255)
+
+
+def test_onboard_pixels_stay_out_of_the_masks_after_lighting_and_aces(day):
+    """Surface colour x Lambert x (sun at incidence cos + sky light), through ACES and sRGB, for
+    every hour: a wall facing a low, boosted sun is the brightest and warmest case."""
+    # The sea and the sky have their own shaders. Shade and grazing light are checked for the colour
+    # masks only: without the bundle's environment light they are darker than the screen ever is,
+    # and the old maps' shadows read as dark "pedestrian" pixels too.
+    palette = [(n, h) for n, h in _colours(day["palette"]) if not n.startswith(("minimap", "sea"))]
+    offenders = []
+    for a in day["at"]:
+        light = a["light"]
+        sun = [_to_linear(c) for c in _rgb(light["sun"])]
+        sky = [_to_linear(c) for c in _rgb(light["hemiSky"])]
+        for cosine in (1.0, 0.6, 0.3, 0.0):
+            irradiance = [light["sunIntensity"] * cosine * s + light["hemiIntensity"] * k for s, k in zip(sun, sky)]
+            for name, hex_colour in palette:
+                albedo = [_to_linear(c) for c in _rgb(hex_colour)]
+                radiance = [al * e / math.pi for al, e in zip(albedo, irradiance)]
+                r, g, b = (_to_srgb(c) for c in _aces(radiance, light["exposure"]))
+                hits = [m for m in _hits_camera_mask(r, g, b) if cosine >= 0.6 or m != "pedestrian"]
+                if hits:
+                    offenders.append((a["h"], cosine, name, hex_colour, (r, g, b), hits))
+    assert offenders[:10] == []

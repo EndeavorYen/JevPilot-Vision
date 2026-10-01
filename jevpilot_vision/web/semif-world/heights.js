@@ -4,7 +4,10 @@
 
 export const SEA_LEVEL = -10;
 
-const SHOULDER = 3.5; // flat ground beside the asphalt, as the simulation is flat
+const SHOULDER = 3.5; // the drawn shoulder or pavement beside the asphalt
+// Level ground beside the asphalt: the simulation is flat, and the drawn ground (a 6 m grid) must
+// not rise through the shoulder, so the level band reaches a full grid cell past it.
+const FLAT = 9;
 // The ground reaches its full relief this far beyond the shoulder: the SS-1 and the pass open out
 // in wide valleys, so they are neither trenches nor shadowed canyons.
 const RAMP = { expressway: 110, pass: 90 };
@@ -137,11 +140,11 @@ export function createHeightField(world) {
         for (let k = 0; k < list.length; k += 4) {
           const edge = Math.hypot(x - list[k], z - list[k + 1]) - list[k + 2];
           nearest = Math.min(nearest, edge);
-          best = Math.min(best, smooth(SHOULDER + 1.5, SHOULDER + list[k + 3], edge));
+          best = Math.min(best, smooth(FLAT, SHOULDER + list[k + 3], edge));
         }
       }
     }
-    return nearest < SHOULDER + 1.5 ? 0 : best;
+    return { open: nearest < FLAT ? 0 : best, nearest };
   }
   function roadEdge(x, z) {
     const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
@@ -160,12 +163,13 @@ export function createHeightField(world) {
     const p = { x, z };
     const toShore = distanceToLine(shoreline, p);
     if (inside(sea, p)) return Math.max(-45, SEA_LEVEL - 0.6 - toShore * 0.3);
-    // Road samples are 3 m apart, so the nearest one can be up to 1.5 m off the true distance.
-    const open = openness(x, z);
-    if (open === 0) return 0;
+    const { open, nearest } = openness(x, z);
+    if (nearest < FLAT) return 0;
     const land = relief(x, z) * open * smooth(15, COAST_FLAT, toShore);
     const shore = x > -280 && x < 260 && z > 380 ? BEACH : CLIFF;
-    return SEA_LEVEL + (land - SEA_LEVEL) * smooth(0, shore, toShore);
+    const s = smooth(0, shore, toShore);
+    // The drop to the sea fades in beyond the level band too, so the ground has no step at its edge.
+    return land * s + smooth(FLAT, FLAT + 10, nearest) * SEA_LEVEL * (1 - s);
   }
 
   // Blend of [grass, dry grass, rock, sand] at a point whose height and slope are known.

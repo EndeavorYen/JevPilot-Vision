@@ -126,10 +126,18 @@ window.SEMIF_SCENERY = {
   },
   present(view) {
     if (!onCoast()) return false;
-    if (!POST) return false;
-    post ??= createPost();
-    post.render(view, gradeAt(clock.hours));
-    return true;
+    if (!POST || post === false) return false;
+    try {
+      post ??= createPost();
+      post.render(view, gradeAt(clock.hours));
+      return true;
+    } catch (err) {
+      // No float render targets on this GPU, or the like: the bundle draws the view directly.
+      console.warn("semif-world: post-processing off", err);
+      post = false;
+      view.renderer.setRenderTarget?.(null);
+      return false;
+    }
   },
   minimap(ctx, world, project, scale) {
     if (world?.type !== "coast") return legacy.minimap?.(ctx, world, project, scale);
