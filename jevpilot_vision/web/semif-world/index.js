@@ -12,11 +12,50 @@ import { buildBuildings } from "./buildings.js";
 const legacy = window.SEMIF_SCENERY || {};
 const onCoast = () => window.SEMIF_SIM?.world?.type === "coast";
 
+// The coast is about 2.5 km across; the bundle's camera stops at 1.2 km.
+const COAST_FAR = 3000;
+const BUNDLE_FAR = 1200;
+
+// Work done every frame on the coast, as (view, dt), before the bundle draws.
+const frameHooks = [];
+
+function installFrame(view) {
+  if (view._semifWorldFrame) return;
+  view._semifWorldFrame = true;
+  const render = view.render.bind(view);
+  view.render = function (dt, draw) {
+    if (onCoast()) {
+      for (const hook of frameHooks) {
+        try {
+          hook(view, dt);
+        } catch (err) {
+          console.warn("semif-world: frame", err);
+        }
+      }
+    }
+    return render(dt, draw);
+  };
+}
+
+function setFar(view, far) {
+  if (!view.camera || view.camera.far === far) return;
+  view.camera.far = far;
+  view.camera.updateProjectionMatrix();
+}
+
+// The sun keeps the bundle's offset from the player for now; the day cycle replaces it.
+function placeSun(view, player) {
+  view.sun.position.set(player.x - 55, 85, player.z + 50);
+  view.sun.target.position.set(player.x, 0, player.z);
+}
+
 function buildCoast(view) {
   resetCaches();
   // Stop the old layer's per-frame work and any upgrade it still has pending from an old map.
   view._sceneryBuild = {};
   view._sceneryHooks = [];
+  installFrame(view);
+  setFar(view, COAST_FAR);
   const world = view.sim.world;
   const root = new T.Group();
   root.name = "semif-world";
@@ -50,12 +89,25 @@ window.SEMIF_SCENERY = {
     return obj?.type === "building"; // drawn by buildBuildings
   },
   built(view) {
-    if (!onCoast()) return legacy.built?.(view);
+    if (!onCoast()) {
+      setFar(view, BUNDLE_FAR);
+      return legacy.built?.(view);
+    }
     try {
       buildCoast(view);
     } catch (err) {
       console.error("semif-world: build", err);
     }
+  },
+  sun(view, player) {
+    if (!onCoast()) return false;
+    placeSun(view, player);
+    return true;
+  },
+  present(view) {
+    if (!onCoast()) return false;
+    view.renderer.render(view.scene, view.camera);
+    return true;
   },
   minimap(ctx, world, project, scale) {
     if (world?.type !== "coast") return legacy.minimap?.(ctx, world, project, scale);

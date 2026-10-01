@@ -20,6 +20,26 @@ MAIN = "main-CvLEeHjW.js"
 WORKER = "planner.worker-DFdG3q6n.js"
 WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js";'
 
+# three.js classes the bundle hands the renderer on top of the ones semif-scenery.js already gets,
+# as name: minified identifier. test_kit_classes_are_the_classes_they_claim_to_be checks each one.
+KIT = {
+    "ShaderMaterial": ("Tc", "isShaderMaterial"),
+    "WebGLRenderTarget": ("Gi", "isWebGLRenderTarget"),
+    "OrthographicCamera": ("Dl", "isOrthographicCamera"),
+    "Vector2": ("B", "isVector2"),
+    "Vector4": ("Ui", "isVector4"),
+    "Matrix4": ("W", "isMatrix4"),
+    "Quaternion": ("Ei", "isQuaternion"),
+    "Euler": ("ra", "isEuler"),
+    "DataTexture": ("hs", "isDataTexture"),
+    "DepthTexture": ("ac", "isDepthTexture"),
+    "TextureLoader": ("cl", "new Hi,a=new ol(this.manager)"),
+    "Fog": ("ka", "isFog"),
+    "HemisphereLight": ("ul", "isHemisphereLight"),
+    "InstancedBufferAttribute": ("ys", "isInstancedBufferAttribute"),
+}
+KIT_CLASSES = "".join(f"{name}:{ident}," for name, (ident, _) in KIT.items())
+
 # (name, file, original, replacement): the original occurs once before patching and the
 # replacement once after. Apply them once with: python tests/test_coast_patches.py apply
 COAST_PATCHES = [
@@ -127,6 +147,16 @@ COAST_PATCHES = [
     ("coast-commit-destination", MAIN,
      "if(n&&n.route){r.route=this.world.route=n.route;",
      "if(n&&n.route){this.world.commitDestination?.(t.id);r.route=this.world.route=n.route;"),
+    # --- phase 2: more three.js classes for the renderer, the sun and the main view's output
+    ("coast-kit-classes", MAIN,
+     "build(){window.SEMIF_SCENERY?.kit?.({Mesh:K,",
+     "build(){window.SEMIF_SCENERY?.kit?.({Mesh:K," + KIT_CLASSES),
+    ("coast-sun", MAIN,
+     "this.sun.position.set(i.x-55,85,i.z+50),this.sun.target.position.set(i.x,0,i.z)",
+     "window.SEMIF_SCENERY?.sun?.(this,i)||(this.sun.position.set(i.x-55,85,i.z+50),this.sun.target.position.set(i.x,0,i.z))"),
+    ("coast-present", MAIN,
+     "t&&this.renderer.render(this.scene,this.camera)",
+     "t&&(window.SEMIF_SCENERY?.present?.(this)||this.renderer.render(this.scene,this.camera))"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",
@@ -162,6 +192,16 @@ def test_coast_patches_are_applied_once_and_documented():
         assert text.count(old) == (1 if old in new else 0), f"{name}: original still present"
         assert f"`{name}`" in doc, f"{name} missing from BUNDLE_PATCHES.md"
     assert texts[WORKER].startswith(WORKER_IMPORT), "the worker loads the generator before anything else"
+
+
+def test_kit_classes_are_the_classes_they_claim_to_be():
+    """Minified names are only stable for this exact bundle: each must be defined as a class whose
+    body sets the matching three.js flag soon after its name."""
+    text = (ASSETS / MAIN).read_text(encoding="utf-8")
+    for name, (ident, flag) in KIT.items():
+        starts = [i for i in range(len(text)) if text.startswith(f"{ident}=class", i) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] in "_$"))]
+        assert len(starts) == 1, (name, ident, len(starts))
+        assert flag in text[starts[0]:starts[0] + 400], (name, ident, flag)
 
 
 # The worker file, run in node: its import is replaced by loading the generator directly, and its

@@ -63,7 +63,7 @@ def _render(body: str):
 
 def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_layer():
     got = _render(
-        "const scene = new Obj(); api.built({ sim: { world }, scene, _sceneryHooks: ['old'] });"
+        "const scene = new Obj(); api.built({ sim: { world }, scene, _sceneryHooks: ['old'], render() {} });"
         "const root = scene.children[0]; const coast = { root: root.name, parts: root.children.map((c) => c.name),"
         "  building: api.object(null, { type: 'building' }, null), lamp: api.object(null, { type: 'streetlight' }, null), calls: calls.slice() };"
         "window.SEMIF_SIM = { world: { type: 'city' } }; const city = new Obj();"
@@ -77,6 +77,24 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
     assert got["calls"] == ["kit", "object", "built", "minimap"]
     assert got["palette"] == {"legacy": True}
+
+
+def test_sun_and_present_hooks_take_over_only_on_the_coast():
+    got = _render(
+        "const pos = { set(x, y, z) { this.v = [x, y, z]; return this; } };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} }, renderer: { render(s, c) { view.rendered = (view.rendered || 0) + 1; } },"
+        "  sun: { position: pos, target: { position: { set() {} } }, shadow: { camera: {} }, color: { setRGB() {} } }, render(dt, draw) { return 'base'; } };"
+        "api.built(view);"
+        "const coast = { sun: api.sun(view, { x: 10, z: 20 }), sunAt: pos.v, present: api.present(view), rendered: view.rendered, far: view.camera.far, frame: view.render(0.016, true) };"
+        "window.SEMIF_SIM = { world: { type: 'city' } };"
+        "const city = { sun: api.sun(view, { x: 10, z: 20 }), present: api.present(view), rendered: view.rendered };"
+        "out({ coast, city });"
+    )
+    assert got["coast"]["sun"] is True and got["coast"]["sunAt"] is not None
+    assert got["coast"]["present"] is True and got["coast"]["rendered"] == 1
+    assert got["coast"]["far"] >= 2600, "the coast is 2.5 km across"
+    assert got["coast"]["frame"] == "base", "the per-frame wrapper still runs the bundle's render"
+    assert not got["city"]["sun"] and not got["city"]["present"] and got["city"]["rendered"] == 1
 
 
 def test_asphalt_covers_every_road_and_every_ground_triangle_faces_up():
