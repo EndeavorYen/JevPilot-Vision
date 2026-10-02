@@ -40,7 +40,7 @@ MIN_SIM_SHARE = 0.8
 STALL_MPS = 1.0
 MIN_SECONDS = 30
 # Rows carry the rules they were written under; rows from earlier rules are driven again.
-ROW_FORMAT = 6
+ROW_FORMAT = 7
 CDP = os.environ.get("CHROME_CDP", str(Path.home() / ".claude/skills/chrome-cdp-ex/bin/chrome-cdp"))
 
 # Where the mock arbiter's stopping constants come from (demo/server.py); every report repeats it,
@@ -168,7 +168,7 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
                 "distance_km": 0.0, "runs_with_red_light": 0, "red_light_events": 0, "runs_with_collision": 0,
                 "collision_events": 0, "pedestrian_casualties": 0, "crashes": 0, "runs_disengaged": 0,
                 "runs_stalled": 0, "runs_broke": 0, "runs_unreadable": 0, "tab_check_failed": 0, "server_down_after": 0,
-                "request_errors": 0, "expired_decisions": 0,
+                "outage_errors": 0, "system_errors": 0, "expired_decisions": 0,
                 "drove": 0, "drove_with_red_light": 0, "drove_with_collision": 0}
 
     # Every attempt is visible: a run that needed retries says so.
@@ -204,7 +204,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         s["runs_unreadable"] += 1 if row.get("unreadable") else 0
         s["tab_check_failed"] += 1 if row.get("tab_check") == "failed" else 0
         s["server_down_after"] += 1 if row.get("server_ok") is False else 0
-        s["request_errors"] += 1 if row.get("request_errors") else 0
+        s["outage_errors"] += 1 if row.get("outage_errors") else 0
+        s["system_errors"] += 1 if row.get("system_errors") else 0
         s["expired_decisions"] += 1 if row.get("expired_decisions") else 0
         # Violation rates are over runs that moved: a car that never moved commits none. A run that
         # ran a red light and then gave up (or broke) still ran it. A drive whose result could not be
@@ -244,8 +245,10 @@ def report(summary: Dict[Group, Dict[str, Any]]) -> str:
         notes = []
         if s["server_down_after"]:
             notes.append(f"decision server unreachable after {s['server_down_after']} (kept: the car had moved or broke a rule)")
-        if s["request_errors"]:
-            notes.append(f"decision requests failed during {s['request_errors']}")
+        if s["outage_errors"]:
+            notes.append(f"decision server unreachable during {s['outage_errors']} (kept: the car had moved or broke a rule)")
+        if s["system_errors"]:
+            notes.append(f"decision path errors (500s, timeouts, unreadable replies) during {s['system_errors']}")
         if s["expired_decisions"]:
             notes.append(f"decisions expired (the decision path took over 1.8 s) during {s['expired_decisions']}")
         if s["tab_check_failed"]:
@@ -327,13 +330,15 @@ def open_tab(base: str) -> str:
 
 
 def decision_trouble(got: Dict[str, Any]) -> Dict[str, int]:
-    """Requests that failed (HTTP errors, network failures, replies that are not JSON), from the
-    page's own counters for this drive; and decisions that expired (the decision path took over
-    1.8 s: the model's own latency), from the bundle's events (it keeps the newest 30)."""
+    """From the page's counters for this drive: outage errors (the request never reached a working
+    server: network failures, 502/503/504) and system errors (the system under test failing: a 500,
+    the 12 s timeout, a reply that is not JSON). From the bundle's events (it keeps the newest 30):
+    decisions that expired (the decision path took over 1.8 s)."""
     stats = got.get("classifier") or {}
-    errors = sum(int(stats.get(k) or 0) for k in ("http_errors", "network_errors", "bad_replies"))
+    outage = sum(int(stats.get(k) or 0) for k in ("network_errors", "gateway_errors"))
+    system = sum(int(stats.get(k) or 0) for k in ("http_errors", "timeouts", "bad_replies"))
     expired = sum(1 for e in got.get("events") or [] if "expired before it arrived" in str(e).lower())
-    return {"expired_decisions": expired, "request_errors": errors}
+    return {"expired_decisions": expired, "outage_errors": outage, "system_errors": system}
 
 
 def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
@@ -353,12 +358,13 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
     acted = (got.get("crash") or float(got.get("distance_m") or 0) >= STALL_MPS * run["seconds"]
              or any(int(got.get(k) or 0) for k in ("red_light", "violations", "collisions")))
     if not acted:
-        # The car did not get going and the server or its requests were failing: an outage, not the
-        # driving. Expired decisions are the decision path's own latency and never count here.
+        # The car did not get going and the server was unreachable: an outage, not the driving.
+        # A 500, a timeout or an unreadable reply from a reachable server is the system under test
+        # failing, and expired decisions are its latency: those are results.
         if got.get("server_ok") is False:
             return "decision server unreachable after the run"
-        if int(got.get("request_errors") or 0):
-            return "decision requests failed (HTTP, network or unreadable replies)"
+        if int(got.get("outage_errors") or 0):
+            return "decision server unreachable during the run (network, 502/503/504)"
     return None
 
 

@@ -339,6 +339,9 @@ if (specEarly.cmd === "cstats") {
     () => Promise.reject(new TypeError("Failed to fetch")),
     () => Promise.resolve({ ok: true, status: 200, statusText: "OK",
       json: async () => { throw new SyntaxError("bad"); }, text: async () => "<html>" }),
+    () => Promise.resolve({ ok: false, status: 503, statusText: "Service Unavailable",
+      json: async () => ({}), text: async () => "{}" }),
+    () => Promise.reject(Object.assign(new Error("signal timed out"), { name: "TimeoutError" })),
   ];
   let at = 0;
   window.fetch = () => replies[Math.min(at++, replies.length - 1)]();
@@ -410,7 +413,7 @@ const out = { title: title && title.textContent, fps0: fps && fps.textContent, c
 if (spec.cmd === "cstats") {
   (async () => {
     const outcomes = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       try {
         const res = await window.fetch("/v1/classifier", { method: "POST", body: JSON.stringify({ mode: "flat", state: {} }) });
         outcomes.push(res.status);
@@ -1315,5 +1318,7 @@ def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
     """#28: whether the decision path failed (HTTP error, network failure, a reply that is not
     JSON) is counted where the requests are made, not guessed from the bundle's event text."""
     out = _run({"cmd": "cstats"})
-    assert out["outcomes"] == [200, 500, "threw", 200]
-    assert out["stats"] == {"ok": 1, "http_errors": 1, "network_errors": 1, "bad_replies": 1}
+    assert out["outcomes"] == [200, 500, "threw", 200, 503, "threw"]
+    # Review #28 (8): an outage (network failure, 502/503/504) is told apart from a failure of the
+    # system under test (a 500, a 12 s timeout, a reply that is not JSON).
+    assert out["stats"] == {"ok": 1, "http_errors": 1, "network_errors": 1, "bad_replies": 1, "gateway_errors": 1, "timeouts": 1}

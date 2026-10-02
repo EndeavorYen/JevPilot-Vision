@@ -794,8 +794,11 @@
 
   const origFetch = window.fetch.bind(window);
   // How the decision path's requests went, for the closed-loop evaluation (#28): counted where the
-  // requests are made, so an outage is known as such instead of guessed from the bundle's events.
-  window.SEMIF_CLASSIFIER_STATS = { ok: 0, http_errors: 0, network_errors: 0, bad_replies: 0 };
+  // requests are made. An outage (the request never reached a working server: a network failure, a
+  // 502/503/504) is told apart from the system under test failing (a 500, the bundle's 12 s
+  // timeout, a reply that is not JSON).
+  window.SEMIF_CLASSIFIER_STATS = { ok: 0, http_errors: 0, network_errors: 0, bad_replies: 0, gateway_errors: 0, timeouts: 0 };
+  const isTimeout = (err) => !!err && (err.name === "TimeoutError" || err.name === "AbortError");
   const classifierStats = window.SEMIF_CLASSIFIER_STATS;
   window.fetch = function (url, opts) {
     const href = typeof url === "string" ? url : url && url.url;
@@ -815,17 +818,19 @@
           })
         : origFetch(url, opts);
       return sent.then(async (res) => {
-        if (!res.ok) classifierStats.http_errors += 1;
+        if ([502, 503, 504].includes(res.status)) classifierStats.gateway_errors += 1;
+        else if (!res.ok) classifierStats.http_errors += 1;
         let data;
         let raw = "";
         try {
           raw = await res.text();
           data = JSON.parse(raw);
-        } catch (_err) {
-          if (res.ok) classifierStats.bad_replies += 1;
-          // The body is read: hand the bundle a fresh response with the same text and status, so it
-          // reports the server's own error rather than a used body.
-          return new Response(raw, { status: res.status, statusText: res.statusText });
+        } catch (err) {
+          if (isTimeout(err)) classifierStats.timeouts += 1;
+          else if (res.ok) classifierStats.bad_replies += 1;
+          // The body is read: hand the bundle a fresh response with the same text, status and
+          // headers (the original's body is used and cannot be read again).
+          return new Response(raw, { status: res.status, statusText: res.statusText, headers: res.headers });
         }
         if (res.ok) classifierStats.ok += 1;
         try {
@@ -851,7 +856,8 @@
           headers: { "Content-Type": "application/json" },
         });
       }, (err) => {
-        classifierStats.network_errors += 1;
+        if (isTimeout(err)) classifierStats.timeouts += 1;
+        else classifierStats.network_errors += 1;
         throw err;
       });
     }
