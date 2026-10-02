@@ -1,0 +1,6 @@
+{
+  "rule": "Debug and tune only on tuning. held_out is for reporting: never step through, trace or tune against a held_out run. A failure seen there is reproduced on a tuning seed before it is fixed; a held_out seed that was looked into moves to debugged and is replaced by a fresh one.",
+  "tuning": [895794, 31337, 7],
+  "held_out": [104729, 271828, 314159, 577215, 662607, 141421, 173205, 223606, 299792, 160217],
+  "debugged": [895794, 31337, 42]
+}

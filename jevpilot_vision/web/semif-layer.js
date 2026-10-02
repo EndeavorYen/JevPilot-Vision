@@ -18,6 +18,10 @@
     : DRIVE_MODES.includes(modeSaved)
       ? modeSaved
       : "privileged";
+  // Latency stress (#28, benchmarks/closed_loop.py --lag-ms): every decision request waits this long
+  // before it goes out, to see whether a result holds only at one timing.
+  const lagParam = Number(params.get("lag_ms"));
+  window.SEMIF_LAG_MS = Number.isFinite(lagParam) && lagParam > 0 ? Math.min(lagParam, 5000) : 0;
   const seedParam = params.get("seed");
   if (seedParam && Number.isFinite(Number(seedParam))) {
     window.SEMIF_SEED = Number(seedParam);
@@ -798,7 +802,10 @@
         /* leave request unchanged */
       }
       const tClass = performance.now();
-      return origFetch(url, opts).then(async (res) => {
+      const sent = window.SEMIF_LAG_MS > 0
+        ? new Promise((resolve) => setTimeout(resolve, window.SEMIF_LAG_MS)).then(() => origFetch(url, opts))
+        : origFetch(url, opts);
+      return sent.then(async (res) => {
         let data;
         try {
           data = await res.json();

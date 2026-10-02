@@ -228,6 +228,13 @@ let search = specEarly.vision === "1" ? "" : "?vision=0";
 if (specEarly.lap === "1") search += (search ? "&" : "?") + "lap=1";
 if (specEarly.fleet) search += (search ? "&" : "?") + "fleet=" + specEarly.fleet;
 if (specEarly.mode) search += (search ? "&" : "?") + "mode=" + specEarly.mode;
+if (specEarly.lag) search += (search ? "&" : "?") + "lag_ms=" + specEarly.lag;
+// Latency stress (#28): timers the overlay sets, and when the decision request really goes out.
+const timers = [];
+const sentAt = [];
+if (specEarly.cmd === "lag") {
+  global.setTimeout = (fn, ms) => { timers.push(ms); fn(); return timers.length; };
+}
 const location = { search };
 let nowMs = 0;
 const window = global;
@@ -385,7 +392,12 @@ const spec = specEarly;
 const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
-if (spec.cmd === "mode") {
+if (spec.cmd === "lag") {
+  (async () => {
+    await window.fetch("/v1/classifier", { method: "POST", body: JSON.stringify({ mode: "flat", state: {} }) });
+    process.stdout.write(JSON.stringify({ timers, lag: window.SEMIF_LAG_MS }));
+  })();
+} else if (spec.cmd === "mode") {
   const DRIVE_MODES_T = ["vision", "privileged", "heuristic"];
   const shape = () => {
     const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
@@ -1256,3 +1268,13 @@ def test_review2_only_health_changes_are_announced_not_every_age_tick():
     said = steps["announcements"]["said"]
     assert said[0] == said[1] == "Vision mode, evidence stale, holding to a crawl", said
     assert said[2] == "Vision mode, detector failed, holding to a crawl", said
+
+
+def test_lag_ms_holds_every_decision_request_back_by_that_long():
+    """#28: ?lag_ms= stresses the loop with a slower decision path, to see whether a result holds
+    only at one timing. Without it nothing waits."""
+    lagged = _run({"cmd": "lag", "lag": "300"})
+    assert lagged["lag"] == 300 and 300 in lagged["timers"]
+    plain = _run({"cmd": "lag"})
+    assert plain["lag"] == 0 and 300 not in plain["timers"]
+    assert _run({"cmd": "lag", "lag": "-5"})["lag"] == 0, "nonsense is no lag"
