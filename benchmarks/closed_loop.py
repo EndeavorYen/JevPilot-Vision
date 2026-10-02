@@ -39,6 +39,8 @@ MIN_SIM_SHARE = 0.8
 # A car that averaged less than this never really drove: a stall is reported, not a clean run.
 STALL_MPS = 1.0
 MIN_SECONDS = 30
+# Rows carry the rules they were written under; rows from earlier rules are driven again.
+ROW_FORMAT = 6
 CDP = os.environ.get("CHROME_CDP", str(Path.home() / ".claude/skills/chrome-cdp-ex/bin/chrome-cdp"))
 
 # Where the mock arbiter's stopping constants come from (demo/server.py); every report repeats it,
@@ -68,7 +70,7 @@ def current_rows(rows: List[Dict[str, Any]], seeds: Dict[str, Any]) -> Tuple[Lis
     kept, dropped = [], []
     for row in rows:
         # Rows from before seed sets and outcomes were recorded do not say enough to be counted.
-        unknown = row.get("set") not in ("tuning", "held_out") or (row.get("ok") and "stalled" not in row)
+        unknown = row.get("set") not in ("tuning", "held_out") or (row.get("ok") and row.get("fmt") != ROW_FORMAT)
         stale = unknown or (row.get("set") == "held_out" and row.get("seed") not in held)
         (dropped if stale else kept).append(row)
     return kept, dropped
@@ -103,8 +105,8 @@ def read_rows(path: Path) -> List[Dict[str, Any]]:
 
 
 def _complete_row(row: Dict[str, Any]) -> bool:
-    """An ok row written under the current rules (with its outcomes)."""
-    return bool(row.get("ok")) and "stalled" in row
+    """An ok row written under the current rules."""
+    return bool(row.get("ok")) and row.get("fmt") == ROW_FORMAT
 
 
 def pending(plan: List[Dict[str, Any]], done: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -165,7 +167,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         return {"runs": 0, "attempts": 0, "retried": 0, "failed_runs": 0, "failures": {}, "never_driven": [],
                 "distance_km": 0.0, "runs_with_red_light": 0, "red_light_events": 0, "runs_with_collision": 0,
                 "collision_events": 0, "pedestrian_casualties": 0, "crashes": 0, "runs_disengaged": 0,
-                "runs_stalled": 0, "runs_broke": 0, "runs_unreadable": 0, "tab_check_failed": 0, "decision_failures": 0,
+                "runs_stalled": 0, "runs_broke": 0, "runs_unreadable": 0, "tab_check_failed": 0, "server_down_after": 0,
+                "request_errors": 0, "expired_decisions": 0,
                 "drove": 0, "drove_with_red_light": 0, "drove_with_collision": 0}
 
     # Every attempt is visible: a run that needed retries says so.
@@ -200,7 +203,9 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         s["runs_broke"] += 1 if row.get("broke") else 0
         s["runs_unreadable"] += 1 if row.get("unreadable") else 0
         s["tab_check_failed"] += 1 if row.get("tab_check") == "failed" else 0
-        s["decision_failures"] += 1 if row.get("decision_failures") or row.get("server_ok") is False else 0
+        s["server_down_after"] += 1 if row.get("server_ok") is False else 0
+        s["request_errors"] += 1 if row.get("request_errors") else 0
+        s["expired_decisions"] += 1 if row.get("expired_decisions") else 0
         # Violation rates are over runs that moved: a car that never moved commits none. A run that
         # ran a red light and then gave up (or broke) still ran it. A drive whose result could not be
         # read is unknown, not clean: it is left out and counted on its own.
@@ -237,8 +242,12 @@ def report(summary: Dict[Group, Dict[str, Any]]) -> str:
         lines.append(f"  autopilot gave up {_share(s['runs_disengaged'], n)}; car did not move {_share(s['runs_stalled'], n)}; "
                      f"drive broke (page stopped) {_share(s['runs_broke'], n)}; result unreadable {_share(s['runs_unreadable'], n)}")
         notes = []
-        if s["decision_failures"]:
-            notes.append(f"decision service failed during {s['decision_failures']} (kept: the car had moved)")
+        if s["server_down_after"]:
+            notes.append(f"decision server unreachable after {s['server_down_after']} (kept: the car had moved or broke a rule)")
+        if s["request_errors"]:
+            notes.append(f"decision requests failed during {s['request_errors']}")
+        if s["expired_decisions"]:
+            notes.append(f"decisions expired (the decision path took over 1.8 s) during {s['expired_decisions']}")
         if s["tab_check_failed"]:
             notes.append(f"tab check could not be made for {s['tab_check_failed']}")
         if notes:
@@ -278,10 +287,7 @@ _READY = (
     " else if (Date.now() - t0 > 90000) { clearInterval(t); x(new Error('the drive did not load in 90 s')); } }, 250); })"
 )
 _START = (
-    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time, failures: 0 };"
-    " const toast = document.getElementById('toast'); if (toast) new MutationObserver(() => {"
-    " if (/failed requests/i.test(toast.textContent || '')) window.__eval.failures += 1; })"
-    ".observe(toast, { childList: true, characterData: true, subtree: true });"
+    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time };"
     " window.__evalTimer = setInterval(() => { for (const o of [...s.traffic, ...s.pedestrians]) {"
     " const d = Math.hypot(o.x - s.player.x, o.z - s.player.z); if (d < window.__eval.minGap) window.__eval.minGap = d; } }, 250);"
     " if (!s.autopilot) document.querySelector('#autopilot').click();"
@@ -289,7 +295,7 @@ _START = (
 )
 _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
-    " return { engaged: window.__eval.engaged, decision_failures: window.__eval.failures > 0, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
+    " return { engaged: window.__eval.engaged, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -317,6 +323,19 @@ def open_tab(base: str) -> str:
     raise SystemExit("the evaluation tab did not appear")
 
 
+def decision_trouble(got: Dict[str, Any]) -> Dict[str, int]:
+    """From the bundle's events: decisions that expired (the decision path took over 1.8 s: the
+    model's own latency, a result) and requests that failed outright (network or server errors)."""
+    expired = errors = 0
+    for event in got.get("events") or []:
+        text = str(event).lower()
+        if "expired before it arrived" in text:
+            expired += 1
+        elif "failed to fetch" in text or "request failed" in text or "networkerror" in text or "load failed" in text:
+            errors += 1
+    return {"expired_decisions": expired, "request_errors": errors}
+
+
 def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
     """Why this run was not set up as asked (a setup failure, retried), or None. Only things true
     before the car drove are setup: the tab, the page's mode/route/lag, the autopilot engaging, and
@@ -331,13 +350,15 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"page lag {got.get('lag_seen')} ms"
     if got.get("engaged") is False:
         return "autopilot never engaged"
-    moved = got.get("crash") or float(got.get("distance_m") or 0) >= STALL_MPS * run["seconds"]
-    if not moved:
-        # The car did not get going and the decisions were failing: an outage, not the driving.
+    acted = (got.get("crash") or float(got.get("distance_m") or 0) >= STALL_MPS * run["seconds"]
+             or any(int(got.get(k) or 0) for k in ("red_light", "violations", "collisions")))
+    if not acted:
+        # The car did not get going and the server or its requests were failing: an outage, not the
+        # driving. Expired decisions are the decision path's own latency and never count here.
         if got.get("server_ok") is False:
             return "decision server unreachable after the run"
-        if got.get("decision_failures"):
-            return "decision service failed (the bundle paused after three failed requests)"
+        if int(got.get("request_errors") or 0) and not int(got.get("expired_decisions") or 0):
+            return "decision requests failed (network or server errors)"
     return None
 
 
@@ -383,23 +404,33 @@ def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
         time.sleep(3)
         _js(target, _START)
     except Exception as err:  # the drive never started: setup, retried
-        row.update(ok=False, error=f"setup: {str(err)[:300]}")
+        row.update(ok=False, fmt=ROW_FORMAT, error=f"setup: {str(err)[:300]}")
         return row
     try:
         time.sleep(run["seconds"])
         got = _js(target, _READ)
         if isinstance(got, str):
             got = json.loads(got)
+    except Exception as err:  # the drive started and then its result could not be read: unknown
+        row.update(ok=True, fmt=ROW_FORMAT, disengaged=False, stalled=False, broke=False, unreadable=True,
+                   error=f"result unreadable: {str(err)[:300]}")
+        return row
+    try:
         _cdp("nav", target, f"{base.rstrip('/')}/openapi.json")  # stop the drive before asking the server
-        got["server_ok"] = server_ok(base)
+    except Exception:
+        pass  # the result is already read; parking is only to quiet the server
+    got.update(decision_trouble(got))
+    got["server_ok"] = server_ok(base)
+    try:
         reason = validate(run, got)
-        row.update(got, ok=reason is None)
+        row.update(got, ok=reason is None, fmt=ROW_FORMAT)
         if reason:
             row["error"] = reason
         else:
             row.update(outcome(run, got))
-    except Exception as err:  # the drive started and then the page could not be read: a result, unknown
-        row.update(ok=True, disengaged=False, stalled=False, broke=True, unreadable=True, error=f"drive broke: {str(err)[:300]}")
+    except Exception as err:  # a malformed result: unknown, never clean
+        row.update(ok=True, fmt=ROW_FORMAT, disengaged=False, stalled=False, broke=False, unreadable=True,
+                   error=f"result unreadable: {str(err)[:300]}")
     return row
 
 

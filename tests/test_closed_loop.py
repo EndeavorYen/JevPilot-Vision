@@ -38,7 +38,7 @@ def _row(mode, seed, route, **kw):
     base = {"set": "held_out", "mode": mode, "seed": seed, "route": route, "lag_ms": 0, "seconds": 150, "distance_m": 1500.0,
             "crash": False, "collisions": 0, "vehicle_collisions": 0, "pedestrian_casualties": 0, "red_light": 0,
             "violations": 0, "min_gap_m": 4.0, "events": [], "ok": True, "disengaged": False, "stalled": False,
-            "broke": False, "unreadable": False}
+            "broke": False, "unreadable": False, "fmt": cl.ROW_FORMAT}
     base.update(kw)
     return base
 
@@ -132,7 +132,7 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
                           ({"world_seen": "coast:festival"}, "route"), ({"lag_seen": 0}, "lag"),
                           ({"engaged": False}, "never engaged"),
                           ({"server_ok": False, "distance_m": 20}, "decision server"),
-                          ({"decision_failures": True, "autopilot": False, "distance_m": 20}, "decision service")]:
+                          ({"request_errors": 3, "autopilot": False, "distance_m": 20}, "decision requests failed")]:
         reason = cl.validate(run, dict(good, **change))
         assert reason and words in reason, (change, reason)
     none = {"disengaged": False, "stalled": False, "broke": False, "unreadable": False}
@@ -143,7 +143,12 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
     # Review #28 (5): once the car moved, an outage seen at the end does not erase the drive: it is
     # kept as a result, flagged.
     assert cl.validate(run, dict(good, server_ok=False)) is None
-    assert cl.validate(run, dict(good, decision_failures=True, autopilot=False)) is None
+    assert cl.validate(run, dict(good, request_errors=3, autopilot=False)) is None
+    # Review #28 (6): expired decisions are the model's own latency: a stall from them is a result.
+    assert cl.validate(run, dict(good, expired_decisions=3, autopilot=False, distance_m=20)) is None
+    assert cl.outcome(run, dict(good, expired_decisions=3, autopilot=False, distance_m=20))["stalled"] is True
+    # A red light run before the car covered 150 m is not erased by an outage that followed.
+    assert cl.validate(run, dict(good, server_ok=False, distance_m=120, red_light=1)) is None
     # Review #28 (3): once the car drove, a page that stopped stepping is what the drive did.
     assert cl.validate(run, dict(good, sim_time_s=60)) is None
     assert cl.outcome(run, dict(good, sim_time_s=60))["broke"] is True
@@ -218,6 +223,10 @@ def test_review4_old_rows_are_driven_again_not_silently_dropped():
     old_ok = {"set": "held_out", "mode": "vision", "seed": 104729, "route": "festival", "seconds": 150, "lag_ms": 0, "ok": True}
     plan = cl.plan_runs([104729], ["festival"], ["vision"], seconds=150, lag_ms=0)
     assert cl.pending(plan, [old_ok]) == plan
+    # Review #28 (6): rows written under earlier rules (no format version) too, even with outcomes.
+    older = dict(old_ok, stalled=False, broke=True, error="drive broke: x")
+    assert cl.pending(plan, [older]) == plan
+    assert cl.current_rows([older], cl.load_seeds())[0] == []
 
 
 def test_review3_a_run_shared_with_another_tab_is_not_kept(monkeypatch, tmp_path):
@@ -282,3 +291,34 @@ def test_review5_a_busy_server_is_not_an_outage(monkeypatch):
     calls.clear()
     monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout: (_ for _ in ()).throw(TimeoutError("down")))
     assert cl.server_ok("http://x") is False
+
+
+def test_review6_a_read_result_survives_a_failed_park_and_unreadable_is_not_broke(monkeypatch):
+    run = {"seed": 7, "route": "harbour", "mode": "vision", "seconds": 150, "lag_ms": 0}
+    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 0, "autopilot": True, "crash": False,
+            "sim_time_s": 150, "hidden": False, "distance_m": 1800, "red_light": 1, "events": [], "engaged": True}
+    calls = []
+
+    def fake_cdp(*args, **kw):
+        calls.append(args)
+        if args[0] == "nav" and args[2].endswith("/openapi.json"):
+            raise RuntimeError("cdp hiccup")
+        return ""
+
+    monkeypatch.setattr(cl, "_cdp", fake_cdp)
+    monkeypatch.setattr(cl, "_js", lambda target, code, timeout=120: dict(good) if "JSON.stringify" in code else 1)
+    monkeypatch.setattr(cl, "server_ok", lambda base: True)
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    row = cl.drive("T", "http://x", run)
+    assert row["ok"] is True and row["red_light"] == 1 and row.get("unreadable") is False
+    # A read that fails is unknown, not a page that stopped.
+    monkeypatch.setattr(cl, "_js", lambda target, code, timeout=120: (_ for _ in ()).throw(RuntimeError("timeout"))
+                        if "JSON.stringify" in code else 1)
+    row = cl.drive("T", "http://x", run)
+    assert row["unreadable"] is True and row["broke"] is False
+
+
+def test_review6_expired_decisions_and_request_errors_are_told_apart_from_the_events():
+    got = {"events": ["40 Jev decision expired before it arrived. Replanning.", "42 Failed to fetch",
+                      "43 Jev decision expired before it arrived. Replanning."]}
+    assert cl.decision_trouble(got) == {"expired_decisions": 2, "request_errors": 1}
