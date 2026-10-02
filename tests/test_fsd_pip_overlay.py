@@ -321,6 +321,25 @@ if (specEarly.cmd === "fleet") {
   };
 }
 window.URL = { createObjectURL: () => "blob:pip", revokeObjectURL() {} };
+// Per-browser storage and the address bar, for the driving-mode preference (#21).
+const stored = Object.assign({}, specEarly.storage || {});
+window.localStorage = {
+  getItem: (k) => (k in stored ? stored[k] : null),
+  setItem: (k, v) => { stored[k] = String(v); },
+  removeItem: (k) => { delete stored[k]; },
+};
+const urls = [];
+window.history = { state: null, replaceState: (_s, _t, url) => { urls.push(String(url)); } };
+location.pathname = "/jevpilot/";
+// The bundle's strategy dropdown (semif / heuristic), as mounted before the overlay runs.
+const strategyChanges = [];
+if (specEarly.cmd === "mode") {
+  const select = el("select");
+  select.id = "strategy-select";
+  select.value = specEarly.strategy || "semif";
+  select.addEventListener("change", () => strategyChanges.push(select.value));
+  document.body.appendChild(select);
+}
 global.document = document;
 global.location = location;
 global.performance = window.performance;
@@ -364,7 +383,42 @@ const spec = specEarly;
 const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
-if (spec.cmd === "shape") {
+if (spec.cmd === "mode") {
+  const shape = () => {
+    const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
+    return { drive_mode: body.drive_mode || null, mode: body.mode };
+  };
+  const pick = (m) => document.getElementById("sol-mode-" + m).click();
+  const strategy = document.getElementById("strategy-select");
+  const reads = () => document.getElementById("sol-mode-reads").textContent;
+  const steps = [{ at: "load", mode: window.SEMIF_DRIVE_MODE, shaped: shape(), reads: reads(), select: strategy.value }];
+  for (const m of ["vision", "heuristic", "privileged"]) {
+    pick(m);
+    steps.push({ at: "click " + m, mode: window.SEMIF_DRIVE_MODE, shaped: shape(), reads: reads(), select: strategy.value,
+      checked: document.getElementById("sol-mode-" + m).getAttribute("aria-checked"),
+      intent: document.getElementById("fsd-intent").textContent });
+  }
+  strategy.value = "heuristic";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  steps.push({ at: "select heuristic", mode: window.SEMIF_DRIVE_MODE, shaped: shape() });
+  strategy.value = "semif";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  steps.push({ at: "select semif", mode: window.SEMIF_DRIVE_MODE, shaped: shape() });
+  document.body.dispatchEvent({ type: "keydown", code: "KeyV", key: "v", bubbles: true });
+  steps.push({ at: "key V", mode: window.SEMIF_DRIVE_MODE });
+  const h = window.SEMIF_MODE.health;
+  const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
+  const health = {
+    ok: h({ backend: "google/siglip-base-patch16-224", perception: ready }, 400),
+    stub: h({ backend: "stub", perception: ready }, 400),
+    loading: h({ backend: "stub", perception: { backend: "none", status: "loading" } }, 400),
+    failed: h({ backend: "stub", perception: { backend: "none", status: "failed" } }, 400),
+    stale: h({ backend: "stub", perception: ready }, 2100),
+    none: h(null, null),
+    future: h({ backend: "stub", perception: ready }, -300),
+  };
+  process.stdout.write(JSON.stringify({ steps, stored, urls, strategyChanges, health }));
+} else if (spec.cmd === "shape") {
   // The planner's batch: two candidates and their projections (points every 0.05 s).
   const pts = (v, steer) => Array.from({ length: 61 }, (_, k) => ({ x: 100 + v * 0.05 * k, z: 50 + steer * k, heading: Math.PI / 2, speed: v }));
   window.SEMIF_SIM = { world: { seed: 7 }, lastPlan: { origin: { x: 100, z: 50, heading: Math.PI / 2 },
@@ -842,6 +896,7 @@ def _run(cmd: dict, view: list[float] | None = None) -> dict:
         cwd=str(REPO),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if proc.returncode != 0:
@@ -1043,3 +1098,65 @@ def test_vision_mode_adds_a_narrow_forward_camera_for_far_lights():
     assert (round(narrow["dx"]), round(narrow["dz"])) == (25, 0), "it looks straight ahead"
     plain = _run({"cmd": "upload", "vision": "1", "frames": 3})
     assert plain["bodies"][0]["frames"] == ["front", "right", "rear", "left"], "other modes keep four cameras"
+
+
+def test_the_mode_comes_from_the_address_then_the_browser_then_privileged():
+    """#21: ?mode= overrides; otherwise the browser's last choice; otherwise privileged."""
+    assert _run({"cmd": "mode"})["steps"][0]["mode"] == "privileged"
+    assert _run({"cmd": "mode", "storage": {"semif.driveMode": "vision"}})["steps"][0]["mode"] == "vision"
+    assert _run({"cmd": "mode", "mode": "heuristic", "storage": {"semif.driveMode": "vision"}})["steps"][0]["mode"] == "heuristic"
+    assert _run({"cmd": "mode", "storage": {"semif.driveMode": "nonsense"}})["steps"][0]["mode"] == "privileged"
+
+
+def test_switching_mode_from_the_indicator_changes_the_decision_request():
+    """#21: each mode is a different decision path: Vision adds drive_mode, Heuristic asks the
+    heuristic scorer, Privileged is the SemArbiter on the simulator table. The bundle's strategy
+    dropdown follows, the choice is remembered and written into the address."""
+    out = _run({"cmd": "mode", "mode": "privileged"})
+    steps = {s["at"]: s for s in out["steps"]}
+    assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert steps["click vision"]["checked"] == "true"
+    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "heuristic"}
+    assert steps["click heuristic"]["select"] == "heuristic"
+    assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click privileged"]["select"] == "semif"
+    assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
+    assert out["stored"]["semif.driveMode"] == out["steps"][-1]["mode"], "the last choice is remembered"
+    # The address follows (other parameters kept): vision, heuristic, privileged for the three clicks.
+    assert out["urls"][:3] == ["/jevpilot/?vision=0&mode=vision", "/jevpilot/?vision=0&mode=heuristic", "/jevpilot/?vision=0&mode=privileged"]
+
+
+def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
+    steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
+    assert steps["click vision"]["reads"] == "Objects & signals from cameras · map privileged"
+    assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
+    assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
+
+
+def test_the_strategy_dropdown_and_the_v_key_drive_the_indicator_too():
+    steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "vision"})["steps"]}
+    assert steps["select heuristic"]["mode"] == "heuristic"
+    assert steps["select heuristic"]["shaped"]["mode"] == "heuristic"
+    # Back to SemArbiter in the dropdown: the last SemArbiter mode (privileged, clicked last).
+    assert steps["select semif"]["mode"] == "privileged"
+    assert steps["key V"]["mode"] == "heuristic", "V cycles vision -> privileged -> heuristic -> vision"
+
+
+def test_vision_health_says_when_the_car_is_held_to_a_crawl():
+    """#21: the detector's state, the evidence's age and the encoder backend; loading, failed,
+    stale or missing perception is the degraded state the server holds to a crawl (vision_mode.py)."""
+    h = _run({"cmd": "mode"})["health"]
+    assert h["ok"] == {"state": "ok", "text": "Detector ready · 0.4 s · SigLIP"}
+    assert h["stub"]["state"] == "ok" and h["stub"]["text"].endswith("SigLIP stub")
+    for key, words in [("loading", "Detector loading"), ("failed", "Detector failed"), ("stale", "Evidence 2.1 s old"),
+                       ("none", "Waiting for the cameras"), ("future", "Waiting for the cameras")]:
+        assert h[key]["state"] == "degraded", key
+        assert h[key]["text"].startswith(words) and h[key]["text"].endswith("holding to a crawl"), h[key]
+
+
+def test_before_any_decision_the_status_names_the_mode_that_will_decide():
+    """#21: in Heuristic the status card does not claim SemArbiter."""
+    steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
+    assert steps["click heuristic"]["intent"] == "Heuristic"
+    assert steps["click privileged"]["intent"] == "SemArbiter"

@@ -143,3 +143,10 @@ def test_review_l9_the_surround_picture_labels_use_the_tokens():
     layer = (WEB / "semif-layer.js").read_text(encoding="utf-8")
     assert '"rgba(8, 10, 14, 0.6)"' not in layer and '"#e8edf3"' not in layer
     assert "--sol-scrim" in layer and "--sol-font" in layer
+
+
+def test_the_mode_indicator_stays_in_the_minimal_view():
+    """#21: the driving mode is always on screen; the minimal view folds everything else away."""
+    hidden = re.search(r"body\.semif-minimal :is\(([^)]*)\)\s*\{\s*display: none !important;", CSS).group(1)
+    assert "#sol-mode" not in hidden and ".sol-mode" not in hidden
+    assert "#sol-mode {" in CSS and "z-index: 46;" in _rule("#sol-mode")

@@ -1264,6 +1264,142 @@ body.fsd-theme .drive-header-row {
   }
 }
 
+/* ---- Driving mode indicator (#21) -------------------------------------------------------------
+   Top centre, in every view including the minimal one: a three-way switch, what the mode reads,
+   and in Vision the perception's health. The selected mode is marked neutrally (no mode is the
+   "good" one); only a degraded Vision turns amber. */
+#sol-mode {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 46;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 5px 6px 7px;
+  background: var(--sol-panel);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-lg);
+  box-shadow: var(--sol-shadow);
+  -webkit-backdrop-filter: blur(var(--sol-blur));
+  backdrop-filter: blur(var(--sol-blur));
+  color: var(--sol-ink);
+  font-family: var(--sol-font);
+  pointer-events: auto;
+  transition: border-color var(--sol-motion);
+}
+
+.sol-mode-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--sol-field);
+  border-radius: var(--sol-radius-pill);
+}
+
+.sol-mode-option {
+  padding: 6px 15px;
+  border: 0;
+  border-radius: var(--sol-radius-pill);
+  background: transparent;
+  color: var(--sol-muted);
+  font: 800 12px var(--sol-font);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--sol-motion-fast), color var(--sol-motion-fast);
+}
+
+.sol-mode-option:hover {
+  color: var(--sol-ink);
+  background: var(--sol-hover);
+}
+
+.sol-mode-option[aria-checked="true"],
+.sol-mode-option[aria-checked="true"]:hover {
+  color: var(--sol-panel-deep);
+  background: var(--sol-ink);
+}
+
+.sol-mode-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 10px;
+  margin: 0;
+  padding: 0 8px;
+  color: var(--sol-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+#sol-mode-health:empty {
+  display: none;
+}
+
+#sol-mode-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sol-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+#sol-mode-health::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sol-ok);
+  box-shadow: 0 0 6px var(--sol-ok-glow);
+}
+
+#sol-mode[data-health="degraded"] {
+  border-color: var(--sol-wait);
+}
+
+#sol-mode[data-health="degraded"] #sol-mode-health {
+  color: var(--sol-wait);
+}
+
+#sol-mode[data-health="degraded"] #sol-mode-health::before {
+  background: var(--sol-wait);
+  box-shadow: 0 0 6px var(--sol-wait-glow);
+}
+
+/* Narrow screens: the same switch, compact, where the clock was (T still changes the time). */
+@media (max-width: 900px) {
+  #sol-mode {
+    top: 6px;
+    gap: 2px;
+    padding: 3px 4px 4px;
+    max-width: calc(100vw - 100px);
+  }
+  .sol-mode-option {
+    padding: 4px 11px;
+    font-size: 11px;
+  }
+  .sol-mode-line {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  #sol-mode-reads {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Health as the dot alone (amber when degraded); the words are in the tooltip. */
+  #sol-mode-health {
+    font-size: 0;
+    gap: 0;
+  }
+  body.fsd-theme .semif-clock {
+    display: none;
+  }
+}
+
 /* ---- Desktop layout -----------------------------------------------------------------------------
    A command column on the left (the Solmare wordmark, where the drive starts, who drives, then our
    status card docked under it by semif-layer.js), a navigation stack on the right (the next turn
