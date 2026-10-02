@@ -944,15 +944,30 @@
         if (!side || !renderView(world, side[1], src)) continue;
       }
       ctx.drawImage(src, col * w, row * h, w, h);
-      ctx.fillStyle = "rgba(8, 10, 14, 0.6)";
+      ctx.fillStyle = pipToken("--sol-scrim", "rgba(3, 10, 16, 0.58)");
       ctx.fillRect(col * w + 4, row * h + 4, 40, 13);
-      ctx.fillStyle = "#e8edf3";
-      ctx.font = "600 9px Inter, system-ui, sans-serif";
+      ctx.fillStyle = pipToken("--sol-ink", "#f8efe2");
+      ctx.font = `700 9px ${pipToken("--sol-font", "system-ui, sans-serif")}`;
       ctx.fillText(CAMERA_LABELS[name], col * w + 8, row * h + 14);
     }
-    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.fillStyle = pipToken("--sol-line-strong", "rgba(248, 239, 226, 0.3)");
     ctx.fillRect(w - 0.5, 0, 1, PIP_H);
     ctx.fillRect(0, h - 0.5, PIP_W, 1);
+  }
+
+  // The surround picture's labels take the overlay's tokens (semif-layer.css), read once.
+  const pipTokens = {};
+  function pipToken(name, fallback) {
+    if (!(name in pipTokens)) {
+      let v = "";
+      try {
+        v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      } catch (_err) {
+        /* no style sheet (node tests): the built-in value */
+      }
+      pipTokens[name] = v || fallback;
+    }
+    return pipTokens[name];
   }
 
   // Pills carry their state (on / off / waiting / error) for the stylesheet.

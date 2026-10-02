@@ -217,7 +217,8 @@
     model.series.forEach((s, k) => {
       const buckets = model.buckets[k];
       if (model.band) {
-        g.fillStyle = s.color + "2e";
+        g.fillStyle = s.color;
+        g.globalAlpha = 0.18;
         let start = -1;
         const flush = (end) => {
           if (start < 0) return;
@@ -233,6 +234,7 @@
           if (!b) flush(i);
         });
         flush(buckets.length);
+        g.globalAlpha = 1;
       }
       g.strokeStyle = s.color;
       g.lineWidth = 2;
@@ -315,7 +317,7 @@
     <figure class="fsd-chart" data-chart="stages">
       <figcaption><strong>Pipeline stages</strong><span>ms</span>
         <span class="fsd-chart-legend">${seriesOf("stages")
-          .map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`)
+          .map((s) => `<span><i style="background:var(${s.token}, ${s.color})"></i>${s.label}</span>`)
           .join("")}</span>
       </figcaption>
       <div class="fsd-chart-box"><canvas></canvas><div class="fsd-chart-tip" hidden></div></div>
@@ -323,7 +325,7 @@
     <table class="fsd-stats-table">
       <thead><tr><th scope="col">Series</th><th>Last</th><th>P50</th><th>P95</th><th>Max</th><th>Samples</th></tr></thead>
       <tbody>${SERIES.map(
-        (s) => `<tr data-key="${s.key}"><th scope="row"><i style="background:${s.color}"></i>${s.label}</th><td></td><td></td><td></td><td></td><td></td></tr>`
+        (s) => `<tr data-key="${s.key}"><th scope="row"><i style="background:var(${s.token}, ${s.color})"></i>${s.label}</th><td></td><td></td><td></td><td></td><td></td></tr>`
       ).join("")}</tbody>
     </table>
     <footer class="fsd-stats-foot"></footer>
@@ -431,7 +433,7 @@
       const rows = c.model.series
         .map((s, k) => {
           const b = c.model.buckets[k][c.hover];
-          return b ? `<div><i style="background:${s.color}"></i>${s.label}<b>${fmtMs(b.mean)} ms</b></div>` : "";
+          return b ? `<div><i style="background:var(${s.token}, ${s.color})"></i>${s.label}<b>${fmtMs(b.mean)} ms</b></div>` : "";
         })
         .join("");
       if (!rows) {

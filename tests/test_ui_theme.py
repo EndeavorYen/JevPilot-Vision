@@ -95,3 +95,45 @@ def test_the_latency_charts_read_their_colours_from_the_tokens():
     assert "getComputedStyle" in stats
     for name in ["--sol-viz-1", "--sol-viz-2", "--sol-viz-3", "--sol-viz-4", "--sol-viz-surface"]:
         assert name in stats, name
+
+
+def _rule(selector: str, within: str = CSS) -> str:
+    i = within.index(selector + " {")
+    return within[i:within.index("}", i)]
+
+
+def test_review_h1_the_route_map_keeps_a_fixed_width_when_dragged_out():
+    """The bundle's drag gives #minimap inline position: fixed; a percentage width would then
+    resolve against the window and stretch the map across it."""
+    rule = _rule("  body.fsd-theme .navigation-hud .minimap")
+    width = re.search(r"width:\s*([^;]+);", rule).group(1)
+    assert "%" not in width and "px" in width, width
+
+
+def test_review_m2_the_latency_panel_stays_usable_on_small_desktop_windows():
+    desktop = CSS[CSS.index("@media (min-width: 901px) {"):]
+    width = re.search(r"#fsd-stats \{[^}]*?width: ([^;]+);", desktop).group(1)
+    assert width == "min(620px, calc(100vw - 408px))", width  # 493 px at 901 px wide
+
+
+def test_review_m3_legend_swatches_and_bands_follow_the_tokens():
+    stats = (WEB / "semif-stats.js").read_text(encoding="utf-8")
+    assert '+ "2e"' not in stats, "the band's alpha does not assume a 6-digit hex colour"
+    assert "globalAlpha" in stats
+    assert "background:var(${s.token}" in stats, "swatches use the token itself"
+
+
+def test_review_m4_the_percentage_is_not_announced_every_step():
+    label = re.search(r'<span class="sol-progress-label"[^>]*>', HTML).group(0)
+    assert 'aria-hidden="true"' in label
+
+
+def test_review_m5_the_two_halo_levels_stay_apart():
+    watch, near = _rule('#fsd-halo[data-level="watch"]'), _rule('#fsd-halo[data-level="near"]')
+    assert "--sol-wait" in watch and "--sol-danger" in near
+
+
+def test_review_l9_the_surround_picture_labels_use_the_tokens():
+    layer = (WEB / "semif-layer.js").read_text(encoding="utf-8")
+    assert '"rgba(8, 10, 14, 0.6)"' not in layer and '"#e8edf3"' not in layer
+    assert "--sol-scrim" in layer and "--sol-font" in layer

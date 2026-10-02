@@ -54,7 +54,7 @@
       try {
         new PerformanceObserver((list) => {
           downloads += list.getEntries().length;
-          render();
+          if (!loader.hidden) render(); // after load, downloads are only counted
         }).observe({ type: "resource", buffered: true });
       } catch (_err) {
         /* no resource timing: the stages alone move the bar */

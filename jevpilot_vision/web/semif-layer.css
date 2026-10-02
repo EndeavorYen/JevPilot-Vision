@@ -18,7 +18,7 @@
 
   --sol-ink: #f8efe2;
   --sol-ink-strong: #fffaf3;
-  --sol-muted: #bcae99;
+  --sol-muted: #cbbda7;
   --sol-faint: #8c8376;
   --sol-line: rgba(248, 239, 226, 0.14);
   --sol-line-strong: rgba(248, 239, 226, 0.3);
@@ -563,8 +563,8 @@ body.fsd-theme .touch-brake.held {
 }
 
 #fsd-halo[data-level="watch"] {
-  border-color: var(--sol-accent);
-  box-shadow: 0 0 28px 6px var(--sol-accent-soft);
+  border-color: var(--sol-wait);
+  box-shadow: 0 0 28px 6px var(--sol-wait-glow);
 }
 
 #fsd-halo[data-level="near"] {
@@ -1323,8 +1323,10 @@ body.fsd-theme .drive-header-row {
     border-bottom: 0;
   }
 
+  /* A fixed width: dragged out, the bundle makes the map position: fixed, and a percentage would
+     then stretch it across the window. */
   body.fsd-theme .navigation-hud .minimap {
-    width: 100%;
+    width: 290px;
     border-radius: 0 0 var(--sol-radius-lg) var(--sol-radius-lg);
     border-top: 1px solid var(--sol-line);
   }
@@ -1349,7 +1351,7 @@ body.fsd-theme .drive-header-row {
   #fsd-stats {
     top: 16px;
     left: 392px;
-    width: min(620px, calc(100vw - 392px - 330px));
+    width: min(620px, calc(100vw - 408px));
     max-height: calc(100vh - 140px);
   }
 
@@ -1501,12 +1503,14 @@ body.fsd-theme .minimap-toolbar button {
 }
 
 .sol-progress-label {
+  padding: 3px 12px;
+  border-radius: var(--sol-radius-pill);
+  background: var(--sol-scrim);
   color: var(--sol-ink);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
 }
 
 #scene-loader[data-state="error"] .sol-progress > span {
@@ -1514,8 +1518,8 @@ body.fsd-theme .minimap-toolbar button {
 }
 
 #scene-loader[data-state="error"] .sol-progress-label {
-  color: var(--sol-danger);
-  opacity: 1;
+  color: var(--sol-ink-strong);
+  background: var(--sol-danger-glow);
 }
 
 #loading-retry {
