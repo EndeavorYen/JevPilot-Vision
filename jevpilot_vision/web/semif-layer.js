@@ -151,7 +151,9 @@
     modeEl.setAttribute("data-health", h.state);
     modeHealth.textContent = h.text;
     modeHealth.setAttribute("title", h.text);
-    announce(h.state === "ok" ? "Vision mode, detector ready" : `Vision mode, ${h.text.split(" — ")[0]}, holding to a crawl`);
+    // Fixed phrases: the evidence age is on screen, not read out on every tick.
+    const reason = h.state === "ok" ? "" : h.text.startsWith("Evidence") ? "evidence stale" : h.text.split(" — ")[0].toLowerCase();
+    announce(h.state === "ok" ? "Vision mode, detector ready" : `Vision mode, ${reason}, holding to a crawl`);
   }
 
   // The bundle's strategy dropdown is the switch for SemArbiter vs the heuristic; it follows the
@@ -225,7 +227,7 @@
   }
   wireStrategy();
   renderMode();
-  window.SEMIF_MODE = { set: setDriveMode, health: modeHealthOf };
+  window.SEMIF_MODE = { set: setDriveMode, health: modeHealthOf, refresh: renderModeHealth };
 
   // Minimal view (H, or the corner button): every panel folds away except speed, limit, the
   // autopilot switch and the next turn, so the drive fills the screen. Remembered per browser.

@@ -435,6 +435,19 @@ if (spec.cmd === "mode") {
   const live = document.getElementById("sol-mode-announce");
   const healthEl = document.getElementById("sol-mode-health");
   steps.push({ at: "live regions", announce: live && live.getAttribute("aria-live"), health: healthEl.getAttribute("aria-live") });
+  // What the live region says as stale evidence ages, then when the detector fails.
+  window.SEMIF_MODE.set("vision");
+  window.SEMIF_VISION = { backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd", status: "ready" } };
+  window.SEMIF_VISION_AT = nowMs - 2100;
+  window.SEMIF_MODE.refresh();
+  const said = [document.getElementById("sol-mode-announce").textContent];
+  nowMs += 300;
+  window.SEMIF_MODE.refresh();
+  said.push(document.getElementById("sol-mode-announce").textContent);
+  window.SEMIF_VISION = { backend: "stub", perception: { backend: "none", status: "failed" } };
+  window.SEMIF_MODE.refresh();
+  said.push(document.getElementById("sol-mode-announce").textContent);
+  steps.push({ at: "announcements", said });
   const h = window.SEMIF_MODE.health;
   const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
   const health = {
@@ -927,9 +940,15 @@ def _harness_file() -> str:
     import hashlib
     import tempfile
 
+    import os
+
     path = Path(tempfile.gettempdir()) / f"semif-overlay-harness-{hashlib.sha1(_HARNESS.encode()).hexdigest()[:12]}.js"
     if not path.exists():
-        path.write_text(_HARNESS, encoding="utf-8")
+        # Written whole, then renamed into place: an interrupted or parallel write never leaves a
+        # half file under the final name.
+        tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
+        tmp.write_text(_HARNESS, encoding="utf-8")
+        os.replace(tmp, path)
     return path.as_posix()
 
 
@@ -1230,5 +1249,10 @@ def test_review2_arrow_keys_on_the_switch_change_the_mode_and_never_reach_the_dr
 
 
 def test_review2_only_health_changes_are_announced_not_every_age_tick():
-    live = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["live regions"]
+    steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
+    live = steps["live regions"]
     assert live["announce"] == "polite" and live["health"] is None
+    # Stale at 2.1 s and at 2.4 s is one announcement; a failure is a new one.
+    said = steps["announcements"]["said"]
+    assert said[0] == said[1] == "Vision mode, evidence stale, holding to a crawl", said
+    assert said[2] == "Vision mode, detector failed, holding to a crawl", said
