@@ -349,8 +349,8 @@ def test_review_h1_evidence_says_when_its_frame_was_grabbed(monkeypatch):
 
 def test_review2_m4_the_narrow_camera_does_not_read_a_light_beyond_this_junction():
     """The narrow camera fills in only with a head near enough to govern the coming stop line. A
-    1.65 m head 12 px tall in the 40 degree camera is about 120 m away: the next junction (coast
-    junctions are at least 100 m apart; this one's far-side head is under 90 m away while it matters)."""
+    2.05 m head (with its backplate) 12 px tall in the 40 degree camera is about 150 m away: the
+    next junction (coast junctions are at least 100 m apart)."""
     from PIL import Image
 
     import jevpilot_vision.perception as P
@@ -373,4 +373,39 @@ def test_review2_m4_the_narrow_camera_does_not_read_a_light_beyond_this_junction
     far = P.Perception(Fake([316, 116, 325, 128])).front(wide, narrow=narrow)
     near = P.Perception(Fake([310, 110, 332, 150])).front(wide, narrow=narrow)
     assert far["signal"]["state"] == "unknown"
-    assert near["signal"]["state"] == "green" and near["signal"]["range_m"] == pytest.approx(36.3, abs=0.5)
+    assert near["signal"]["state"] == "green" and near["signal"]["range_m"] == pytest.approx(45.1, abs=0.5)
+
+
+def test_review3_the_next_junctions_head_100_m_away_is_not_read_by_either_path():
+    """The heads are drawn larger than a bare housing (a 2.05 m backplate, 0.368 m lamps): sized by
+    a bare housing, the next junction's near-side head about 100 m away read as 81 m and passed."""
+    from PIL import Image
+
+    import jevpilot_vision.perception as P
+
+    wide = Image.new("RGB", (640, 360), (90, 90, 90))
+    fx = P.CameraModel(640, 360, hfov_deg=P.NARROW_HFOV_DEG).fx
+
+    def narrow_with_lamp(rows):
+        px = np.full((360, 640, 3), 30, dtype=np.uint8)
+        px[120:120 + rows, 319:322] = (70, 250, 110)
+        return Image.fromarray(px)
+
+    class Fake(P.Detector):
+        def __init__(self, narrow, box):
+            self.narrow, self.box, self.model_id = narrow, box, "fake"
+
+        def detect_or_status(self, image):
+            if image is self.narrow and self.box:
+                return "ready", [{"kind": "traffic_light", "conf": 0.7, "box": self.box}]
+            return "ready", []
+
+    tall = fx * 2.05 / 100.0  # the backplate's box at 100 m
+    boxed = narrow_with_lamp(3)
+    far_box = P.Perception(Fake(boxed, [314, 120 - tall / 2, 326, 120 + tall / 2])).front(wide, narrow=boxed)
+    assert far_box["signal"]["state"] == "unknown"
+    for rows, readable in ((4, False), (8, True)):  # a lamp at about 81 m (rounded up from 100 m), then about 40 m
+        lamp = narrow_with_lamp(rows)
+        got = P.Perception(Fake(lamp, None)).front(wide, narrow=lamp)["signal"]
+        assert (got["state"] == "green") is readable, (rows, got)
+    assert P.NARROW_MAX_RANGE_M <= 75.0

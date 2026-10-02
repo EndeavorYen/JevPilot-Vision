@@ -406,12 +406,14 @@ class Detector:
         )
 
 
-# The narrow camera's reading counts only from a head near enough to govern the coming stop line:
-# coast junctions are at least 100 m apart and a junction's far-side head is about 15 m past its
-# line, so a head over 90 m away belongs to the next junction (review #18). Its range comes from
-# its size: a boxed head is 1.65 m tall, a lamp found from pixels 0.32 m.
-NARROW_MAX_RANGE_M = 90.0
-HEAD_HEIGHT_M = {"detector": 1.65, "lamp": 0.32}
+# The narrow camera's reading counts only from a head near enough to govern the coming stop line.
+# Coast junctions are at least 100 m apart, and the next junction's near-side head stands about
+# 101 m past this junction's line; this junction's own heads are within 75 m while the car is up
+# to about 60 m out (closer in, the wide camera reads them). Range comes from size, as drawn
+# (semif-scenery.js restyleSignals): a boxed head with its backplate is 2.05 m tall, a lamp found
+# from pixels 0.368 m. A one-row error in a 3-4 px lamp is about 25%, inside the 75-101 m gap.
+NARROW_MAX_RANGE_M = 75.0
+HEAD_HEIGHT_M = {"detector": 2.05, "lamp": 0.368}
 
 
 def _within_narrow_range(signal: Dict[str, Any], camera: CameraModel) -> Dict[str, Any]:
