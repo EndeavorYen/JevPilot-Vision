@@ -26,8 +26,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
 SEEDS_FILE = HERE / "closed_loop_seeds.json"
-ROUTES = ("festival", "harbour", "pass")
-MODES = ("privileged", "vision")
+ROUTES = ("festival", "harbour", "pass", "coast", "highway")  # the coast map's start points
+MODES = ("privileged", "vision", "heuristic")
+DEFAULT_ROUTES = ("festival", "harbour", "pass")
+DEFAULT_MODES = ("privileged", "vision")
+# The bundle drops a decision that arrives more than 1.8 s after it asked, injected lag included;
+# beyond this the stress only parks the car (semif-layer.js caps ?lag_ms= the same).
+MAX_LAG_MS = 1200
+# A run counts only if the simulation really ran most of it (a hidden tab does not step).
+MIN_SIM_SHARE = 0.8
 CDP = os.environ.get("CHROME_CDP", str(Path.home() / ".claude/skills/chrome-cdp-ex/bin/chrome-cdp"))
 
 # Where the mock arbiter's stopping constants come from (demo/server.py); every report repeats it,
@@ -41,7 +48,24 @@ CONSTANTS_NOTE = (
 # ---- Seeds, plans, results ------------------------------------------------------------------------
 
 def load_seeds(path: Path = SEEDS_FILE) -> Dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """The seed sets, refusing a file that breaks its own rule (held_out apart from the rest)."""
+    seeds = json.loads(Path(path).read_text(encoding="utf-8"))
+    held = set(seeds.get("held_out", []))
+    clash = held & (set(seeds.get("tuning", [])) | set(seeds.get("debugged", [])))
+    if clash:
+        raise ValueError(f"held_out seeds {sorted(clash)} are also tuning or debugged seeds")
+    return seeds
+
+
+def current_rows(rows: List[Dict[str, Any]], seeds: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Rows still valid under today's seed file: a held_out row whose seed has since been looked
+    into (moved to debugged, or out of held_out) no longer reports as held out."""
+    held = set(seeds.get("held_out", [])) - set(seeds.get("debugged", []))
+    kept, dropped = [], []
+    for row in rows:
+        stale = row.get("set") == "held_out" and row.get("seed") not in held
+        (dropped if stale else kept).append(row)
+    return kept, dropped
 
 
 def plan_runs(seeds: Iterable[int], routes: Iterable[str], modes: Iterable[str], seconds: int, lag_ms: int) -> List[Dict[str, Any]]:
@@ -96,15 +120,31 @@ def wilson(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
-def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
+def latest(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row per run: a retried run counts once, by its last result."""
+    last: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for row in rows:
-        mode = row.get("mode", "?")
-        s = out.setdefault(mode, {"runs": 0, "failed_runs": 0, "distance_km": 0.0, "runs_with_red_light": 0,
-                                  "red_light_events": 0, "runs_with_collision": 0, "collision_events": 0,
-                                  "pedestrian_casualties": 0, "crashes": 0, "lag_ms": set(), "seconds": set()})
+        last[(row.get("set"),) + _key(row)] = row
+    return list(last.values())
+
+
+Group = Tuple[Any, Any, Any, Any]  # (set, mode, seconds, lag_ms)
+
+
+def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
+    """Per (set, mode, seconds, lag): only runs made the same way are pooled. A run that did not
+    drive (failed, autopilot off, hidden tab, wrong mode/route/lag) is counted apart with its reason,
+    never as a good drive. Collisions end a drive, so collisions per km are crashes per km."""
+    out: Dict[Group, Dict[str, Any]] = {}
+    for row in latest(rows):
+        group = (row.get("set", "?"), row.get("mode", "?"), int(row.get("seconds") or 0), int(row.get("lag_ms") or 0))
+        s = out.setdefault(group, {"runs": 0, "failed_runs": 0, "failures": {}, "distance_km": 0.0, "runs_with_red_light": 0,
+                                   "red_light_events": 0, "runs_with_collision": 0, "collision_events": 0,
+                                   "pedestrian_casualties": 0, "crashes": 0})
         if not row.get("ok"):
             s["failed_runs"] += 1
+            reason = str(row.get("error") or "unknown")
+            s["failures"][reason] = s["failures"].get(reason, 0) + 1
             continue
         s["runs"] += 1
         s["distance_km"] += float(row.get("distance_m") or 0.0) / 1000.0
@@ -116,14 +156,10 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         s["runs_with_collision"] += 1 if hits or row.get("crash") else 0
         s["pedestrian_casualties"] += int(row.get("pedestrian_casualties") or 0)
         s["crashes"] += 1 if row.get("crash") else 0
-        s["lag_ms"].add(int(row.get("lag_ms") or 0))
-        s["seconds"].add(int(row.get("seconds") or 0))
     for s in out.values():
         km = s["distance_km"]
         s["red_light_per_km"] = s["red_light_events"] / km if km else None
         s["collisions_per_km"] = s["collision_events"] / km if km else None
-        s["lag_ms"] = sorted(s["lag_ms"])
-        s["seconds"] = sorted(s["seconds"])
     return out
 
 
@@ -132,20 +168,20 @@ def _share(k: int, n: int) -> str:
     return f"{k}/{n} runs (95% {lo * 100:.0f}-{hi * 100:.0f}%)"
 
 
-def report(summary: Dict[str, Dict[str, Any]]) -> str:
+def report(summary: Dict[Group, Dict[str, Any]]) -> str:
     lines = []
-    for mode in sorted(summary):
-        s = summary[mode]
+    for group in sorted(summary, key=lambda g: tuple(str(x) for x in g)):
+        seed_set, mode, seconds, lag = group
+        s = summary[group]
         n = s["runs"]
         per_km = lambda v: "n/a" if v is None else f"{v:.2f}/km"
-        lines.append(
-            f"{mode}: {n} runs, {s['distance_km']:.1f} km driven"
-            + (f", {s['failed_runs']} failed to run" if s["failed_runs"] else "")
-            + f" (lag {s['lag_ms']} ms, {s['seconds']} s each)"
-        )
+        lines.append(f"{seed_set} · {mode} · {seconds} s · lag {lag} ms: {n} runs, {s['distance_km']:.1f} km driven")
+        if s["failed_runs"]:
+            why = "; ".join(f"{k} ×{v}" for k, v in sorted(s["failures"].items()))
+            lines.append(f"  did not complete {s['failed_runs']} (left out of the rates): {why}")
         lines.append(f"  red light {_share(s['runs_with_red_light'], n)}; {s['red_light_events']} events, {per_km(s['red_light_per_km'])}")
         lines.append(f"  collision {_share(s['runs_with_collision'], n)}; {s['collision_events']} events, {per_km(s['collisions_per_km'])}")
-        lines.append(f"  pedestrian casualties {s['pedestrian_casualties']}; crashes that ended the drive {s['crashes']}")
+        lines.append(f"  of those, pedestrians {s['pedestrian_casualties']}; a collision ends the drive")
     lines.append(CONSTANTS_NOTE)
     return "\n".join(lines)
 
@@ -174,28 +210,58 @@ _READY = (
     " else if (Date.now() - t0 > 90000) { clearInterval(t); x(new Error('the drive did not load in 90 s')); } }, 250); })"
 )
 _START = (
-    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99 };"
+    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time };"
     " window.__evalTimer = setInterval(() => { for (const o of [...s.traffic, ...s.pedestrians]) {"
     " const d = Math.hypot(o.x - s.player.x, o.z - s.player.z); if (d < window.__eval.minGap) window.__eval.minGap = d; } }, 250);"
     " if (!s.autopilot) document.querySelector('#autopilot').click(); return 1; })()"
 )
 _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
-    " return { mode_seen: window.SEMIF_DRIVE_MODE, sim_time_s: Math.round(s.time), distance_m: Math.round(s.distance),"
+    " return { mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
+    " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
-    " min_gap_m: +window.__eval.minGap.toFixed(1), events: s.events.slice(0, 12).map((e) => e.time.toFixed(0) + ' ' + e.text) }; })())"
+    " min_gap_m: +window.__eval.minGap.toFixed(1), events: s.events.map((e) => e.time.toFixed(0) + ' ' + e.text) }; })())"
 )
 
 
-def find_tab(base: str) -> str:
-    tabs = [line.split()[0] for line in _cdp("list").splitlines() if "/jevpilot" in line]
-    if tabs:
-        for other in tabs[1:]:
-            _cdp("nav", other, f"{base.rstrip('/')}/openapi.json")  # one simulation at a time
-        return tabs[0]
-    _cdp("open", f"{base.rstrip('/')}/jevpilot/")
-    return [line.split()[0] for line in _cdp("list").splitlines() if "/jevpilot" in line][0]
+def _jevpilot_tabs() -> List[str]:
+    return [line.split()[0] for line in _cdp("list").splitlines() if "/jevpilot" in line]
+
+
+def open_tab(base: str) -> str:
+    """A tab of our own, opened by chrome-cdp-ex (so it is not a hidden background tab). Another
+    simulation tab would share the server's vision slot and mix camera evidence, so we refuse to
+    start rather than take over someone's tab."""
+    others = _jevpilot_tabs()
+    if others:
+        raise SystemExit(f"close the open simulation tab(s) {others} first: they share the server's vision slot")
+    _cdp("open", f"{base.rstrip('/')}/jevpilot/?minimal=0")
+    for _ in range(20):
+        tabs = _jevpilot_tabs()
+        if tabs:
+            return tabs[0]
+        time.sleep(0.5)
+    raise SystemExit("the evaluation tab did not appear")
+
+
+def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
+    """Why this run is not a drive to count, or None. A crash is a result, not a failure."""
+    if got.get("hidden"):
+        return "tab hidden (the simulation does not step)"
+    if got.get("mode_seen") != run["mode"]:
+        return f"drove mode {got.get('mode_seen')!r}"
+    if got.get("world_seen") != f"coast:{run['route']}":
+        return f"drove route {got.get('world_seen')!r}"
+    if int(got.get("lag_seen") or 0) != int(run.get("lag_ms") or 0):
+        return f"page lag {got.get('lag_seen')} ms"
+    if got.get("crash"):
+        return None
+    if not got.get("autopilot"):
+        return "autopilot not driving at the end"
+    if float(got.get("sim_time_s") or 0) < MIN_SIM_SHARE * run["seconds"]:
+        return f"sim ran {got.get('sim_time_s')} s of {run['seconds']}"
+    return None
 
 
 def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -209,9 +275,10 @@ def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
         got = _js(target, _READ)
         if isinstance(got, str):
             got = json.loads(got)
-        row.update(got, ok=got.get("mode_seen") == run["mode"])
-        if not row["ok"]:
-            row["error"] = f"page drove in mode {got.get('mode_seen')!r}"
+        reason = validate(run, got)
+        row.update(got, ok=reason is None)
+        if reason:
+            row["error"] = reason
     except Exception as err:  # a run that could not be driven is recorded, never counted as a good drive
         row.update(ok=False, error=str(err)[:300])
     return row
@@ -220,18 +287,23 @@ def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--set", choices=("tuning", "held_out"), default="tuning")
-    ap.add_argument("--seeds", type=int, nargs="*", help="a subset of the chosen set")
-    ap.add_argument("--routes", nargs="*", default=list(ROUTES))
-    ap.add_argument("--modes", nargs="*", default=list(MODES))
+    ap.add_argument("--seeds", type=int, nargs="+", help="a subset of the chosen set")
+    ap.add_argument("--routes", nargs="+", choices=ROUTES, default=list(DEFAULT_ROUTES))
+    ap.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
     ap.add_argument("--seconds", type=int, default=150)
-    ap.add_argument("--lag-ms", type=int, default=0)
+    ap.add_argument("--lag-ms", type=int, default=0, help=f"0..{MAX_LAG_MS}: the bundle drops decisions older than 1.8 s")
     ap.add_argument("--base", default="http://localhost:8768")
     ap.add_argument("--out", type=Path, help="JSONL results (absolute path); reruns resume")
     ap.add_argument("--report", type=Path, help="only summarise an existing results file")
     args = ap.parse_args(argv)
 
+    if not 0 <= args.lag_ms <= MAX_LAG_MS:
+        ap.error(f"--lag-ms must be 0..{MAX_LAG_MS}")
     if args.report:
-        print(report(summarize(read_rows(args.report))))
+        kept, dropped = current_rows(read_rows(args.report), load_seeds())
+        if dropped:
+            print(f"left out {len(dropped)} held_out rows whose seeds are no longer held out")
+        print(report(summarize(kept)))
         return 0
     if not args.out or not args.out.is_absolute():
         ap.error("--out must be an absolute path")
@@ -244,7 +316,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"{len(plan)} runs planned ({args.set}), {len(plan) - len(todo)} already in {args.out}; "
           f"about {len(todo) * (args.seconds + 25) / 60:.0f} min to go", flush=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    target = find_tab(args.base)
+    target = open_tab(args.base)
     for i, run in enumerate(todo, 1):
         row = drive(target, args.base, run)
         row["set"] = args.set
@@ -253,7 +325,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[{i}/{len(todo)}] seed {run['seed']} {run['route']}/{run['mode']}: "
               + (f"{row.get('distance_m')} m, red {row.get('red_light')}, collisions {row.get('collisions')}"
                  if row["ok"] else f"FAILED {row.get('error')}"), flush=True)
-    print(report(summarize(read_rows(args.out))))
+    _cdp("nav", target, f"{args.base.rstrip('/')}/openapi.json")  # stop the last drive
+    print(report(summarize(current_rows(read_rows(args.out), load_seeds())[0])))
     return 0
 
 

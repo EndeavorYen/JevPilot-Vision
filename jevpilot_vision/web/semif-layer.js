@@ -19,9 +19,10 @@
       ? modeSaved
       : "privileged";
   // Latency stress (#28, benchmarks/closed_loop.py --lag-ms): every decision request waits this long
-  // before it goes out, to see whether a result holds only at one timing.
+  // before it goes out, to see whether a result holds only at one timing. At most 1.2 s: the bundle
+  // drops a decision that arrives 1.8 s after it asked, lag included, so more would only park the car.
   const lagParam = Number(params.get("lag_ms"));
-  window.SEMIF_LAG_MS = Number.isFinite(lagParam) && lagParam > 0 ? Math.min(lagParam, 5000) : 0;
+  window.SEMIF_LAG_MS = Number.isFinite(lagParam) && lagParam > 0 ? Math.min(lagParam, 1200) : 0;
   const seedParam = params.get("seed");
   if (seedParam && Number.isFinite(Number(seedParam))) {
     window.SEMIF_SEED = Number(seedParam);
@@ -801,9 +802,13 @@
       } catch (_err) {
         /* leave request unchanged */
       }
-      const tClass = performance.now();
+      let tClass = performance.now();
+      // The classifier's latency is timed from when the request really goes out (after any lag).
       const sent = window.SEMIF_LAG_MS > 0
-        ? new Promise((resolve) => setTimeout(resolve, window.SEMIF_LAG_MS)).then(() => origFetch(url, opts))
+        ? new Promise((resolve) => setTimeout(resolve, window.SEMIF_LAG_MS)).then(() => {
+            tClass = performance.now();
+            return origFetch(url, opts);
+          })
         : origFetch(url, opts);
       return sent.then(async (res) => {
         let data;

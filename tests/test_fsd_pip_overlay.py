@@ -1278,3 +1278,6 @@ def test_lag_ms_holds_every_decision_request_back_by_that_long():
     plain = _run({"cmd": "lag"})
     assert plain["lag"] == 0 and 300 not in plain["timers"]
     assert _run({"cmd": "lag", "lag": "-5"})["lag"] == 0, "nonsense is no lag"
+    # Review #28: the bundle drops a decision older than 1.8 s from when it asked, lag included, so
+    # a stress above 1.2 s would only park the car.
+    assert _run({"cmd": "lag", "lag": "5000"})["lag"] == 1200
