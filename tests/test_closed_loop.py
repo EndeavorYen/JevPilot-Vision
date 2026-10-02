@@ -37,7 +37,8 @@ def test_wilson_interval_is_honest_about_small_samples():
 def _row(mode, seed, route, **kw):
     base = {"set": "held_out", "mode": mode, "seed": seed, "route": route, "lag_ms": 0, "seconds": 150, "distance_m": 1500.0,
             "crash": False, "collisions": 0, "vehicle_collisions": 0, "pedestrian_casualties": 0, "red_light": 0,
-            "violations": 0, "min_gap_m": 4.0, "events": [], "ok": True}
+            "violations": 0, "min_gap_m": 4.0, "events": [], "ok": True, "disengaged": False, "stalled": False,
+            "broke": False}
     base.update(kw)
     return base
 
@@ -127,15 +128,19 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
     assert cl.validate(run, good) is None
     assert cl.validate(run, dict(good, crash=True, autopilot=False, sim_time_s=80)) is None, "a crash is a result"
     assert cl.validate(run, dict(good, autopilot=False)) is None, "giving up is a result too"
-    for change, words in [({"sim_time_s": 20}, "sim"), ({"hidden": True}, "hidden"),
-                          ({"mode_seen": "privileged"}, "mode"), ({"world_seen": "coast:festival"}, "route"),
-                          ({"lag_seen": 0}, "lag")]:
+    for change, words in [({"hidden": True}, "hidden"), ({"mode_seen": "privileged"}, "mode"),
+                          ({"world_seen": "coast:festival"}, "route"), ({"lag_seen": 0}, "lag"),
+                          ({"engaged": False}, "never engaged"),
+                          ({"autopilot": False, "events": ["90 Jev paused after three failed requests"]}, "decision service")]:
         reason = cl.validate(run, dict(good, **change))
         assert reason and words in reason, (change, reason)
-    assert cl.outcome(run, good) == {"disengaged": False, "stalled": False}
-    assert cl.outcome(run, dict(good, autopilot=False)) == {"disengaged": True, "stalled": False}
-    assert cl.outcome(run, dict(good, distance_m=40)) == {"disengaged": False, "stalled": True}
-    assert cl.outcome(run, dict(good, crash=True, autopilot=False, distance_m=40)) == {"disengaged": False, "stalled": False}
+    assert cl.outcome(run, good) == {"disengaged": False, "stalled": False, "broke": False}
+    assert cl.outcome(run, dict(good, autopilot=False)) == {"disengaged": True, "stalled": False, "broke": False}
+    assert cl.outcome(run, dict(good, distance_m=40)) == {"disengaged": False, "stalled": True, "broke": False}
+    assert cl.outcome(run, dict(good, crash=True, autopilot=False, distance_m=40)) == {"disengaged": False, "stalled": False, "broke": False}
+    # Review #28 (3): once the car drove, a page that stopped stepping is what the drive did.
+    assert cl.validate(run, dict(good, sim_time_s=60)) is None
+    assert cl.outcome(run, dict(good, sim_time_s=60))["broke"] is True
 
 
 def test_review_a_held_out_seed_moved_to_debugged_no_longer_reports_as_held_out(tmp_path):
@@ -164,3 +169,40 @@ def test_review_the_cli_refuses_routes_modes_lags_and_durations_the_page_would_n
 def test_review2_rows_without_a_seed_set_are_not_reported(tmp_path):
     kept, dropped = cl.current_rows([{"mode": "vision", "seed": 1, "ok": True}], cl.load_seeds())
     assert kept == [] and len(dropped) == 1
+
+
+def test_review3_retries_are_visible_and_seeds_that_never_drove_are_named():
+    rows = [_row("vision", 1, "festival", ok=False, error="tab hidden (the simulation does not step)"),
+            _row("vision", 1, "festival"),
+            _row("vision", 2, "festival", ok=False, error="sim ran 12 s of 150"),
+            _row("vision", 2, "festival", ok=False, error="sim ran 30 s of 150")]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    assert v["attempts"] == 4 and v["retried"] == 1 and v["never_driven"] == [2]
+    text = cl.report(cl.summarize(rows))
+    assert "4 attempts" in text and "1 retried after a setup failure" in text and "never driven: seeds [2]" in text
+
+
+def test_review3_violation_rates_are_over_runs_that_really_drove_with_all_runs_beside():
+    rows = [_row("vision", 1, "festival", red_light=1), _row("vision", 2, "festival", stalled=True, distance_m=20.0),
+            _row("vision", 3, "festival", disengaged=True), _row("vision", 4, "festival")]
+    text = cl.report(cl.summarize(rows))
+    assert "red light 1/2 runs that drove" in text and "(1/4 of all runs)" in text
+
+
+def test_review3_a_run_shared_with_another_tab_is_not_kept(monkeypatch, tmp_path):
+    out = tmp_path / "runs.jsonl"
+    tabs = iter([[], ["OTHER"]])  # none before the run, one appeared during it
+    monkeypatch.setattr(cl, "_jevpilot_tabs", lambda: ["MINE"] + next(tabs))
+    monkeypatch.setattr(cl, "drive", lambda target, base, run: dict(run, ok=True, distance_m=900, events=[]))
+    import argparse
+    args = argparse.Namespace(out=out, base="http://x", set="held_out")
+    with pytest.raises(SystemExit):
+        cl._drive_all(args, cl.plan_runs([10], ["festival"], ["vision"], seconds=150, lag_ms=0), "MINE")
+    row = cl.read_rows(out)[0]
+    assert row["ok"] is False and "another simulation tab" in row["error"]
+
+
+def test_review3_rows_from_before_outcomes_were_recorded_are_not_reported():
+    old_ok = {"set": "held_out", "mode": "vision", "seed": 104729, "ok": True, "distance_m": 10}
+    kept, dropped = cl.current_rows([old_ok], cl.load_seeds())
+    assert kept == [] and dropped == [old_ok]
