@@ -34,13 +34,7 @@ export function mountClock() {
   if (chip || !globalThis.document?.body) return;
   chip = document.createElement("button");
   chip.className = "semif-clock";
-  chip.title = "Time of day · T";
-  Object.assign(chip.style, {
-    position: "fixed", top: "14px", left: "50%", transform: "translateX(-50%)", zIndex: "20",
-    padding: "6px 14px", borderRadius: "999px", border: "1px solid rgba(255,255,255,0.14)",
-    background: "rgba(16,20,28,0.72)", color: "rgba(241,245,249,0.95)", font: "600 13px system-ui, sans-serif",
-    letterSpacing: "0.02em", cursor: "pointer", backdropFilter: "blur(6px)",
-  });
+  chip.title = "Time of day · T"; // styled by semif-layer.css (.semif-clock)
   chip.addEventListener("click", nextPreset);
   document.body.appendChild(chip);
   document.addEventListener("keydown", (e) => {

@@ -841,16 +841,8 @@
       el.innerHTML = `<span>${label}</span><i class="fsd-vec"></i>`;
       boxes.appendChild(el);
     }
-    if (nearest < 12) {
-      halo.style.borderColor = "rgba(239, 68, 68, 0.8)";
-      halo.style.boxShadow = "0 0 36px 8px rgba(239, 68, 68, 0.35)";
-    } else if (nearest < 24) {
-      halo.style.borderColor = "rgba(62, 106, 225, 0.85)";
-      halo.style.boxShadow = "0 0 28px 6px rgba(62, 106, 225, 0.28)";
-    } else {
-      halo.style.borderColor = "transparent";
-      halo.style.boxShadow = "none";
-    }
+    // Styled by state in semif-layer.css (#fsd-halo[data-level]).
+    halo.dataset.level = nearest < 12 ? "near" : nearest < 24 ? "watch" : "";
   }
 
   const pipFrameMs = [];

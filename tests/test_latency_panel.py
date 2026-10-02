@@ -68,14 +68,18 @@ process.stdout.write(JSON.stringify(s.RANGES.map((r) => ({ key: r.key, ms: r.ms,
 def test_series_colours_follow_the_validated_palette():
     got = run_node("process.stdout.write(JSON.stringify(s.SERIES));")
     colours = {row["key"]: row["color"] for row in got}
-    # Validated on the panel surface #141922 (dataviz validate_palette.js, --pairs all):
-    # e2e is alone on its chart; the three stages share one.
+    # Validated on the panel surface #10232f (dataviz validate_palette.js, dark, --pairs all):
+    # e2e is alone on its chart; the three stages share one. In the page they come from the
+    # --sol-viz-* tokens, which hold the same values (#20).
     assert colours == {
-        "e2e_loop_ms": "#3987e5",
-        "classifier_ms": "#d95926",
-        "vision_encode_ms": "#199e70",
-        "grab_frame_ms": "#9085e9",
+        "e2e_loop_ms": "#4392d2",
+        "classifier_ms": "#d9653a",
+        "vision_encode_ms": "#1fa383",
+        "grab_frame_ms": "#957cdb",
     }
+    css = (WEB / "semif-layer.css").read_text(encoding="utf-8")
+    for row, n in zip(got, range(1, 5)):
+        assert f"--sol-viz-{n}: {row['color']};" in css, row["key"]
     assert [row["chart"] for row in got] == ["e2e", "stages", "stages", "stages"]
 
 
@@ -85,7 +89,7 @@ def test_page_loads_the_panel_and_wires_it_to_the_telemetry():
     css = (WEB / "semif-layer.css").read_text(encoding="utf-8")
     assert html.index("semif-stats.js") < html.index("semif-layer.js")
     assert "SEMIF_STATS" in js and "mountStats" in js
-    assert "#fsd-stats" in css and "--viz-surface: #141922" in css
+    assert "#fsd-stats" in css and "--sol-viz-surface: #10232f" in css
 
 
 def test_minimal_view_collapses_the_interface_but_keeps_the_drive():

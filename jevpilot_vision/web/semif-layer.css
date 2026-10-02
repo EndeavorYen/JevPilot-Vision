@@ -1,55 +1,244 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 
+/* Solmare: the overlay's design language (#20). Every colour, radius, shadow and motion in this
+   sheet comes from this block; nothing below it writes a colour of its own. The bundle's DOM and
+   behaviour are unchanged: its components are restyled from these tokens.
+   Deep-sea glass panels, warm sand type, a sunset-coral accent, sea-green and amber states. */
 :root {
-  --fsd-blue: #3e6ae1;
-  --fsd-blue-glow: rgba(62, 106, 225, 0.55);
-  --fsd-ink: #f4f4f5;
-  --fsd-muted: #9aa3b2;
-  --fsd-bg: rgba(10, 12, 18, 0.82);
-  --fsd-line: rgba(255, 255, 255, 0.12);
+  --sol-font: "Manrope", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+
+  --sol-panel: rgba(11, 29, 41, 0.8);
+  --sol-panel-solid: #0f2433;
+  --sol-panel-deep: #08161f;
+  --sol-raised: rgba(255, 244, 228, 0.07);
+  --sol-hover: rgba(255, 244, 228, 0.14);
+  --sol-field: rgba(3, 12, 18, 0.5);
+  --sol-scrim: rgba(3, 10, 16, 0.58);
+  --sol-scrim-light: rgba(3, 10, 16, 0.22);
+
+  --sol-ink: #f8efe2;
+  --sol-ink-strong: #fffaf3;
+  --sol-muted: #bcae99;
+  --sol-faint: #8c8376;
+  --sol-line: rgba(248, 239, 226, 0.14);
+  --sol-line-strong: rgba(248, 239, 226, 0.3);
+
+  --sol-accent: #ff7a52;
+  --sol-accent-hover: #ff9372;
+  --sol-accent-ink: #2b0f06;
+  --sol-accent-soft: rgba(255, 122, 82, 0.18);
+  --sol-accent-glow: rgba(255, 122, 82, 0.45);
+
+  --sol-ok: #3cc8a8;
+  --sol-ok-glow: rgba(60, 200, 168, 0.55);
+  --sol-wait: #f4b544;
+  --sol-wait-glow: rgba(244, 181, 68, 0.55);
+  --sol-danger: #ff5a5f;
+  --sol-danger-soft: rgba(255, 90, 95, 0.16);
+  --sol-danger-glow: rgba(255, 90, 95, 0.45);
+  --sol-off: #6f7b84;
+
+  --sol-sign: #ffffff;
+  --sol-sign-ring: #d7263d;
+  --sol-sign-ink: #151515;
+
+  --sol-box: rgba(120, 206, 255, 0.95);
+  --sol-box-fill: rgba(120, 206, 255, 0.08);
+  --sol-box-ink: #e6f6ff;
+  --sol-box-vec: #8fd3ff;
+  --sol-box-hazard: #f4b544;
+  --sol-box-hazard-fill: rgba(244, 181, 68, 0.12);
+  --sol-text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+
+  --sol-code-bg: #08151d;
+  --sol-code-key: #f8efe2;
+  --sol-code-string: #d9cbb6;
+  --sol-code-number: #8fd3ff;
+  --sol-code-bool: #ff9a8a;
+
+  /* Latency charts (semif-stats.js reads these). e2e has its own chart; the three stages share one:
+     each set validated on --sol-viz-surface (dataviz validate_palette.js, dark, --pairs all). */
+  --sol-viz-surface: #10232f;
+  --sol-viz-1: #4392d2;
+  --sol-viz-2: #d9653a;
+  --sol-viz-3: #1fa383;
+  --sol-viz-4: #957cdb;
+  --sol-viz-ink: #f8efe2;
+  --sol-viz-ink-2: #bcae99;
+  --sol-viz-grid: rgba(248, 239, 226, 0.08);
+  --sol-viz-cross: rgba(248, 239, 226, 0.55);
+  --sol-viz-cross-2: rgba(248, 239, 226, 0.35);
+  --sol-viz-tip: rgba(6, 16, 23, 0.95);
+
+  /* The loading screen: a sunset over the sea. */
+  --sol-dusk-1: #10283a;
+  --sol-dusk-2: #3d4a6b;
+  --sol-dusk-3: #c8694d;
+  --sol-dusk-4: #f3b07a;
+  --sol-sun: #ffe0a8;
+  --sol-sun-glow: rgba(255, 196, 120, 0.55);
+  --sol-sea-1: #0d2433;
+  --sol-sea-2: #061620;
+  --sol-glint: rgba(255, 214, 160, 0.55);
+
+  --sol-shadow: 0 18px 48px rgba(2, 9, 14, 0.42);
+  --sol-shadow-lg: 0 30px 100px rgba(2, 9, 14, 0.6);
+  --sol-blur: 22px;
+  --sol-radius-lg: 20px;
+  --sol-radius-md: 14px;
+  --sol-radius-sm: 9px;
+  --sol-radius-pill: 999px;
+  --sol-motion: 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  --sol-motion-fast: 130ms ease-out;
 }
+
+/* ---- Base ------------------------------------------------------------------------------------ */
 
 html.fsd-theme,
 body.fsd-theme {
-  background: #07080c;
-  color: var(--fsd-ink);
-  font-family: Inter, "DM Sans", system-ui, sans-serif;
-  --muted: #9aa3b2;
-  --line: rgba(255, 255, 255, 0.12);
-  --blue: #3e6ae1;
+  background: var(--sol-panel-deep);
+  color: var(--sol-ink);
+  font-family: var(--sol-font);
+  --muted: var(--sol-muted);
+  --line: var(--sol-line);
+  --blue: var(--sol-accent);
+}
+
+body.fsd-theme :focus-visible {
+  outline: 2px solid var(--sol-accent);
+  outline-offset: 2px;
+}
+
+body.fsd-theme ::-webkit-scrollbar-thumb {
+  background: var(--sol-line-strong);
+}
+
+body.fsd-theme kbd {
+  color: var(--sol-muted);
+  border: 1px solid var(--sol-line-strong);
+  border-radius: 5px;
+  background: var(--sol-raised);
+  font-family: var(--sol-font);
 }
 
 body.fsd-theme .simple-jev-api-badge {
   display: none !important;
 }
 
+/* ---- Bundle panels ---------------------------------------------------------------------------- */
+
 body.fsd-theme .glass,
 body.fsd-theme .topbar,
 body.fsd-theme .navigation-card,
 body.fsd-theme .minimap,
-body.fsd-theme .driver-dock,
-body.fsd-theme .simple-jev-api-badge {
-  background: var(--fsd-bg);
-  border: 1px solid var(--fsd-line);
-  color: var(--fsd-ink);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(18px);
+body.fsd-theme .driver-dock {
+  background: var(--sol-panel);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-lg);
+  color: var(--sol-ink);
+  box-shadow: var(--sol-shadow);
+  -webkit-backdrop-filter: blur(var(--sol-blur)) saturate(1.2);
+  backdrop-filter: blur(var(--sol-blur)) saturate(1.2);
 }
 
-body.fsd-theme .speed-cluster strong {
-  color: #fff;
-  font-family: Inter, Manrope, sans-serif;
+body.fsd-theme .topbar,
+body.fsd-theme .topbar label,
+body.fsd-theme .navigation-card strong,
+body.fsd-theme .navigation-card span,
+body.fsd-theme .driver-dock,
+body.fsd-theme .pilot-actions button,
+body.fsd-theme .bottom-hud {
+  color: var(--sol-ink);
+}
+
+body.fsd-theme .brand,
+body.fsd-theme .eyebrow,
+body.fsd-theme .subtle,
+body.fsd-theme .drive-title,
+body.fsd-theme .back-to-demos {
+  color: var(--sol-muted);
+  letter-spacing: 0.06em;
+}
+
+body.fsd-theme .brand-mark {
+  color: var(--sol-accent);
+}
+
+body.fsd-theme .topbar label {
   font-weight: 700;
-  letter-spacing: -0.08em;
-  font-size: 52px;
+  letter-spacing: 0.02em;
+}
+
+body.fsd-theme .topbar select,
+body.fsd-theme .topbar button,
+body.fsd-theme .world-picker select,
+body.fsd-theme .world-picker > button,
+body.fsd-theme .model-picker select,
+body.fsd-theme #github-link {
+  background: var(--sol-field);
+  color: var(--sol-ink);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-sm);
+  font-family: var(--sol-font);
+  font-weight: 600;
+  transition: background var(--sol-motion-fast), border-color var(--sol-motion-fast);
+}
+
+body.fsd-theme .topbar select:hover,
+body.fsd-theme .topbar button:hover,
+body.fsd-theme .world-picker > button:hover,
+body.fsd-theme #github-link:hover {
+  background: var(--sol-hover);
+  border-color: var(--sol-line-strong);
+}
+
+body.fsd-theme .topbar select option,
+body.fsd-theme .model-picker select option {
+  background: var(--sol-panel-solid);
+  color: var(--sol-ink);
+}
+
+body.fsd-theme .divider,
+body.fsd-theme .nav-divider,
+body.fsd-theme .dock-divider {
+  background: var(--sol-line);
+}
+
+body.fsd-theme .navigation-card > span:first-child {
+  color: var(--sol-accent);
+}
+
+body.fsd-theme .navigation-card > div > span,
+body.fsd-theme .navigation-card > button,
+body.fsd-theme #remaining {
+  color: var(--sol-muted);
+}
+
+body.fsd-theme .navigation-card strong {
+  font-weight: 700;
+}
+
+/* Speed: big sand numerals; the limit is a European sign (white disc, red ring). */
+body.fsd-theme .speed-cluster strong {
+  color: var(--sol-ink-strong);
+  font-family: var(--sol-font);
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  font-size: 54px;
+  font-variant-numeric: tabular-nums;
+}
+
+body.fsd-theme .speed-cluster div > span {
+  color: var(--sol-muted);
+  letter-spacing: 0.1em;
 }
 
 body.fsd-theme .speed-limit {
-  background: #111;
-  border: 3px solid #f2f2f2;
+  background: var(--sol-sign);
+  border: 5px solid var(--sol-sign-ring);
   border-radius: 50%;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   padding: 0;
   justify-content: center;
 }
@@ -59,71 +248,306 @@ body.fsd-theme .speed-limit small {
 }
 
 body.fsd-theme .speed-limit b {
-  color: #fff;
-  font-size: 15px;
+  color: var(--sol-sign-ink);
+  font-family: var(--sol-font);
+  font-weight: 800;
+  font-size: 16px;
 }
 
-body.fsd-theme .topbar,
-body.fsd-theme .topbar label,
-body.fsd-theme .topbar select,
-body.fsd-theme .navigation-card strong,
-body.fsd-theme .navigation-card span,
-body.fsd-theme .driver-dock,
-body.fsd-theme .pilot-actions button,
-body.fsd-theme .bottom-hud {
-  color: var(--fsd-ink);
+/* Engage: sand outline at rest, sunset coral while Jev drives. */
+body.fsd-theme .pilot-button {
+  color: var(--sol-ink);
+  background: var(--sol-raised);
+  border: 1px solid var(--sol-line-strong);
+  border-radius: var(--sol-radius-pill);
+  font-family: var(--sol-font);
+  font-weight: 700;
+  transition: background var(--sol-motion), box-shadow var(--sol-motion), color var(--sol-motion);
 }
 
-body.fsd-theme .topbar select,
-body.fsd-theme .topbar button,
-body.fsd-theme #github-link {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--fsd-ink);
-  border: 1px solid var(--fsd-line);
+body.fsd-theme .pilot-button svg {
+  color: var(--sol-accent);
 }
 
-body.fsd-theme .topbar select option {
-  background: #12141c;
-  color: #f4f4f5;
+body.fsd-theme .pilot-button:hover {
+  background: var(--sol-hover);
 }
+
+body.fsd-theme .pilot-button kbd {
+  color: var(--sol-muted);
+  border-color: var(--sol-line-strong);
+}
+
+body.fsd-theme .pilot-button[aria-checked="true"],
+body.fsd-theme .pilot-button[aria-checked="true"]:hover {
+  color: var(--sol-accent-ink);
+  background: var(--sol-accent);
+  border-color: var(--sol-accent);
+  box-shadow: 0 0 0 4px var(--sol-accent-soft), 0 8px 28px var(--sol-accent-glow);
+}
+
+body.fsd-theme .pilot-button[aria-checked="true"] svg,
+body.fsd-theme .pilot-button[aria-checked="true"] kbd {
+  color: var(--sol-accent-ink);
+  border-color: var(--sol-accent-ink);
+}
+
+body.fsd-theme #pilot-state,
+body.fsd-theme #context-message,
+body.fsd-theme .cost-total {
+  color: var(--sol-muted);
+}
+
+body.fsd-theme .piloting #pilot-state,
+body.fsd-theme .cost-total strong {
+  color: var(--sol-ink);
+}
+
+body.fsd-theme .dock-tools button,
+body.fsd-theme .candidate-button {
+  color: var(--sol-muted);
+  border-radius: var(--sol-radius-sm);
+  transition: color var(--sol-motion-fast), background var(--sol-motion-fast);
+}
+
+body.fsd-theme .dock-tools button:hover,
+body.fsd-theme .candidate-button:hover {
+  color: var(--sol-ink);
+  background: var(--sol-hover);
+}
+
+body.fsd-theme #candidates-toggle[aria-pressed="true"] {
+  color: var(--sol-accent);
+  background: var(--sol-accent-soft);
+}
+
+body.fsd-theme .vector-label {
+  background: var(--sol-panel);
+  color: var(--sol-muted);
+  border: 1px solid var(--sol-line);
+  box-shadow: none;
+}
+
+body.fsd-theme .vector-label.selected {
+  color: var(--sol-accent-ink);
+  background: var(--sol-accent);
+  border-color: var(--sol-accent);
+  box-shadow: 0 0 22px var(--sol-accent-glow);
+}
+
+body.fsd-theme #control-tooltip {
+  color: var(--sol-ink);
+  background: var(--sol-panel-solid);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-sm);
+  box-shadow: var(--sol-shadow);
+}
+
+body.fsd-theme #paused-overlay {
+  background: var(--sol-scrim-light);
+}
+
+body.fsd-theme #toast {
+  color: var(--sol-ink);
+  background: var(--sol-panel-solid);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-md);
+  box-shadow: var(--sol-shadow);
+}
+
+body.fsd-theme #toast.error {
+  color: var(--sol-danger);
+  background: var(--sol-panel-solid);
+  border-color: var(--sol-danger);
+  box-shadow: 0 8px 30px var(--sol-danger-soft);
+}
+
+/* ---- Dialogs (help, crash, JSON, credits) -------------------------------------------------------- */
 
 body.fsd-theme dialog {
-  background: #12141c;
-  color: #f4f4f5;
-  border: 1px solid var(--fsd-line);
+  color: var(--sol-ink);
+  background: var(--sol-panel-solid);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-lg);
+  box-shadow: var(--sol-shadow-lg);
+  font-family: var(--sol-font);
+}
+
+body.fsd-theme dialog::backdrop {
+  background: var(--sol-scrim);
 }
 
 body.fsd-theme dialog p,
 body.fsd-theme dialog span,
-body.fsd-theme dialog a {
-  color: #d5dbe6;
+body.fsd-theme dialog a,
+body.fsd-theme .help-keys span,
+body.fsd-theme #credit-dialog p,
+body.fsd-theme #credit-dialog a {
+  color: var(--sol-muted);
 }
 
-body.fsd-theme .vector-label {
-  background: rgba(40, 48, 62, 0.55);
-  color: #c5ccd8;
-  border-color: transparent;
+body.fsd-theme .primary {
+  color: var(--sol-accent-ink);
+  background: var(--sol-accent);
+  border-radius: var(--sol-radius-pill);
 }
 
-body.fsd-theme .vector-label.selected {
-  color: #fff;
-  background: var(--fsd-blue);
-  border-color: #6b8cff;
-  box-shadow: 0 0 22px var(--fsd-blue-glow);
+body.fsd-theme .primary:hover {
+  background: var(--sol-accent-hover);
 }
+
+body.fsd-theme .secondary {
+  color: var(--sol-ink);
+  background: var(--sol-raised);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-pill);
+}
+
+body.fsd-theme .arrival-mark {
+  color: var(--sol-accent);
+  background: var(--sol-accent-soft);
+}
+
+body.fsd-theme #crash-dialog {
+  background: var(--sol-panel-solid);
+  border: 1px solid var(--sol-line);
+  box-shadow: var(--sol-shadow-lg);
+}
+
+body.fsd-theme #crash-dialog::backdrop {
+  background: var(--sol-scrim-light);
+}
+
+body.fsd-theme .crash-symbol {
+  color: var(--sol-danger);
+  background: var(--sol-danger-soft);
+}
+
+body.fsd-theme #crash-dialog .eyebrow {
+  color: var(--sol-danger);
+}
+
+body.fsd-theme #crash-dialog p,
+body.fsd-theme .crash-stats span {
+  color: var(--sol-muted);
+}
+
+body.fsd-theme .crash-stats {
+  border-top: 1px solid var(--sol-line);
+}
+
+body.fsd-theme .json-header {
+  border-bottom: 1px solid var(--sol-line);
+}
+
+body.fsd-theme .json-header svg,
+body.fsd-theme .json-tabs button,
+body.fsd-theme .json-actions button,
+body.fsd-theme #json-live {
+  color: var(--sol-muted);
+}
+
+body.fsd-theme .json-tabs {
+  background: var(--sol-field);
+  border-radius: var(--sol-radius-sm);
+}
+
+body.fsd-theme .json-tabs .active {
+  color: var(--sol-ink);
+  background: var(--sol-hover);
+  box-shadow: none;
+}
+
+body.fsd-theme #json-content {
+  color: var(--sol-code-string);
+  background: var(--sol-code-bg);
+  border-radius: var(--sol-radius-md);
+}
+
+body.fsd-theme .json-key {
+  color: var(--sol-code-key);
+}
+
+body.fsd-theme .json-string {
+  color: var(--sol-code-string);
+}
+
+body.fsd-theme .json-number {
+  color: var(--sol-code-number);
+}
+
+body.fsd-theme .json-bool {
+  color: var(--sol-code-bool);
+}
+
+/* ---- Touch controls ---------------------------------------------------------------------------- */
+
+body.fsd-theme .touch-stick,
+body.fsd-theme .touch-brake {
+  color: var(--sol-ink);
+  background: var(--sol-panel);
+  border: 1px solid var(--sol-line-strong);
+  box-shadow: var(--sol-shadow);
+}
+
+body.fsd-theme .touch-stick > span:not(.touch-knob),
+body.fsd-theme .touch-hint {
+  color: var(--sol-ink);
+}
+
+body.fsd-theme .touch-knob {
+  background: var(--sol-ink);
+  border: 1px solid var(--sol-ink-strong);
+  box-shadow: var(--sol-shadow);
+}
+
+body.fsd-theme .touch-brake.held {
+  color: var(--sol-ink-strong);
+  background: var(--sol-danger);
+}
+
+/* ---- Time-of-day chip (semif-world/clock.js) ------------------------------------------------- */
+
+.semif-clock {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 7px 16px;
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-pill);
+  background: var(--sol-panel);
+  color: var(--sol-ink);
+  font: 700 13px var(--sol-font);
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  box-shadow: var(--sol-shadow);
+  -webkit-backdrop-filter: blur(var(--sol-blur));
+  backdrop-filter: blur(var(--sol-blur));
+  transition: background var(--sol-motion-fast);
+}
+
+.semif-clock:hover {
+  background: var(--sol-hover);
+}
+
+/* ---- Our overlay ------------------------------------------------------------------------------- */
 
 #fsd-chrome {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 20;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--sol-font);
 }
 
 #fsd-chrome * {
   box-sizing: border-box;
 }
 
+/* Proximity halo under the car: data-level is set by semif-layer.js. */
 #fsd-halo {
   pointer-events: none;
   position: fixed;
@@ -134,8 +558,18 @@ body.fsd-theme .vector-label.selected {
   transform: translateX(-50%);
   border-radius: 50%;
   border: 2px solid transparent;
-  box-shadow: 0 0 0 0 transparent;
-  transition: box-shadow 0.16s linear, border-color 0.16s linear;
+  box-shadow: none;
+  transition: box-shadow var(--sol-motion-fast), border-color var(--sol-motion-fast);
+}
+
+#fsd-halo[data-level="watch"] {
+  border-color: var(--sol-accent);
+  box-shadow: 0 0 28px 6px var(--sol-accent-soft);
+}
+
+#fsd-halo[data-level="near"] {
+  border-color: var(--sol-danger);
+  box-shadow: 0 0 36px 8px var(--sol-danger-glow);
 }
 
 #fsd-boxes {
@@ -149,15 +583,16 @@ body.fsd-theme .vector-label.selected {
   position: fixed;
   right: 16px;
   bottom: calc(var(--dock-height, 96px) + 16px);
-  width: 280px;
+  width: 288px;
   z-index: 5;
-  background: var(--fsd-bg);
-  border: 1px solid var(--fsd-line);
-  border-radius: 12px;
+  background: var(--sol-panel);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-lg);
   overflow: hidden;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(18px);
-  color: var(--fsd-ink);
+  box-shadow: var(--sol-shadow);
+  -webkit-backdrop-filter: blur(var(--sol-blur));
+  backdrop-filter: blur(var(--sol-blur));
+  color: var(--sol-ink);
 }
 
 .fsd-pip-header {
@@ -165,31 +600,32 @@ body.fsd-theme .vector-label.selected {
   justify-content: space-between;
   gap: 8px;
   align-items: center;
-  padding: 6px 8px;
+  padding: 8px 12px;
   cursor: pointer;
   font-size: 10px;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .fsd-pip-title {
-  font-weight: 650;
+  font-weight: 800;
 }
 
 .fsd-pip-fps {
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .fsd-pip-body {
-  padding: 0 8px 8px;
+  padding: 0 10px 10px;
 }
 
 .fsd-pip-frame {
   position: relative;
   aspect-ratio: 16 / 9;
-  border-radius: 8px;
+  border-radius: var(--sol-radius-md);
   overflow: hidden;
-  background: #05060a;
+  background: var(--sol-panel-deep);
 }
 
 #fsd-camera-canvas,
@@ -209,44 +645,47 @@ body.fsd-theme .vector-label.selected {
   position: absolute;
   left: 8px;
   bottom: 7px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: rgba(8, 10, 14, 0.62);
-  color: #e8edf3;
+  padding: 2px 8px;
+  border-radius: var(--sol-radius-pill);
+  background: var(--sol-scrim);
+  color: var(--sol-ink);
   font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   pointer-events: none;
 }
 
 .fsd-pip-tabs {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   margin-top: 8px;
+  padding: 3px;
+  background: var(--sol-field);
+  border-radius: var(--sol-radius-pill);
 }
 
 .fsd-cam-tab {
   flex: 1;
   min-height: 26px;
   padding: 4px 0;
-  border: 1px solid var(--fsd-line);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--fsd-muted);
-  font-size: 10px;
-  font-weight: 600;
+  border: 0;
+  border-radius: var(--sol-radius-pill);
+  background: transparent;
+  color: var(--sol-muted);
+  font: 700 10px var(--sol-font);
+  letter-spacing: 0.04em;
   cursor: pointer;
+  transition: color var(--sol-motion-fast), background var(--sol-motion-fast);
 }
 
 .fsd-cam-tab:hover {
-  color: var(--fsd-ink);
-  background: rgba(255, 255, 255, 0.09);
+  color: var(--sol-ink);
+  background: var(--sol-hover);
 }
 
 .fsd-cam-tab[aria-selected="true"] {
-  color: #fff;
-  border-color: rgba(62, 106, 225, 0.9);
-  background: rgba(62, 106, 225, 0.32);
+  color: var(--sol-accent-ink);
+  background: var(--sol-accent);
 }
 
 /* Status pills: a dot shows the state (on / waiting / off / error). */
@@ -255,55 +694,60 @@ body.fsd-theme .vector-label.selected {
   align-items: center;
   gap: 6px;
   padding: 3px 10px 3px 8px;
-  border: 1px solid var(--fsd-line);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--fsd-ink);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-pill);
+  background: var(--sol-raised);
+  color: var(--sol-ink);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fsd-chip::before {
+  flex: none;
   content: "";
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #3e6ae1;
-  box-shadow: 0 0 6px rgba(62, 106, 225, 0.8);
+  background: var(--sol-accent);
+  box-shadow: 0 0 6px var(--sol-accent-glow);
 }
 
 .fsd-chip[data-state="off"]::before {
-  background: #5b6270;
+  background: var(--sol-off);
   box-shadow: none;
 }
 
 .fsd-chip[data-state="waiting"]::before {
-  background: #d9a441;
-  box-shadow: 0 0 6px rgba(217, 164, 65, 0.7);
+  background: var(--sol-wait);
+  box-shadow: 0 0 6px var(--sol-wait-glow);
 }
 
 .fsd-chip[data-state="on"]::before {
-  background: #3fbf7f;
-  box-shadow: 0 0 6px rgba(63, 191, 127, 0.7);
+  background: var(--sol-ok);
+  box-shadow: 0 0 6px var(--sol-ok-glow);
 }
 
 .fsd-chip[data-state="error"]::before {
-  background: #e5484d;
-  box-shadow: 0 0 6px rgba(229, 72, 77, 0.8);
+  background: var(--sol-danger);
+  box-shadow: 0 0 6px var(--sol-danger-glow);
 }
 
 #fsd-intent.fsd-chip::before {
-  background: #3e6ae1;
+  background: var(--sol-accent);
 }
 
 button.fsd-chip {
   cursor: pointer;
+  font-family: var(--sol-font);
 }
 
 button.fsd-chip:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--sol-hover);
 }
 
 #fsd-pip.fsd-pip-collapsed .fsd-pip-body {
@@ -316,9 +760,9 @@ button.fsd-chip:hover {
 
 .fsd-box {
   position: absolute;
-  border: 1.5px solid rgba(62, 106, 225, 0.9);
-  background: rgba(62, 106, 225, 0.08);
-  border-radius: 3px;
+  border: 1.5px solid var(--sol-box);
+  background: var(--sol-box-fill);
+  border-radius: 4px;
   min-width: 18px;
   min-height: 18px;
 }
@@ -327,15 +771,17 @@ button.fsd-chip:hover {
   position: absolute;
   left: 0;
   top: -16px;
-  color: #d7e2ff;
+  color: var(--sol-box-ink);
   font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   white-space: nowrap;
-  text-shadow: 0 1px 4px #000;
+  text-shadow: var(--sol-text-shadow);
 }
 
 .fsd-box.is-hazard {
-  border-color: #f5c518;
-  background: rgba(245, 197, 24, 0.12);
+  border-color: var(--sol-box-hazard);
+  background: var(--sol-box-hazard-fill);
 }
 
 .fsd-box .fsd-vec {
@@ -344,7 +790,7 @@ button.fsd-chip:hover {
   top: 100%;
   width: 2px;
   height: 18px;
-  background: #7aa2ff;
+  background: var(--sol-box-vec);
   transform-origin: top center;
 }
 
@@ -361,13 +807,14 @@ button.fsd-chip:hover {
   align-items: center;
   width: 460px;
   max-width: calc(100vw - 54px);
-  padding: 8px 12px;
-  background: var(--fsd-bg);
-  border: 1px solid var(--fsd-line);
-  border-radius: 12px;
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
-  color: var(--fsd-ink);
+  padding: 10px 14px;
+  background: var(--sol-panel);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-lg);
+  box-shadow: var(--sol-shadow);
+  -webkit-backdrop-filter: blur(var(--sol-blur));
+  backdrop-filter: blur(var(--sol-blur));
+  color: var(--sol-ink);
   font-size: 11px;
   letter-spacing: 0.03em;
 }
@@ -377,11 +824,11 @@ button.fsd-chip:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 8px 2px 4px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--fsd-line);
-  border-radius: 6px;
-  color: var(--fsd-muted);
+  padding: 2px 10px 2px 4px;
+  background: var(--sol-raised);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-pill);
+  color: var(--sol-muted);
   font: inherit;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
@@ -390,8 +837,8 @@ button.fsd-chip:hover {
 
 #fsd-latency:hover,
 #fsd-latency[aria-expanded="true"] {
-  color: #fff;
-  border-color: rgba(57, 135, 229, 0.6);
+  color: var(--sol-ink);
+  border-color: var(--sol-accent);
 }
 
 #fsd-latency .fsd-spark {
@@ -401,7 +848,7 @@ button.fsd-chip:hover {
 }
 
 #fsd-seed-box {
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -409,38 +856,45 @@ button.fsd-chip:hover {
 
 #fsd-seed-input {
   width: 5.5rem;
-  background: rgba(0, 0, 0, 0.35);
-  color: #fff;
-  border: 1px solid var(--fsd-line);
-  border-radius: 6px;
-  padding: 2px 6px;
+  background: var(--sol-field);
+  color: var(--sol-ink);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-sm);
+  padding: 2px 8px;
   font: inherit;
+  font-variant-numeric: tabular-nums;
 }
 
 #fsd-seed-apply,
 #fsd-seed-rand {
   pointer-events: auto;
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  border: 1px solid var(--fsd-line);
-  border-radius: 999px;
-  padding: 2px 8px;
+  background: var(--sol-raised);
+  color: var(--sol-ink);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-pill);
+  padding: 2px 10px;
   font: inherit;
+  font-weight: 700;
   cursor: pointer;
 }
 
+#fsd-seed-apply:hover,
+#fsd-seed-rand:hover {
+  background: var(--sol-hover);
+}
+
 #fsd-intent {
-  color: #fff;
-  font-weight: 650;
+  color: var(--sol-ink-strong);
+  font-weight: 700;
 }
 
 #fsd-vision {
-  color: #c9d4ea;
+  color: var(--sol-ink);
 }
 
 @media (max-width: 650px) {
   body.fsd-theme .speed-cluster strong {
-    font-size: 36px;
+    font-size: 38px;
   }
   #fsd-halo {
     width: 160px;
@@ -455,20 +909,13 @@ button.fsd-chip:hover {
   #fsd-pip {
     right: 10px;
     bottom: 168px;
-    width: min(280px, calc(100vw - 20px));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #fsd-pip {
-    transition: none;
+    width: min(288px, calc(100vw - 20px));
   }
 }
 
 /* ---- Latency panel (semif-stats.js) ------------------------------------------------------- */
 
 #fsd-stats {
-  --viz-surface: #141922;
   position: fixed;
   left: 27px;
   top: 86px;
@@ -477,12 +924,13 @@ button.fsd-chip:hover {
   max-height: calc(100vh - 200px);
   overflow-y: auto;
   pointer-events: auto;
-  padding: 16px 18px 12px;
-  background: var(--viz-surface);
-  border: 1px solid var(--fsd-line);
-  border-radius: 14px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
-  color: var(--fsd-ink);
+  padding: 18px 20px 14px;
+  background: var(--sol-viz-surface);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-lg);
+  box-shadow: var(--sol-shadow-lg);
+  color: var(--sol-ink);
+  font-family: var(--sol-font);
   font-size: 12px;
 }
 
@@ -494,7 +942,7 @@ button.fsd-chip:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .fsd-stats-title {
@@ -505,15 +953,15 @@ button.fsd-chip:hover {
 }
 
 .fsd-stats-title strong {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
 }
 
 .fsd-stats-live {
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
 }
 
 .fsd-stats-live::before {
@@ -523,80 +971,84 @@ button.fsd-chip:hover {
   height: 6px;
   margin-right: 5px;
   border-radius: 50%;
-  background: #3987e5;
+  background: var(--sol-ok);
   vertical-align: 1px;
 }
 
 .fsd-stats-range {
   display: inline-flex;
-  padding: 2px;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
+  padding: 3px;
+  background: var(--sol-field);
+  border-radius: var(--sol-radius-pill);
 }
 
 .fsd-stats-range button,
 .fsd-stats-action,
 .fsd-stats-close {
   background: transparent;
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   border: 0;
-  border-radius: 6px;
-  padding: 4px 10px;
+  border-radius: var(--sol-radius-pill);
+  padding: 4px 11px;
   font: inherit;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
 }
 
 .fsd-stats-range button[aria-selected="true"] {
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
+  background: var(--sol-accent);
+  color: var(--sol-accent-ink);
 }
 
 .fsd-stats-action {
-  border: 1px solid var(--fsd-line);
+  border: 1px solid var(--sol-line);
 }
 
 .fsd-stats-range button:hover,
 .fsd-stats-action:hover,
 .fsd-stats-close:hover {
-  color: #fff;
+  color: var(--sol-ink);
+}
+
+.fsd-stats-range button[aria-selected="true"]:hover {
+  color: var(--sol-accent-ink);
 }
 
 .fsd-stats-tiles {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .fsd-tile {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 8px;
+  padding: 9px 11px;
+  background: var(--sol-raised);
+  border-radius: var(--sol-radius-md);
 }
 
 .fsd-tile span {
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   white-space: nowrap;
 }
 
 .fsd-tile strong {
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 19px;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
 .fsd-tile small {
   margin-left: 2px;
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .fsd-chart {
@@ -612,7 +1064,7 @@ button.fsd-chip:hover {
 }
 
 .fsd-chart figcaption > span {
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 11px;
 }
 
@@ -628,7 +1080,7 @@ button.fsd-chip:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--fsd-ink);
+  color: var(--sol-ink);
 }
 
 #fsd-stats i {
@@ -653,10 +1105,10 @@ button.fsd-chip:hover {
   position: absolute;
   top: 6px;
   min-width: 140px;
-  padding: 6px 8px;
-  background: rgba(7, 8, 12, 0.94);
-  border: 1px solid var(--fsd-line);
-  border-radius: 6px;
+  padding: 7px 9px;
+  background: var(--sol-viz-tip);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-sm);
   pointer-events: none;
   font-variant-numeric: tabular-nums;
 }
@@ -664,7 +1116,7 @@ button.fsd-chip:hover {
 .fsd-chart-tip span {
   display: block;
   margin-bottom: 4px;
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 10px;
 }
 
@@ -687,25 +1139,25 @@ button.fsd-chip:hover {
 .fsd-stats-table td {
   padding: 5px 6px;
   text-align: right;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--sol-viz-grid);
 }
 
 .fsd-stats-table thead th {
   border-top: 0;
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
 }
 
 .fsd-stats-table th:first-child {
   text-align: left;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .fsd-stats-foot {
   margin-top: 10px;
-  color: var(--fsd-muted);
+  color: var(--sol-muted);
   font-size: 11px;
 }
 
@@ -732,21 +1184,23 @@ button.fsd-chip:hover {
   z-index: 45;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   padding: 0;
-  background: var(--fsd-bg);
-  border: 1px solid var(--fsd-line);
-  border-radius: 8px;
-  color: var(--fsd-muted);
+  background: var(--sol-panel);
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-pill);
+  color: var(--sol-muted);
   cursor: pointer;
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
+  box-shadow: var(--sol-shadow);
+  -webkit-backdrop-filter: blur(var(--sol-blur));
+  backdrop-filter: blur(var(--sol-blur));
+  transition: color var(--sol-motion-fast);
 }
 
 #fsd-minimal:hover,
 #fsd-minimal[aria-pressed="true"] {
-  color: #fff;
+  color: var(--sol-ink);
 }
 
 #fsd-minimal svg {
@@ -757,6 +1211,7 @@ button.fsd-chip:hover {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+  transition: transform var(--sol-motion);
 }
 
 #fsd-minimal[aria-pressed="true"] svg {
@@ -774,4 +1229,337 @@ body.semif-minimal .driver-dock {
 
 body.semif-minimal .navigation-card {
   padding-right: 16px;
+}
+
+/* The Solmare wordmark replaces the bundle's title, at every width. */
+body.fsd-theme .topbar::before {
+  content: "Solmare";
+  color: var(--sol-ink-strong);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+body.fsd-theme .topbar::after {
+  content: "DRIVE · OPEN-WORLD AUTONOMY";
+  order: -1;
+  margin-bottom: -6px;
+  color: var(--sol-accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+}
+
+body.fsd-theme .drive-header-row {
+  display: none;
+}
+
+/* Phones keep the bundle's compact arrangement: no room for the wordmark above the pickers. */
+@media (max-width: 650px) {
+  body.fsd-theme .topbar::before,
+  body.fsd-theme .topbar::after {
+    display: none;
+  }
+}
+
+/* ---- Desktop layout -----------------------------------------------------------------------------
+   A command column on the left (the Solmare wordmark, where the drive starts, who drives, then our
+   status card docked under it by semif-layer.js), a navigation stack on the right (the next turn
+   with the route map attached), and a cockpit dock at the bottom. Only CSS moves: every element
+   and control is the bundle's own. Narrow screens keep the bundle's arrangement. */
+@media (min-width: 901px) {
+  body.fsd-theme .topbar {
+    top: 16px;
+    left: 16px;
+    width: 360px;
+    max-width: none;
+    height: auto;
+    padding: 18px 18px 16px;
+    gap: 14px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  body.fsd-theme .world-picker,
+  body.fsd-theme .model-picker {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: stretch;
+    gap: 6px 8px;
+  }
+
+  body.fsd-theme .model-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.fsd-theme .world-picker > label,
+  body.fsd-theme .model-picker > label {
+    grid-column: 1 / -1;
+    color: var(--sol-muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  body.fsd-theme .world-picker select,
+  body.fsd-theme .model-picker select {
+    min-width: 0;
+    height: 40px;
+  }
+
+  body.fsd-theme .navigation-hud {
+    top: 60px;
+    right: 16px;
+    width: 290px;
+    max-width: none;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  body.fsd-theme .navigation-card {
+    border-radius: var(--sol-radius-lg) var(--sol-radius-lg) 0 0;
+    border-bottom: 0;
+  }
+
+  body.fsd-theme .navigation-hud .minimap {
+    width: 100%;
+    border-radius: 0 0 var(--sol-radius-lg) var(--sol-radius-lg);
+    border-top: 1px solid var(--sol-line);
+  }
+
+  body.fsd-theme .navigation-hud .minimap canvas {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 380 / 310;
+  }
+
+  body.fsd-theme .semif-clock {
+    left: auto;
+    right: 64px;
+    transform: none;
+  }
+
+  body.fsd-theme .bottom-hud {
+    bottom: 20px;
+  }
+
+  /* The latency panel opens beside the command column, not over it. */
+  #fsd-stats {
+    top: 16px;
+    left: 392px;
+    width: min(620px, calc(100vw - 392px - 330px));
+    max-height: calc(100vh - 140px);
+  }
+
+  body.fsd-theme .driver-dock {
+    height: 84px;
+    padding: 12px 18px;
+    gap: 14px;
+    border-radius: var(--sol-radius-pill);
+  }
+}
+
+/* Short desktop windows: the map gives up height so the camera picture below it stays clear. */
+@media (min-width: 901px) and (max-height: 860px) {
+  body.fsd-theme .navigation-hud .minimap canvas {
+    width: auto;
+    height: 150px;
+    margin: 0 auto;
+  }
+}
+
+/* The route map drawn dark, so it sits in the panel instead of glaring out of it: the bundle's
+   light map inverted, hues turned back, the route line reading warm. */
+body.fsd-theme #map-canvas {
+  filter: invert(0.92) hue-rotate(180deg) saturate(1.3);
+}
+
+body.fsd-theme .minimap-toolbar {
+  background: var(--sol-panel-solid);
+  border-bottom: 1px solid var(--sol-line);
+}
+
+body.fsd-theme .minimap-toolbar button {
+  color: var(--sol-muted);
+}
+
+/* ---- Loading screen (index.html #scene-loader, semif-loader.js) ------------------------------ */
+
+#scene-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 24px;
+  color: var(--sol-ink);
+  font-family: var(--sol-font);
+  background: linear-gradient(
+    180deg,
+    var(--sol-dusk-1) 0%,
+    var(--sol-dusk-2) 34%,
+    var(--sol-dusk-3) 58%,
+    var(--sol-dusk-4) 66%,
+    var(--sol-sea-1) 66.2%,
+    var(--sol-sea-2) 100%
+  );
+}
+
+#scene-loader[hidden],
+#scene-loader [hidden] {
+  display: none;
+}
+
+.sol-sun {
+  position: absolute;
+  left: 50%;
+  top: 66%;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--sol-sun) 0%, var(--sol-sun) 46%, var(--sol-sun-glow) 47%, transparent 70%);
+  clip-path: inset(0 0 50% 0);
+  animation: sol-rise 6s ease-in-out infinite alternate;
+}
+
+.sol-glint {
+  position: absolute;
+  left: 50%;
+  top: 66%;
+  width: 220px;
+  height: 34%;
+  transform: translateX(-50%);
+  background: repeating-linear-gradient(180deg, var(--sol-glint) 0 2px, transparent 2px 13px);
+  -webkit-mask-image: linear-gradient(180deg, var(--sol-ink) 0%, transparent 85%);
+  mask-image: linear-gradient(180deg, var(--sol-ink) 0%, transparent 85%);
+  opacity: 0.55;
+  animation: sol-shimmer 2.8s linear infinite;
+}
+
+.sol-loader-card {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: min(420px, 100%);
+  margin-top: -18vh;
+  text-align: center;
+}
+
+.sol-wordmark {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+
+.sol-wordmark strong {
+  font-size: clamp(40px, 8vw, 64px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--sol-ink-strong);
+  text-shadow: 0 6px 40px var(--sol-sun-glow);
+}
+
+.sol-wordmark span {
+  color: var(--sol-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+#loading-message {
+  margin: 10px 0 0;
+  color: var(--sol-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sol-progress {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--sol-radius-pill);
+  background: var(--sol-scrim);
+}
+
+.sol-progress > span {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--sol-dusk-4), var(--sol-accent));
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--sol-motion);
+}
+
+.sol-progress-label {
+  color: var(--sol-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+#scene-loader[data-state="error"] .sol-progress > span {
+  background: var(--sol-danger);
+}
+
+#scene-loader[data-state="error"] .sol-progress-label {
+  color: var(--sol-danger);
+  opacity: 1;
+}
+
+#loading-retry {
+  padding: 11px 22px;
+  border: 0;
+  border-radius: var(--sol-radius-pill);
+  background: var(--sol-accent);
+  color: var(--sol-accent-ink);
+  font: 800 14px var(--sol-font);
+  cursor: pointer;
+  box-shadow: 0 8px 28px var(--sol-accent-glow);
+}
+
+#loading-retry:hover {
+  background: var(--sol-accent-hover);
+}
+
+@keyframes sol-rise {
+  from {
+    transform: translate(-50%, -46%);
+  }
+  to {
+    transform: translate(-50%, -54%);
+  }
+}
+
+@keyframes sol-shimmer {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #fsd-pip,
+  .sol-progress > span,
+  #fsd-minimal svg,
+  #fsd-halo {
+    transition: none;
+  }
+  .sol-sun,
+  .sol-glint {
+    animation: none;
+  }
 }
