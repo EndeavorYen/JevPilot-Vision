@@ -135,8 +135,9 @@ function el(tag) {
     const e = ev || {};
     e.target = e.target || node;
     e.preventDefault = e.preventDefault || function () {};
+    e.stopPropagation = e.stopPropagation || function () { e.__stopped = true; };
     (node.listeners[e.type] || []).forEach((fn) => fn(e));
-    if (node.parentElement && node.parentElement.dispatchEvent && e.bubbles) {
+    if (node.parentElement && node.parentElement.dispatchEvent && e.bubbles && !e.__stopped) {
       node.parentElement.dispatchEvent(e);
     }
   };
@@ -215,7 +216,8 @@ document.querySelector = (sel) => {
   let found = null;
   walk(document, (node) => {
     if (found || !node.tagName) return;
-    if (sel[0] === "#" && node.id === sel.slice(1)) found = node;
+    if (sel === "dialog[open]" && node.tagName === "DIALOG" && node.open) found = node;
+    else if (sel[0] === "#" && node.id === sel.slice(1)) found = node;
     else if (sel[0] === "." && node.classList && node.classList.contains(sel.slice(1))) found = node;
   });
   return found;
@@ -321,6 +323,25 @@ if (specEarly.cmd === "fleet") {
   };
 }
 window.URL = { createObjectURL: () => "blob:pip", revokeObjectURL() {} };
+// Per-browser storage and the address bar, for the driving-mode preference (#21).
+const stored = Object.assign({}, specEarly.storage || {});
+window.localStorage = {
+  getItem: (k) => (k in stored ? stored[k] : null),
+  setItem: (k, v) => { stored[k] = String(v); },
+  removeItem: (k) => { delete stored[k]; },
+};
+const urls = [];
+window.history = { state: null, replaceState: (_s, _t, url) => { urls.push(String(url)); } };
+location.pathname = "/jevpilot/";
+// The bundle's strategy dropdown (semif / heuristic), as mounted before the overlay runs.
+const strategyChanges = [];
+if (specEarly.cmd === "mode") {
+  const select = el("select");
+  select.id = "strategy-select";
+  select.value = specEarly.strategy || "semif";
+  select.addEventListener("change", () => strategyChanges.push(select.value));
+  document.body.appendChild(select);
+}
 global.document = document;
 global.location = location;
 global.performance = window.performance;
@@ -364,7 +385,85 @@ const spec = specEarly;
 const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
-if (spec.cmd === "shape") {
+if (spec.cmd === "mode") {
+  const DRIVE_MODES_T = ["vision", "privileged", "heuristic"];
+  const shape = () => {
+    const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
+    return { drive_mode: body.drive_mode || null, mode: body.mode };
+  };
+  const pick = (m) => document.getElementById("sol-mode-" + m).click();
+  const strategy = document.getElementById("strategy-select");
+  const reads = () => document.getElementById("sol-mode-reads").textContent;
+  const steps = [{ at: "load", mode: window.SEMIF_DRIVE_MODE, shaped: shape(), reads: reads(), select: strategy.value }];
+  for (const m of ["vision", "heuristic", "privileged"]) {
+    pick(m);
+    steps.push({ at: "click " + m, mode: window.SEMIF_DRIVE_MODE, shaped: shape(), reads: reads(), select: strategy.value,
+      checked: document.getElementById("sol-mode-" + m).getAttribute("aria-checked"),
+      intent: document.getElementById("fsd-intent").textContent });
+  }
+  strategy.value = "heuristic";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  steps.push({ at: "select heuristic", mode: window.SEMIF_DRIVE_MODE, shaped: shape() });
+  strategy.value = "semif";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  steps.push({ at: "select semif", mode: window.SEMIF_DRIVE_MODE, shaped: shape() });
+  // The bundle's own shortcuts (1, 2, 3) and buttons set the dropdown without a change event.
+  strategy.value = "heuristic";
+  window.__raf();
+  steps.push({ at: "bundle sets heuristic", mode: window.SEMIF_DRIVE_MODE });
+  strategy.value = "semif";
+  window.__raf();
+  steps.push({ at: "bundle sets semif", mode: window.SEMIF_DRIVE_MODE });
+  const pipHidden = () => document.getElementById("fsd-pip").classList.contains("fsd-pip-hidden");
+  const pipBefore = pipHidden();
+  document.body.dispatchEvent({ type: "keydown", code: "KeyM", key: "m", bubbles: true });
+  steps.push({ at: "key M", mode: window.SEMIF_DRIVE_MODE, pipToggled: pipHidden() !== pipBefore });
+  const dialog = el("dialog");
+  dialog.open = true;
+  document.body.appendChild(dialog);
+  document.body.dispatchEvent({ type: "keydown", code: "KeyM", key: "m", bubbles: true });
+  steps.push({ at: "key M with a dialog open", mode: window.SEMIF_DRIVE_MODE });
+  // Arrow keys on the switch: they move the mode and stop there (the bundle steers on arrows).
+  const bundleKeys = [];
+  document.addEventListener("keydown", (ev) => bundleKeys.push(ev.key));
+  dialog.open = false;
+  const radio = document.getElementById("sol-mode-" + window.SEMIF_DRIVE_MODE);
+  const before = window.SEMIF_DRIVE_MODE;
+  radio.dispatchEvent({ type: "keydown", key: "ArrowRight", code: "ArrowRight", bubbles: true });
+  steps.push({ at: "arrow right on the switch", from: before, mode: window.SEMIF_DRIVE_MODE, reachedBundle: bundleKeys.slice(),
+    tabindex: DRIVE_MODES_T.map((m) => document.getElementById("sol-mode-" + m).getAttribute("tabindex")) });
+  const live = document.getElementById("sol-mode-announce");
+  const healthEl = document.getElementById("sol-mode-health");
+  steps.push({ at: "live regions", announce: live && live.getAttribute("aria-live"), health: healthEl.getAttribute("aria-live") });
+  // What the live region says as stale evidence ages, then when the detector fails.
+  window.SEMIF_MODE.set("vision");
+  window.SEMIF_VISION = { backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd", status: "ready" } };
+  window.SEMIF_VISION_AT = nowMs - 2100;
+  window.SEMIF_MODE.refresh();
+  const said = [document.getElementById("sol-mode-announce").textContent];
+  nowMs += 300;
+  window.SEMIF_MODE.refresh();
+  said.push(document.getElementById("sol-mode-announce").textContent);
+  window.SEMIF_VISION = { backend: "stub", perception: { backend: "none", status: "failed" } };
+  window.SEMIF_MODE.refresh();
+  said.push(document.getElementById("sol-mode-announce").textContent);
+  steps.push({ at: "announcements", said });
+  const h = window.SEMIF_MODE.health;
+  const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
+  const health = {
+    ok: h({ backend: "google/siglip-base-patch16-224", perception: ready }, 400),
+    stub: h({ backend: "stub", perception: ready }, 400),
+    loading: h({ backend: "stub", perception: { backend: "none", status: "loading" } }, 400),
+    failed: h({ backend: "stub", perception: { backend: "none", status: "failed" } }, 400),
+    stale: h({ backend: "stub", perception: ready }, 2100),
+    nullStatus: h({ backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd", status: null } }, 400),
+    noStatus: h({ backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd" } }, 400),
+    none: h(null, null),
+    future: h({ backend: "stub", perception: ready }, -300),
+    notObject: h({ backend: "stub", perception: "failed" }, 400),
+  };
+  process.stdout.write(JSON.stringify({ steps, stored, urls, strategyChanges, health }));
+} else if (spec.cmd === "shape") {
   // The planner's batch: two candidates and their projections (points every 0.05 s).
   const pts = (v, steer) => Array.from({ length: 61 }, (_, k) => ({ x: 100 + v * 0.05 * k, z: 50 + steer * k, heading: Math.PI / 2, speed: v }));
   window.SEMIF_SIM = { world: { seed: 7 }, lastPlan: { origin: { x: 100, z: 50, heading: Math.PI / 2 },
@@ -835,13 +934,32 @@ function _perspectiveElements(w, h) {
 """
 
 
+def _harness_file() -> str:
+    """The harness outgrew Windows' command-line limit for `node -e`; node requires it from a file
+    (process.argv is the same either way)."""
+    import hashlib
+    import tempfile
+
+    import os
+
+    path = Path(tempfile.gettempdir()) / f"semif-overlay-harness-{hashlib.sha1(_HARNESS.encode()).hexdigest()[:12]}.js"
+    if not path.exists():
+        # Written whole, then renamed into place: an interrupted or parallel write never leaves a
+        # half file under the final name.
+        tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
+        tmp.write_text(_HARNESS, encoding="utf-8")
+        os.replace(tmp, path)
+    return path.as_posix()
+
+
 def _run(cmd: dict, view: list[float] | None = None) -> dict:
     view = view if view is not None else _view_at(0.0, 1.4, 8.0)
     proc = subprocess.run(
-        ["node", "-e", _HARNESS, str(OVERLAY_JS), json.dumps(view), json.dumps(cmd)],
+        ["node", "-e", f"require({json.dumps(_harness_file())})", str(OVERLAY_JS), json.dumps(view), json.dumps(cmd)],
         cwd=str(REPO),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if proc.returncode != 0:
@@ -1043,3 +1161,98 @@ def test_vision_mode_adds_a_narrow_forward_camera_for_far_lights():
     assert (round(narrow["dx"]), round(narrow["dz"])) == (25, 0), "it looks straight ahead"
     plain = _run({"cmd": "upload", "vision": "1", "frames": 3})
     assert plain["bodies"][0]["frames"] == ["front", "right", "rear", "left"], "other modes keep four cameras"
+
+
+def test_the_mode_comes_from_the_address_then_the_browser_then_privileged():
+    """#21: ?mode= overrides; otherwise the browser's last choice; otherwise privileged."""
+    assert _run({"cmd": "mode"})["steps"][0]["mode"] == "privileged"
+    assert _run({"cmd": "mode", "storage": {"semif.driveMode": "vision"}})["steps"][0]["mode"] == "vision"
+    assert _run({"cmd": "mode", "mode": "heuristic", "storage": {"semif.driveMode": "vision"}})["steps"][0]["mode"] == "heuristic"
+    assert _run({"cmd": "mode", "storage": {"semif.driveMode": "nonsense"}})["steps"][0]["mode"] == "privileged"
+
+
+def test_switching_mode_from_the_indicator_changes_the_decision_request():
+    """#21: each mode is a different decision path: Vision adds drive_mode, Heuristic asks the
+    heuristic scorer, Privileged is the SemArbiter on the simulator table. The bundle's strategy
+    dropdown follows, the choice is remembered and written into the address."""
+    out = _run({"cmd": "mode", "mode": "privileged"})
+    steps = {s["at"]: s for s in out["steps"]}
+    assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert steps["click vision"]["checked"] == "true"
+    # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
+    # bundle then decides locally and asks no server); nothing in the request is rewritten.
+    assert steps["click heuristic"]["select"] == "heuristic"
+    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click privileged"]["select"] == "semif"
+    assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
+    last = [s["mode"] for s in out["steps"] if "mode" in s][-1]
+    assert out["stored"]["semif.driveMode"] == last, "the last choice is remembered"
+    # The address follows (other parameters kept): vision, heuristic, privileged for the three clicks.
+    assert out["urls"][:3] == ["/jevpilot/?vision=0&mode=vision", "/jevpilot/?vision=0&mode=heuristic", "/jevpilot/?vision=0&mode=privileged"]
+
+
+def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
+    steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
+    assert steps["click vision"]["reads"] == "Objects & signals from cameras · map privileged"
+    assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
+    assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
+
+
+def test_the_strategy_dropdown_the_bundles_shortcuts_and_the_m_key_drive_the_indicator_too():
+    steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "vision"})["steps"]}
+    assert steps["select heuristic"]["mode"] == "heuristic"
+    # Back to SemArbiter in the dropdown: the last SemArbiter mode (privileged, clicked last).
+    assert steps["select semif"]["mode"] == "privileged"
+    # Review #21 H2: the bundle's 1/2/3 keys change the dropdown with no event; the next frame notices.
+    assert steps["bundle sets heuristic"]["mode"] == "heuristic"
+    assert steps["bundle sets semif"]["mode"] == "privileged"
+    assert steps["key M"]["mode"] == "heuristic", "M cycles vision -> privileged -> heuristic -> vision"
+    # Review #21 H1: V hides the camera view; the mode key must not touch it.
+    assert steps["key M"]["pipToggled"] is False
+    assert steps["key M with a dialog open"]["mode"] == "heuristic", "keys wait while a dialog is open"
+
+
+def test_vision_health_says_when_the_car_is_held_to_a_crawl():
+    """#21: the detector's state, the evidence's age and the encoder backend; loading, failed,
+    stale or missing perception is the degraded state the server holds to a crawl (vision_mode.py)."""
+    h = _run({"cmd": "mode"})["health"]
+    assert h["ok"] == {"state": "ok", "text": "Detector ready · 0.4 s · SigLIP"}
+    assert h["stub"]["state"] == "ok" and h["stub"]["text"].endswith("SigLIP stub")
+    # Review #21 L1: the same rule as vision_mode._perception_ok: a missing status is ready, a null one is not.
+    assert h["noStatus"]["state"] == "ok"
+    for key, words in [("loading", "Detector loading"), ("failed", "Detector failed"), ("nullStatus", "Detector failed"),
+                       ("stale", "Evidence 2.1 s old"),
+                       ("none", "Waiting for the cameras"), ("future", "Waiting for the cameras"),
+                       ("notObject", "Detector failed")]:
+        assert h[key]["state"] == "degraded", key
+        assert h[key]["text"].startswith(words) and h[key]["text"].endswith("holding to a crawl"), h[key]
+
+
+def test_before_any_decision_the_status_names_the_mode_that_will_decide():
+    """#21: in Heuristic the status card does not claim SemArbiter."""
+    steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
+    assert steps["click heuristic"]["intent"] == "Heuristic"
+    assert steps["click privileged"]["intent"] == "SemArbiter"
+
+
+def test_review2_arrow_keys_on_the_switch_change_the_mode_and_never_reach_the_driving_keys():
+    """The bundle steers (and drops autopilot) on arrow keys it hears on window; a keyboard user
+    moving along the switch must not steer the car. One tab stop: the selected mode."""
+    steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "vision"})["steps"]}
+    arrow = steps["arrow right on the switch"]
+    order = ["vision", "privileged", "heuristic"]
+    assert arrow["mode"] == order[(order.index(arrow["from"]) + 1) % 3]
+    assert arrow["reachedBundle"] == []
+    assert arrow["tabindex"] == ["0" if m == arrow["mode"] else "-1" for m in order]
+
+
+def test_review2_only_health_changes_are_announced_not_every_age_tick():
+    steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
+    live = steps["live regions"]
+    assert live["announce"] == "polite" and live["health"] is None
+    # Stale at 2.1 s and at 2.4 s is one announcement; a failure is a new one.
+    said = steps["announcements"]["said"]
+    assert said[0] == said[1] == "Vision mode, evidence stale, holding to a crawl", said
+    assert said[2] == "Vision mode, detector failed, holding to a crawl", said

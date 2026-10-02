@@ -2,12 +2,22 @@
   const params = new URLSearchParams(location.search);
   const rawParam = params.get("raw") === "1" || params.get("rawMode") === "1";
   window.SEMIF_RAW_MODE = window.SEMIF_RAW_MODE || rawParam;
-  // Driving mode (#18): vision decides from the cameras and the map only; privileged (the default)
-  // and heuristic are the references it is tuned against. The planner patches read the global.
+  // Driving mode (#18, #21): what the decision reads. Vision: objects and signals from the onboard
+  // cameras, the map still privileged. Privileged: the simulator's state table (the ablation for a
+  // decision model). Heuristic: the bundle's geometric rules. The planner patches read the global.
+  // ?mode= wins, then the browser's last choice, then privileged.
+  const DRIVE_MODES = ["vision", "privileged", "heuristic"];
+  const MODE_KEY = "semif.driveMode";
   const modeParam = params.get("mode");
-  window.SEMIF_DRIVE_MODE = ["vision", "privileged", "heuristic"].includes(modeParam)
+  let modeSaved = null;
+  try {
+    modeSaved = localStorage.getItem(MODE_KEY);
+  } catch (_) {}
+  window.SEMIF_DRIVE_MODE = DRIVE_MODES.includes(modeParam)
     ? modeParam
-    : window.SEMIF_DRIVE_MODE || "privileged";
+    : DRIVE_MODES.includes(modeSaved)
+      ? modeSaved
+      : "privileged";
   const seedParam = params.get("seed");
   if (seedParam && Number.isFinite(Number(seedParam))) {
     window.SEMIF_SEED = Number(seedParam);
@@ -56,6 +66,168 @@
     </div>
   `;
   document.body.appendChild(chrome);
+
+  // ---- Driving mode indicator (#21) -------------------------------------------------------------
+  // Always on screen (also in the minimal view): which mode drives, what it reads, and in Vision
+  // whether perception is healthy. It says what each mode reads, not which is "better".
+  const MODE_INFO = {
+    vision: { label: "Vision", reads: "Objects & signals from cameras · map privileged" },
+    privileged: { label: "Privileged", reads: "Simulator state · the ablation for a decision model" },
+    heuristic: { label: "Heuristic", reads: "Geometric rules · no model" },
+  };
+  const modeEl = document.createElement("div");
+  modeEl.id = "sol-mode";
+  modeEl.innerHTML = `
+    <div class="sol-mode-switch" role="radiogroup" aria-label="Driving mode" title="Driving mode · M">
+      ${DRIVE_MODES.map((m) => `<button type="button" id="sol-mode-${m}" class="sol-mode-option" role="radio" aria-checked="false">${MODE_INFO[m].label}</button>`).join("")}
+    </div>
+    <p class="sol-mode-line"><span id="sol-mode-reads"></span><span id="sol-mode-health"></span></p>
+    <span id="sol-mode-announce" class="sol-visually-hidden"></span>
+  `;
+  document.body.appendChild(modeEl);
+  const modeReads = document.getElementById("sol-mode-reads");
+  const modeHealth = document.getElementById("sol-mode-health");
+  document.getElementById("sol-mode-announce").setAttribute("aria-live", "polite");
+  let lastModelMode = window.SEMIF_DRIVE_MODE === "vision" ? "vision" : "privileged";
+  let modeFrames = 0;
+
+  // Vision's health: the detector's state, the evidence's age (from frame capture) and the encoder
+  // backend. Loading, failed, stale (over 1.5 s) or missing perception is what the server holds
+  // to a crawl (jevpilot_vision/vision_mode.py), so the indicator says so.
+  function encoderName(backend) {
+    const b = String(backend || "stub");
+    if (b === "stub") return "SigLIP stub";
+    return /siglip/i.test(b) ? "SigLIP" : b.split("/").pop();
+  }
+  function modeHealthOf(vis, ageMs) {
+    const p = vis && vis.perception && typeof vis.perception === "object" ? vis.perception : null;
+    const crawl = " — holding to a crawl";
+    if (!vis || !Number.isFinite(ageMs) || ageMs < 0) return { state: "degraded", text: "Waiting for the cameras" + crawl };
+    if (p && p.status === "loading") return { state: "degraded", text: "Detector loading" + crawl };
+    const status = p && "status" in p ? p.status : "ready";
+    if (!p || p.backend == null || p.backend === "none" || status !== "ready") {
+      return { state: "degraded", text: "Detector failed" + crawl };
+    }
+    const age = (ageMs / 1000).toFixed(1);
+    if (ageMs > 1500) return { state: "degraded", text: `Evidence ${age} s old` + crawl };
+    return { state: "ok", text: `Detector ready · ${age} s · ${encoderName(vis.backend)}` };
+  }
+
+  function renderMode() {
+    const mode = window.SEMIF_DRIVE_MODE;
+    modeEl.setAttribute("data-mode", mode);
+    for (const m of DRIVE_MODES) {
+      const btn = document.getElementById(`sol-mode-${m}`);
+      if (!btn) continue;
+      btn.setAttribute("aria-checked", String(m === mode));
+      btn.setAttribute("tabindex", m === mode ? "0" : "-1");
+    }
+    modeReads.textContent = MODE_INFO[mode].reads;
+    // Until a decision names its intent, the status card names who will decide.
+    const intent = document.getElementById("fsd-intent");
+    if (intent && /^(SemArbiter|Heuristic)$/.test(intent.textContent)) {
+      intent.textContent = mode === "heuristic" ? "Heuristic" : "SemArbiter";
+    }
+    renderModeHealth();
+  }
+  // Screen readers hear the mode and a change of health (ready / which failure), not every tick
+  // of the evidence age.
+  let announced = "";
+  function announce(text) {
+    if (text === announced) return;
+    announced = text;
+    const live = document.getElementById("sol-mode-announce");
+    if (live) live.textContent = text;
+  }
+  function renderModeHealth() {
+    if (window.SEMIF_DRIVE_MODE !== "vision") {
+      modeEl.setAttribute("data-health", "");
+      modeHealth.textContent = "";
+      announce(`${MODE_INFO[window.SEMIF_DRIVE_MODE].label} mode`);
+      return;
+    }
+    const age = Number.isFinite(window.SEMIF_VISION_AT) ? performance.now() - window.SEMIF_VISION_AT : NaN;
+    const h = modeHealthOf(window.SEMIF_VISION, age);
+    modeEl.setAttribute("data-health", h.state);
+    modeHealth.textContent = h.text;
+    modeHealth.setAttribute("title", h.text);
+    // Fixed phrases: the evidence age is on screen, not read out on every tick.
+    const reason = h.state === "ok" ? "" : h.text.startsWith("Evidence") ? "evidence stale" : h.text.split(" — ")[0].toLowerCase();
+    announce(h.state === "ok" ? "Vision mode, detector ready" : `Vision mode, ${reason}, holding to a crawl`);
+  }
+
+  // The bundle's strategy dropdown is the switch for SemArbiter vs the heuristic; it follows the
+  // indicator, and the indicator follows it.
+  function syncStrategy(mode) {
+    const select = document.getElementById("strategy-select");
+    const want = mode === "heuristic" ? "heuristic" : "semif";
+    if (!select || select.value === want) return;
+    select.value = want;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function setDriveMode(mode, fromStrategy) {
+    if (!DRIVE_MODES.includes(mode)) return;
+    window.SEMIF_DRIVE_MODE = mode;
+    if (mode !== "heuristic") lastModelMode = mode;
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch (_) {}
+    try {
+      const q = new URLSearchParams(location.search);
+      q.set("mode", mode);
+      history.replaceState(history.state, "", `${location.pathname || ""}?${q.toString()}${location.hash || ""}`);
+    } catch (_) {}
+    if (!fromStrategy) syncStrategy(mode);
+    renderMode();
+  }
+  const stepMode = (by) =>
+    DRIVE_MODES[(DRIVE_MODES.indexOf(window.SEMIF_DRIVE_MODE) + by + DRIVE_MODES.length) % DRIVE_MODES.length];
+  for (const m of DRIVE_MODES) {
+    const btn = document.getElementById(`sol-mode-${m}`);
+    btn.addEventListener("click", () => setDriveMode(m));
+    // Arrow keys move along the switch, as in any radio group.
+    btn.addEventListener("keydown", (ev) => {
+      const by = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
+      if (!by) return;
+      ev.preventDefault();
+      ev.stopPropagation(); // the bundle steers, and drops autopilot, on arrows that reach window
+      const next = stepMode(by);
+      setDriveMode(next);
+      const target = document.getElementById(`sol-mode-${next}`);
+      if (target && target.focus) target.focus();
+    });
+  }
+  // M cycles the mode (V already hides the camera view). Not while typing or with a dialog open.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.repeat || ev.code !== "KeyM" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (/input|select|textarea/i.test((ev.target && ev.target.tagName) || "")) return;
+    if (document.querySelector("dialog[open]")) return;
+    setDriveMode(stepMode(1));
+  });
+  // The dropdown is the bundle's: it may mount after this script, and the bundle's own 1/2/3 keys
+  // and strategy buttons set its value without a change event. So the indicator also compares it
+  // every frame (tick) and follows whoever drives.
+  let strategyWired = false;
+  function followStrategy() {
+    const select = document.getElementById("strategy-select");
+    if (!select) return;
+    if (select.value === "heuristic" && window.SEMIF_DRIVE_MODE !== "heuristic") setDriveMode("heuristic", true);
+    else if (select.value && select.value !== "heuristic" && window.SEMIF_DRIVE_MODE === "heuristic") setDriveMode(lastModelMode, true);
+  }
+  function wireStrategy() {
+    const select = document.getElementById("strategy-select");
+    if (!select) return;
+    if (!strategyWired) {
+      strategyWired = true;
+      select.addEventListener("change", followStrategy);
+      syncStrategy(window.SEMIF_DRIVE_MODE);
+      return;
+    }
+    followStrategy();
+  }
+  wireStrategy();
+  renderMode();
+  window.SEMIF_MODE = { set: setDriveMode, health: modeHealthOf, refresh: renderModeHealth };
 
   // Minimal view (H, or the corner button): every panel folds away except speed, limit, the
   // autopilot switch and the next turn, so the drive fills the screen. Remembered per browser.
@@ -1175,6 +1347,8 @@
     }
     if (painted) visionTick(true);
     if (window.SEMIF_DRIVE_MODE === "vision") updateSeenSignal();
+    wireStrategy();
+    if (++modeFrames % 15 === 0) renderModeHealth();
     requestAnimationFrame(tick);
   }
 
