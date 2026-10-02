@@ -8,6 +8,8 @@ import { buildTerrain, groundGrid } from "./terrain.js";
 import { placeVegetation, buildVegetation, updateVegetation } from "./vegetation.js";
 import { buildFestival, updateFestival } from "./festival.js";
 import { placeProps, buildProps, updateProps } from "./props.js";
+import { HERO_MODELS, buildHero, buildTrafficFor } from "./vehicles.js";
+import { buildPedestrian, placeCrowds, buildCrowds } from "./people.js";
 import { createHeightField, seaPolygon } from "./heights.js";
 import { buildSea, updateSea } from "./water.js";
 import { buildRoads } from "./roads.js";
@@ -66,6 +68,93 @@ frameHooks.push((view, dt) => {
   updateProps(dt);
 });
 
+// --- vehicles and people (#25) -----------------------------------------------------------------
+
+// The hero car: the one picked with K in this page, else ?car=gt|roadster|rally, else the last one
+// picked with K, else the GT.
+let picked = null;
+function heroModel() {
+  if (picked) return picked;
+  const asked = new URLSearchParams(globalThis.location?.search || "").get("car");
+  if (HERO_MODELS.includes(asked)) return asked;
+  try {
+    const saved = globalThis.localStorage?.getItem("semif-car");
+    if (HERO_MODELS.includes(saved)) return saved;
+  } catch (_) {}
+  return HERO_MODELS[0];
+}
+
+// The bundle asks for its hero car here first (BUNDLE_PATCHES.md `coast-hero`); off the coast
+// it gets undefined and loads its own Model Y.
+window.SEMIF_WORLD_KIT = {
+  hero(view) {
+    if (view?.sim?.world?.type !== "coast") return undefined;
+    // It runs inside the bundle's build(): a failure must reach its .catch, not abort the build.
+    try {
+      return Promise.resolve(buildHero(heroModel()));
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  },
+};
+
+let heroSwap = false;
+globalThis.document?.addEventListener?.("keydown", (e) => {
+  if (e.code !== "KeyK" || e.repeat || e.ctrlKey || e.metaKey || e.altKey || !onCoast()) return;
+  if (/input|select|textarea/i.test(e.target?.tagName || "")) return;
+  const next = HERO_MODELS[(HERO_MODELS.indexOf(heroModel()) + 1) % HERO_MODELS.length];
+  picked = next;
+  try {
+    globalThis.localStorage?.setItem("semif-car", next);
+  } catch (_) {}
+  heroSwap = true;
+});
+
+function dispose(node) {
+  node.geometry?.dispose?.();
+  (node.children || []).forEach(dispose);
+}
+
+// Moves a model's parts into the bundle's own group, which it keeps positioning every frame.
+function dress(group, model) {
+  for (const child of group.children || []) dispose(child);
+  group.clear();
+  for (const child of [...model.children]) group.add(child);
+  group.name = model.name;
+  group.userData.semifDressed = true;
+}
+
+function dressAgents(view) {
+  if (view.vehicles?.size) {
+    let cars = null;
+    for (const [id, group] of view.vehicles) {
+      if (group.userData.semifDressed) continue;
+      cars ??= new Map((view.sim.traffic || []).map((c) => [c.id, c]));
+      dress(group, buildTrafficFor(cars.get(id) || { id }));
+    }
+  }
+  if (view.people?.size) {
+    for (const [id, group] of view.people) {
+      if (group.userData.semifDressed) continue;
+      const person = buildPedestrian(id);
+      dress(group, person);
+      group.userData.limbs = person.userData.limbs;
+    }
+  }
+  if (heroSwap && view.player && view.heroCar && !view.sim.crash) {
+    heroSwap = false;
+    const hero = buildHero(heroModel());
+    for (const child of view.player.children || []) dispose(child);
+    view.player.clear();
+    view.player.add(hero);
+    view.heroCar = hero;
+    view.player.userData.eyeHeight = hero.userData.eyeHeight;
+    view.player.userData.eyeForward = hero.userData.eyeForward;
+  }
+}
+
+frameHooks.push((view) => dressAgents(view));
+
 function buildCoast(view) {
   resetCaches();
   // Stop the old layer's per-frame work and any upgrade it still has pending from an old map.
@@ -82,7 +171,7 @@ function buildCoast(view) {
   const ground = buildTerrain(world, field, grid);
   sea = buildSea(grid);
   const plants = buildVegetation(placeVegetation(world, field, grid));
-  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world, field, grid), plants, buildFestival(world, field, grid), buildProps(placeProps(world, field, grid)));
+  root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world, field, grid), plants, buildFestival(world, field, grid), buildProps(placeProps(world, field, grid)), buildCrowds(placeCrowds(world, field, grid)));
   view.scene.add(root);
   widenShadows(view.sun);
   mountClock();

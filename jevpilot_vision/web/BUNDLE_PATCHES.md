@@ -42,3 +42,4 @@
 | `coast-kit-classes` | main | `kit()` 多交出 ShaderMaterial、RenderTarget、正交相機、向量與矩陣、DataTexture、TextureLoader、Fog、HemisphereLight、InstancedBufferAttribute | 渲染器要自己寫天空、海、後製與 instancing；壓縮名稱由 `test_kit_classes_are_the_classes_they_claim_to_be` 核對 |
 | `coast-sun` | main | 太陽位置先問 `SEMIF_SCENERY.sun(view, player)` | 日照循環：太陽方向依時間改變 |
 | `coast-present` | main | 主畫面輸出先問 `SEMIF_SCENERY.present(view)` | 後製只作用在主畫面；車載相機另外渲染，不受影響 |
+| `coast-hero` | main | 主角車先問 `SEMIF_WORLD_KIT.hero(view)`；coast 回傳程式生成的車，其他地圖回傳 undefined、照舊載入 Model Y | 新地圖的主角車由 `semif-world/vehicles.js` 產生，也省掉 glb 下載（#25） |

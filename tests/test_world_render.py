@@ -34,11 +34,12 @@ class Vec3 { constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); } set(x, y, z
 class ShaderMaterial { constructor(o) { Object.assign(this, o); } }
 class SphereGeometry extends Geo { constructor(r) { super(); this.radius = r; } }
 const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: function (a, n) { this.array = a; this.itemSize = n; },
-  MeshStandardMaterial: function (o) { Object.assign(this, o); this.userData = {}; }, Color, Vector3: Vec3, ShaderMaterial, SphereGeometry,
+  MeshStandardMaterial: function (o) { Object.assign(this, o); this.userData = {}; }, MeshPhysicalMaterial: function (o) { Object.assign(this, o); this.userData = {}; this.physical = true; },
+  Color, Vector3: Vec3, ShaderMaterial, SphereGeometry,
   TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb",
   WebGLRenderTarget: class { constructor(w, h, o) { this.width = w; this.height = h; this.options = o; this.texture = {}; } dispose() {} },
   OrthographicCamera: class {}, PlaneGeometry: Geo, CylinderGeometry: Geo, BoxGeometry: Geo, ConeGeometry: Geo, mergeGeometries: () => new Geo(),
-  InstancedMesh: class extends Mesh { constructor(g, m, n) { super(g, m); this.count = n; this.matrices = []; } setMatrixAt(i, m) { this.matrices[i] = m; } setColorAt() {} computeBoundingSphere() {} },
+  InstancedMesh: class extends Mesh { constructor(g, m, n) { super(g, m); this.count = n; this.matrices = []; this.colours = []; } setMatrixAt(i, m) { this.matrices[i] = m; } setColorAt(i, c) { this.colours[i] = c.hex; } computeBoundingSphere() {} },
   Matrix4: class { compose() { return this; } }, Quaternion: class { setFromAxisAngle() { return this; } },
   CanvasTexture: class { constructor(c) { this.image = c; } },
   Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } } };
@@ -87,7 +88,7 @@ def test_on_the_coast_the_hooks_draw_the_world_and_elsewhere_they_go_to_the_old_
         "out({ coast, legacy, calls, palette: api.palette });"
     )
     assert got["coast"]["root"] == "semif-world"
-    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation", "semif-festival", "semif-props"]
+    assert got["coast"]["parts"] == ["semif-sky", "semif-terrain", "semif-sea", "semif-roads", "semif-buildings", "semif-vegetation", "semif-festival", "semif-props", "semif-crowds"]
     assert got["coast"]["building"] is True and got["coast"]["lamp"] is False
     assert got["coast"]["calls"] == ["kit"], "the old layer only sees the kit on the coast"
     assert got["legacy"][0] == "legacy" and got["legacy"][3] == 0
@@ -389,10 +390,21 @@ def test_renderer_palette_stays_out_of_the_camera_colour_masks():
         base = ((n >> 16) & 255, (n >> 8) & 255, n & 255)
         for factor in FACTORS:
             r, g, b = (min(255, round(c * factor)) for c in base)
-            hits = _hits_camera_mask(r, g, b)
+            hits = [m for m in _hits_camera_mask(r, g, b) if not (name == SILHOUETTE and m == "pedestrian")]
             if hits:
                 offenders.append((name, hex_colour, factor, hits))
     assert offenders == []
+
+
+# Sim pedestrians' lower body: the one colour allowed in the camera's pedestrian mask (spec §5.2).
+SILHOUETTE = "people.silhouette"
+
+
+def test_only_the_silhouette_reads_as_a_pedestrian_and_it_does():
+    palette = dict(_colours(_palette()))
+    n = int(palette[SILHOUETTE][1:], 16)
+    base = ((n >> 16) & 255, (n >> 8) & 255, n & 255)
+    assert all("pedestrian" in _hits_camera_mask(*(min(255, round(c * f)) for c in base)) for f in FACTORS[:4])
 
 
 def test_renderer_colours_are_all_in_the_palette():
@@ -446,3 +458,28 @@ def test_page_loads_the_generator_and_renderer_before_the_bundle():
     assert gen < bundle and render < bundle
     tag = re.search(r'<script src="/jevpilot/semif-worldgen\.js[^"]*"([^>]*)>', html).group(1)
     assert "defer" not in tag and "async" not in tag and "module" not in tag
+
+
+def test_traffic_and_pedestrians_are_dressed_once_and_the_hero_comes_from_the_kit():
+    """#25: the bundle builds placeholder agents; the coast's frame hook swaps in our models."""
+    got = _render(
+        "const scene = new Obj(); const view = { sim: { world, traffic: [{ id: 'car-1', type: 'car' }, { id: 'moto-2', type: 'motorcycle' }], pedestrians: [{ id: 'ped-3' }] },"
+        "  scene, render() {}, vehicles: new Map(), people: new Map(), player: new Obj(), heroCar: null };"
+        "view.player.clear = function () { this.children = []; };"
+        "for (const car of view.sim.traffic) { const g = new Obj(); g.clear = function () { this.children = []; }; g.children.push(new Obj()); view.vehicles.set(car.id, g); }"
+        "for (const p of view.sim.pedestrians) { const g = new Obj(); g.clear = function () { this.children = []; }; g.userData.limbs = { legs: ['old'], arms: ['old'] }; view.people.set(p.id, g); }"
+        "api.built(view); view.render(0.016); view.render(0.016);"
+        "const car = view.vehicles.get('car-1'), moto = view.vehicles.get('moto-2'), ped = view.people.get('ped-3');"
+        "const names = (g) => { const all = (o) => [o, ...(o.children || []).flatMap(all)]; return all(g).map((n) => n.name); };"
+        "const hero = await window.SEMIF_WORLD_KIT.hero(view);"
+        "window.SEMIF_SIM = { world: { type: 'city' } }; const legacy = window.SEMIF_WORLD_KIT.hero({ sim: { world: { type: 'city' } } });"
+        "out({ car: names(car), moto: names(moto), dressed: [car.userData.semifDressed, moto.userData.semifDressed, ped.userData.semifDressed],"
+        "  limbs: [ped.userData.limbs.legs.length, ped.userData.limbs.arms.length, ped.userData.limbs.legs[0] === 'old'],"
+        "  hero: hero && names(hero).filter((n) => /^wheel_(fl|fr|rl|rr)$/.test(n)).length, heroName: hero && hero.name, legacy: legacy === undefined });"
+    )
+    assert any(n.startswith("semif-traffic-") and n != "semif-traffic-motorcycle" for n in got["car"])
+    assert "semif-traffic-motorcycle" in got["moto"]
+    assert got["dressed"] == [True, True, True]
+    assert got["limbs"] == [2, 2, False], "the bundle swings our legs and arms"
+    assert got["hero"] == 4 and got["heroName"].startswith("semif-hero-")
+    assert got["legacy"], "other maps keep the bundle's Model Y"

@@ -157,6 +157,10 @@ COAST_PATCHES = [
     ("coast-present", MAIN,
      "t&&this.renderer.render(this.scene,this.camera)",
      "t&&(window.SEMIF_SCENERY?.present?.(this)||this.renderer.render(this.scene,this.camera))"),
+    # --- vehicles and people: the coast's hero car comes from semif-world/vehicles.js (#25)
+    ("coast-hero", MAIN,
+     "d=Jm().then(e=>{",
+     "d=(window.SEMIF_WORLD_KIT?.hero?.(this)??Jm()).then(e=>{"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",
