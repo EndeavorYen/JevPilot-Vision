@@ -146,6 +146,10 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
     assert cl.validate(run, dict(good, request_errors=3, autopilot=False)) is None
     # Review #28 (6): expired decisions are the model's own latency: a stall from them is a result.
     assert cl.validate(run, dict(good, expired_decisions=3, autopilot=False, distance_m=20)) is None
+    # Review #28 (7): but a request that failed while the car never got going is an outage, even if
+    # a slow first decision expired too.
+    assert "decision requests failed" in cl.validate(run, dict(good, expired_decisions=1, request_errors=2,
+                                                                autopilot=False, distance_m=0))
     assert cl.outcome(run, dict(good, expired_decisions=3, autopilot=False, distance_m=20))["stalled"] is True
     # A red light run before the car covered 150 m is not erased by an outage that followed.
     assert cl.validate(run, dict(good, server_ok=False, distance_m=120, red_light=1)) is None
@@ -318,7 +322,15 @@ def test_review6_a_read_result_survives_a_failed_park_and_unreadable_is_not_brok
     assert row["unreadable"] is True and row["broke"] is False
 
 
-def test_review6_expired_decisions_and_request_errors_are_told_apart_from_the_events():
-    got = {"events": ["40 Jev decision expired before it arrived. Replanning.", "42 Failed to fetch",
-                      "43 Jev decision expired before it arrived. Replanning."]}
-    assert cl.decision_trouble(got) == {"expired_decisions": 2, "request_errors": 1}
+def test_review7_request_failures_come_from_the_pages_counters_expiry_from_the_events():
+    got = {"events": ["40 Jev decision expired before it arrived. Replanning.", "42 Unexpected token 'I'",
+                      "43 Jev decision expired before it arrived. Replanning."],
+           "classifier": {"ok": 5, "http_errors": 2, "network_errors": 1, "bad_replies": 1}}
+    assert cl.decision_trouble(got) == {"expired_decisions": 2, "request_errors": 4}
+
+
+def test_review7_failed_rows_from_earlier_rules_are_not_reported():
+    old_failed = {"set": "held_out", "mode": "vision", "seed": 104729, "ok": False,
+                  "error": "decision service failed (the bundle paused after three failed requests)"}
+    kept, dropped = cl.current_rows([old_failed], cl.load_seeds())
+    assert kept == [] and dropped == [old_failed]

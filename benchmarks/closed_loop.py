@@ -70,7 +70,7 @@ def current_rows(rows: List[Dict[str, Any]], seeds: Dict[str, Any]) -> Tuple[Lis
     kept, dropped = [], []
     for row in rows:
         # Rows from before seed sets and outcomes were recorded do not say enough to be counted.
-        unknown = row.get("set") not in ("tuning", "held_out") or (row.get("ok") and row.get("fmt") != ROW_FORMAT)
+        unknown = row.get("set") not in ("tuning", "held_out") or row.get("fmt") != ROW_FORMAT
         stale = unknown or (row.get("set") == "held_out" and row.get("seed") not in held)
         (dropped if stale else kept).append(row)
     return kept, dropped
@@ -287,7 +287,8 @@ _READY = (
     " else if (Date.now() - t0 > 90000) { clearInterval(t); x(new Error('the drive did not load in 90 s')); } }, 250); })"
 )
 _START = (
-    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time };"
+    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time,"
+    " c0: Object.assign({}, window.SEMIF_CLASSIFIER_STATS || {}) };"
     " window.__evalTimer = setInterval(() => { for (const o of [...s.traffic, ...s.pedestrians]) {"
     " const d = Math.hypot(o.x - s.player.x, o.z - s.player.z); if (d < window.__eval.minGap) window.__eval.minGap = d; } }, 250);"
     " if (!s.autopilot) document.querySelector('#autopilot').click();"
@@ -295,7 +296,9 @@ _START = (
 )
 _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
-    " return { engaged: window.__eval.engaged, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
+    " const c = window.SEMIF_CLASSIFIER_STATS || {}, c0 = window.__eval.c0;"
+    " const classifier = {}; for (const k of Object.keys(c)) classifier[k] = c[k] - (c0[k] || 0);"
+    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -324,15 +327,12 @@ def open_tab(base: str) -> str:
 
 
 def decision_trouble(got: Dict[str, Any]) -> Dict[str, int]:
-    """From the bundle's events: decisions that expired (the decision path took over 1.8 s: the
-    model's own latency, a result) and requests that failed outright (network or server errors)."""
-    expired = errors = 0
-    for event in got.get("events") or []:
-        text = str(event).lower()
-        if "expired before it arrived" in text:
-            expired += 1
-        elif "failed to fetch" in text or "request failed" in text or "networkerror" in text or "load failed" in text:
-            errors += 1
+    """Requests that failed (HTTP errors, network failures, replies that are not JSON), from the
+    page's own counters for this drive; and decisions that expired (the decision path took over
+    1.8 s: the model's own latency), from the bundle's events (it keeps the newest 30)."""
+    stats = got.get("classifier") or {}
+    errors = sum(int(stats.get(k) or 0) for k in ("http_errors", "network_errors", "bad_replies"))
+    expired = sum(1 for e in got.get("events") or [] if "expired before it arrived" in str(e).lower())
     return {"expired_decisions": expired, "request_errors": errors}
 
 
@@ -357,8 +357,8 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         # driving. Expired decisions are the decision path's own latency and never count here.
         if got.get("server_ok") is False:
             return "decision server unreachable after the run"
-        if int(got.get("request_errors") or 0) and not int(got.get("expired_decisions") or 0):
-            return "decision requests failed (network or server errors)"
+        if int(got.get("request_errors") or 0):
+            return "decision requests failed (HTTP, network or unreadable replies)"
     return None
 
 

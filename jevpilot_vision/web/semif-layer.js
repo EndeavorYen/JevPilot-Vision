@@ -793,6 +793,10 @@
   window.SEMIF_UPDATE_SEEN = updateSeenSignal;
 
   const origFetch = window.fetch.bind(window);
+  // How the decision path's requests went, for the closed-loop evaluation (#28): counted where the
+  // requests are made, so an outage is known as such instead of guessed from the bundle's events.
+  window.SEMIF_CLASSIFIER_STATS = { ok: 0, http_errors: 0, network_errors: 0, bad_replies: 0 };
+  const classifierStats = window.SEMIF_CLASSIFIER_STATS;
   window.fetch = function (url, opts) {
     const href = typeof url === "string" ? url : url && url.url;
     if (href && href.indexOf("/classifier") !== -1 && opts && typeof opts.body === "string") {
@@ -811,12 +815,19 @@
           })
         : origFetch(url, opts);
       return sent.then(async (res) => {
+        if (!res.ok) classifierStats.http_errors += 1;
         let data;
+        let raw = "";
         try {
-          data = await res.json();
+          raw = await res.text();
+          data = JSON.parse(raw);
         } catch (_err) {
-          return res;
+          if (res.ok) classifierStats.bad_replies += 1;
+          // The body is read: hand the bundle a fresh response with the same text and status, so it
+          // reports the server's own error rather than a used body.
+          return new Response(raw, { status: res.status, statusText: res.statusText });
         }
+        if (res.ok) classifierStats.ok += 1;
         try {
           data = fillJevAnswers(data, JSON.parse(opts.body));
         } catch (_err) {
@@ -839,6 +850,9 @@
           statusText: res.statusText,
           headers: { "Content-Type": "application/json" },
         });
+      }, (err) => {
+        classifierStats.network_errors += 1;
+        throw err;
       });
     }
     return origFetch(url, opts);

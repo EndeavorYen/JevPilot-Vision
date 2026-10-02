@@ -329,6 +329,21 @@ if (specEarly.cmd === "fleet") {
     return Promise.resolve({ ok: true, json: async () => ({ policy: sent.policy, decisions }) });
   };
 }
+// Classifier replies in order: ok JSON, an HTTP 500 error page, a network failure, ok JSON that
+// is not JSON (#28: the evaluation counts request failures from the page, not from event text).
+if (specEarly.cmd === "cstats") {
+  const replies = [
+    () => Promise.resolve({ ok: true, status: 200, statusText: "OK", json: async () => ({ answers: {} }), text: async () => "{}" }),
+    () => Promise.resolve({ ok: false, status: 500, statusText: "Internal Server Error",
+      json: async () => { throw new SyntaxError("Unexpected token 'I'"); }, text: async () => "Internal Server Error" }),
+    () => Promise.reject(new TypeError("Failed to fetch")),
+    () => Promise.resolve({ ok: true, status: 200, statusText: "OK",
+      json: async () => { throw new SyntaxError("bad"); }, text: async () => "<html>" }),
+  ];
+  let at = 0;
+  window.fetch = () => replies[Math.min(at++, replies.length - 1)]();
+  global.Response = class { constructor(body, init) { this.body = body; this.status = init && init.status; this.ok = this.status >= 200 && this.status < 300; } };
+}
 window.URL = { createObjectURL: () => "blob:pip", revokeObjectURL() {} };
 // Per-browser storage and the address bar, for the driving-mode preference (#21).
 const stored = Object.assign({}, specEarly.storage || {});
@@ -392,7 +407,20 @@ const spec = specEarly;
 const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
-if (spec.cmd === "lag") {
+if (spec.cmd === "cstats") {
+  (async () => {
+    const outcomes = [];
+    for (let i = 0; i < 4; i++) {
+      try {
+        const res = await window.fetch("/v1/classifier", { method: "POST", body: JSON.stringify({ mode: "flat", state: {} }) });
+        outcomes.push(res.status);
+      } catch (err) {
+        outcomes.push("threw");
+      }
+    }
+    process.stdout.write(JSON.stringify({ outcomes, stats: window.SEMIF_CLASSIFIER_STATS }));
+  })();
+} else if (spec.cmd === "lag") {
   (async () => {
     await window.fetch("/v1/classifier", { method: "POST", body: JSON.stringify({ mode: "flat", state: {} }) });
     process.stdout.write(JSON.stringify({ timers, lag: window.SEMIF_LAG_MS }));
@@ -1281,3 +1309,11 @@ def test_lag_ms_holds_every_decision_request_back_by_that_long():
     # Review #28: the bundle drops a decision older than 1.8 s from when it asked, lag included, so
     # a stress above 1.2 s would only park the car.
     assert _run({"cmd": "lag", "lag": "5000"})["lag"] == 1200
+
+
+def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
+    """#28: whether the decision path failed (HTTP error, network failure, a reply that is not
+    JSON) is counted where the requests are made, not guessed from the bundle's event text."""
+    out = _run({"cmd": "cstats"})
+    assert out["outcomes"] == [200, 500, "threw", 200]
+    assert out["stats"] == {"ok": 1, "http_errors": 1, "network_errors": 1, "bad_replies": 1}
