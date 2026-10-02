@@ -125,3 +125,39 @@ def test_a_nose_over_the_line_on_red_holds_until_the_car_has_entered(engine):
     vector, motion = ask(engine, {"signal": "red", "distance_to_line_m": -1.7, "already_entered": False}, speed=0.0, motion=True)
     assert motion == "stop"
     assert vector == "crawl"
+
+
+def test_when_every_candidate_collides_the_slowest_forward_one_is_taken(engine):
+    """#18 regression: a car stopped ahead flagged every candidate; the first (fastest) one won the
+    tie and the car drove into it. With no safe path left, brake hardest."""
+    cands = {
+        "fast": [13.0, 0.0, 0.1, 0.0, True, False],
+        "mid": [7.2, 0.0, 0.2, 0.0, True, False],
+        "slow": [3.9, 0.0, 0.2, 0.0, True, False],
+        "back": [-0.6, 0.0, 0.2, 0.0, True, False],
+    }
+    questions = {"vector": {"type": "choice", "instructions": "Choose a path.", "criteria": {k: None for k in cands}}}
+    state = {"speed_mps": 12.0, "on_road": True, "candidates": cands}
+    choice = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]["vector"]["choice"]
+    assert choice == "slow"
+
+
+def test_a_stop_offered_before_the_line_is_taken_when_the_slowest_path_could_cross_first(engine):
+    """#18: on the coast the stop is offered from further out (BUNDLE_PATCHES.md vision-stop-offer),
+    because a decision comes only every 0.7-1.0 s plus 0.2 s to answer. 4.5 m short of a red line
+    at 3.8 m/s with nothing slower than 3.6 m/s offered, the next decision may come after the car
+    has crossed (3.6 m/s * 1.2 s = 4.3 m > 4.5 - 0.5 m): stop now. With a 1 m/s path offered, drive on."""
+    fast_only = {"a": [3.6, 0.0, 0.1, 0.0, False, False], "b": [4.2, 0.0, 0.1, 0.0, False, False]}
+    questions = {
+        "vector": {"type": "choice", "instructions": "Choose a path.", "criteria": {k: None for k in fast_only}},
+        "motion": {"type": "choice", "instructions": "Stop means zero target now.", "criteria": {"drive": None, "stop": None}},
+    }
+    inter = {"control": "signal", "signal": "red", "distance_to_line_m": 4.5, "stop_completed": False, "already_entered": False}
+    state = {"speed_mps": 3.8, "on_road": True, "candidates": fast_only, "intersection": inter}
+    answers = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]
+    assert answers["motion"]["choice"] == "stop"
+    slow = {**fast_only, "c": [1.0, 0.0, 0.1, 0.0, False, False]}
+    state = {**state, "candidates": slow}
+    questions["vector"]["criteria"] = {k: None for k in slow}
+    answers = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]
+    assert answers["motion"]["choice"] == "drive" and answers["vector"]["choice"] == "c"

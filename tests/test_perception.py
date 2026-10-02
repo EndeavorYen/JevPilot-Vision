@@ -277,3 +277,65 @@ def test_a_lit_lamp_in_a_dark_housing_is_found_even_when_the_detector_misses_the
 
 
 P_CAM_NARROW = CameraModel(width=640, height=360, hfov_deg=40.0)
+
+
+
+def test_review_m5_the_narrow_camera_does_not_overrule_a_readable_front_light():
+    from PIL import Image
+
+    import jevpilot_vision.perception as P
+
+    front_px = np.full((360, 640, 3), 90, dtype=np.uint8)
+    front_px[60:68, 318:324] = (254, 63, 37)  # red, readable in the wide camera
+    narrow_px = np.full((360, 640, 3), 90, dtype=np.uint8)
+    narrow_px[120:128, 318:324] = (70, 250, 110)  # the next junction's green, far away
+    front, narrow = Image.fromarray(front_px), Image.fromarray(narrow_px)
+
+    class Fake(P.Detector):
+        def detect_or_status(self, image):
+            box = [310, 50, 332, 90] if image is front else [310, 110, 332, 150]
+            return "ready", [{"kind": "traffic_light", "conf": 0.7, "box": box}]
+
+    out = P.Perception(Fake()).front(front, narrow=narrow)
+    assert out["signal"]["state"] == "unknown" and out["signal"].get("conflict") == ["green", "red"]
+
+
+def test_review_m6_a_frame_full_of_bright_colour_is_not_searched_pixel_by_pixel():
+    import time as _time
+
+    from jevpilot_vision.perception import find_lamps
+
+    rng = np.random.default_rng(3)
+    noise = rng.integers(0, 256, size=(360, 640, 3), dtype=np.uint8)
+    t0 = _time.perf_counter()
+    find_lamps(noise, CameraModel(width=640, height=360, hfov_deg=40.0))
+    assert _time.perf_counter() - t0 < 0.05
+
+
+def test_review_l3_a_moving_car_is_still_paired_after_a_slow_cycle():
+    tracker = Tracker()
+    tracker.update([{"kind": "car", "ahead_m": 30.0, "right_m": 0.0}], t=0.0)
+    # we drove 10 m in a second towards a car that drove 4 m: it is 6 m nearer
+    later = tracker.update([{"kind": "car", "ahead_m": 24.0, "right_m": 0.0}], t=1.0)
+    assert later[0]["closing_mps"] == pytest.approx(6.0)
+
+
+
+def test_review_h1_evidence_says_when_its_frame_was_grabbed(monkeypatch):
+    import jevpilot_vision.http as http
+    import jevpilot_vision.perception as perception
+    import jevpilot_vision.vision as vision
+
+    class Encoder:
+        def infer_surround_b64(self, frames):
+            assert "_captured_ms" not in frames
+            return {"backend": "stub"}
+
+    class Fake:
+        def front(self, image, t=None, narrow=None):
+            return {"backend": "fake", "objects": [], "signal": {"state": "unknown"}}
+
+    monkeypatch.setattr(vision, "get_vision_encoder", lambda: Encoder())
+    monkeypatch.setattr(perception, "get_perception", lambda: Fake())
+    frames = {"front": _jpeg(64, 36), "right": _jpeg(32, 18), "_captured_ms": 1234.5}
+    assert http._infer_latest_jpeg(frames)["captured_ms"] == 1234.5

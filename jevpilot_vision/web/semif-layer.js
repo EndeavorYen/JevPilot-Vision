@@ -543,14 +543,59 @@
       updateSeenSignal();
       body.state = body.state || {};
       body.state.seen_signal = window.SEMIF_SEEN_SIGNAL;
+      const paths = candidatePaths(body.state.candidates);
+      if (paths) body.state.candidate_paths = paths;
     }
     return body;
   }
+
+  // The planner's own projection of each candidate, so the server sweeps the path the car will
+  // drive (it re-steers to follow its lane) rather than a constant steer. Candidates arrive under
+  // aliases; each is matched to the plan's vector by speed and steer. [t s, ahead m, right m,
+  // heading rad] in the car's frame at planning time, every 0.2 s for 3 s.
+  function candidatePaths(candidates) {
+    const plan = window.SEMIF_SIM && window.SEMIF_SIM.lastPlan;
+    if (!plan || !plan.projections || !plan.vectors || !plan.origin || !candidates) return null;
+    const { x: ox, z: oz, heading: oh } = plan.origin;
+    const sin = Math.sin(oh), cos = Math.cos(oh);
+    const keys = Object.keys(plan.vectors);
+    const out = {};
+    for (const [alias, vec] of Object.entries(candidates)) {
+      if (!Array.isArray(vec)) continue;
+      let best = null;
+      let gap = Infinity;
+      for (const key of keys) {
+        const v = plan.vectors[key];
+        const d = Math.abs(v.velocity_mps - vec[0]) + Math.abs(v.steering - vec[1]);
+        if (d < gap) {
+          gap = d;
+          best = key;
+        }
+      }
+      const points = best && gap <= 0.06 && plan.projections[best] && plan.projections[best].points;
+      if (!points) continue;
+      const path = [];
+      for (let k = 4; k < points.length && k <= 60; k += 4) {
+        const p = points[k];
+        const dx = p.x - ox, dz = p.z - oz;
+        path.push([
+          Math.round(k * 5) / 100,
+          Math.round((dx * sin - dz * cos) * 100) / 100,
+          Math.round((dx * cos + dz * sin) * 100) / 100,
+          Math.round((p.heading - oh) * 1000) / 1000,
+        ]);
+      }
+      out[alias] = path;
+    }
+    return Object.keys(out).length ? out : null;
+  }
   window.SEMIF_SHAPE_DECISION = shapeDecisionBody;
 
-  // Vision mode's signal colour for the planner (BUNDLE_PATCHES.md vision-plan): what the front
-  // camera read, kept for 2.5 s after it was last read, red when it has not been seen or the
-  // evidence is more than 1.5 s old. The server applies the same rule (jevpilot_vision/vision_mode.py).
+  // Vision mode's signal colour for the planner (BUNDLE_PATCHES.md vision-plan): what the cameras
+  // read, red when nothing was seen or the evidence is more than 1.5 s old. A red or amber reading
+  // is kept 2.5 s; a green only 0.8 s, well inside an amber phase (2 s), so a lost reading cannot
+  // carry a green into the red. The server applies the same rule (jevpilot_vision/vision_mode.py).
+  const SEEN_MEMORY_MS = { red: 2500, amber: 2500, green: 800 };
   let lastSeen = null;
   function updateSeenSignal() {
     const now = performance.now();
@@ -560,7 +605,7 @@
     const ok = fresh && p && p.backend && p.backend !== "none" && (p.status || "ready") === "ready";
     const state = ok && p.signal && p.signal.state;
     if (["red", "amber", "green"].includes(state)) lastSeen = { state, at: now };
-    window.SEMIF_SEEN_SIGNAL = ok && lastSeen && now - lastSeen.at <= 2500 ? lastSeen.state : "red";
+    window.SEMIF_SEEN_SIGNAL = ok && lastSeen && now - lastSeen.at <= SEEN_MEMORY_MS[lastSeen.state] ? lastSeen.state : "red";
   }
   window.SEMIF_UPDATE_SEEN = updateSeenSignal;
 
@@ -1175,7 +1220,7 @@
       const res = await origFetch("/v1/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frames: frames }),
+        body: JSON.stringify({ frames: frames, t_ms: tGrab }),
       });
       const data = await res.json();
       const rttMs = performance.now() - tVis;
@@ -1190,11 +1235,12 @@
       const vis = data.vision;
       const incoming = Number(data.vision_gen);
       const held = Number(window.SEMIF_VISION_GEN);
-      if (Number.isFinite(incoming) && Number.isFinite(held) && incoming < held) {
-        return;
+      if (Number.isFinite(incoming) && Number.isFinite(held) && incoming <= held) {
+        return; // older, or the same evidence handed back while the server was busy
       }
       window.SEMIF_VISION = vis;
-      window.SEMIF_VISION_AT = performance.now();
+      // Age counts from when the frames were grabbed, not from when the answer arrived.
+      window.SEMIF_VISION_AT = Number.isFinite(Number(vis.captured_ms)) ? Number(vis.captured_ms) : performance.now();
       updateSeenSignal();
       if (Number.isFinite(incoming)) window.SEMIF_VISION_GEN = incoming;
       const encode = Number(data.vision_encode_ms);

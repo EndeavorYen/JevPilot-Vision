@@ -668,6 +668,29 @@ class DecisionEngine:
             return dist
         return None
 
+    # Time from one decision's state to the next decision taking effect: 0.7-1.0 s between
+    # decisions plus about 0.2 s to answer (#18, measured in the browser).
+    DECISION_GAP_S = 1.2
+
+    @classmethod
+    def _may_cross_before_next(cls, state: Dict[str, Any], stop_m: float) -> bool:
+        """Whether the slowest forward path offered, held until the next decision, could reach the
+        line (0.5 m short of it) first. The stop is offered this far out on the coast only."""
+        candidates = state.get("candidates") if isinstance(state, dict) else None
+        speeds = []
+        for vec in (candidates or {}).values() if isinstance(candidates, dict) else []:
+            if not isinstance(vec, (list, tuple)) or len(vec) < 6 or vec[4]:
+                continue
+            try:
+                v = float(vec[0])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(v) and v > 0:
+                speeds.append(v)
+        if not speeds:
+            return True
+        return min(speeds) * cls.DECISION_GAP_S > stop_m - 0.5
+
     @staticmethod
     def _stopping_choice(candidates: Dict[str, Any], ids: List[str], dist: float, speed: float) -> Optional[str]:
         """Fastest safe candidate on a 2 m/s^2 stopping curve that allows for two 0.8 s decisions:
@@ -877,7 +900,7 @@ class DecisionEngine:
             if q_key == "motion":
                 ids = [o["id"] for o in options]
                 pick = "drive" if "drive" in ids else ids[0]
-                if stop_m is not None and stop_m <= 2.5 and "stop" in ids:
+                if stop_m is not None and "stop" in ids and (stop_m <= 2.5 or self._may_cross_before_next(state, stop_m)):
                     pick = "stop"
                 answers[q_key] = {
                     "choice": pick,
@@ -925,7 +948,8 @@ class DecisionEngine:
                         speed_f = 0.0
                     speed = speed_f
                     if collision:
-                        score_val = -1000.0
+                        # With no safe path left, brake hardest: the slowest forward one (#18).
+                        score_val = -1000.0 - (speed * 10.0 if speed >= 0 else 1000.0)
                     elif offroad > 0.1:
                         score_val = -500.0
                     elif mode == "heuristic":

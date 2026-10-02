@@ -18,7 +18,7 @@ WEB = REPO / "jevpilot_vision" / "web"
 ASSETS = WEB / "assets"
 MAIN = "main-CvLEeHjW.js"
 WORKER = "planner.worker-DFdG3q6n.js"
-WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261002j";'
+WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261002l";'
 
 # three.js classes the bundle hands the renderer on top of the ones semif-scenery.js already gets,
 # as name: minified identifier. test_kit_classes_are_the_classes_they_claim_to_be checks each one.
@@ -193,25 +193,33 @@ COAST_PATCHES = [
     ('vision-plan-worker', WORKER,
      'd=Se(this.player,this.world,[...this.world.objects.filter(e=>e.type===`building`),...this.traffic,...this.pedestrians],this.planRandom,`b${++this.planSequence}`,u,t.rule)',
      'd=Se(this.player,this.world,globalThis.SEMIF_DRIVE_MODE===`vision`?this.world.objects.filter(e=>e.type===`building`):[...this.world.objects.filter(e=>e.type===`building`),...this.traffic,...this.pedestrians],this.planRandom,`b${++this.planSequence}`,u,globalThis.SEMIF_DRIVE_MODE===`vision`?{...t.rule,color:globalThis.SEMIF_SEEN_SIGNAL??`red`}:t.rule)'),
+    # On the coast the stop is offered as far out as 1.2 s of travel + 1 m (at least 2.5 m): with a
+    # decision every 0.7-1.0 s plus 0.2 s to answer, a fixed 2.5 m window can pass between two
+    # decisions and the car rolls over a red line (#18). Old maps keep 2.5 m.
     ('vision-stop-offer', MAIN,
      'i.stop_line_ahead_m>=-.5&&i.stop_line_ahead_m<=2.5&&(i.control===`stop`&&!i.stop_completed||i.control===`signal`&&[`red`,`amber`].includes(i.signal))&&n.push(`required_stop_line_within_2_5m`)',
-     'i.stop_line_ahead_m>=(globalThis.SEMIF_DRIVE_MODE===`vision`?-3:-.5)&&i.stop_line_ahead_m<=2.5&&(i.control===`stop`&&!i.stop_completed||i.control===`signal`&&(i.signal==null&&globalThis.SEMIF_DRIVE_MODE===`vision`||[`red`,`amber`].includes(i.signal)))&&n.push(`required_stop_line_within_2_5m`)'),
+     'i.stop_line_ahead_m>=(globalThis.SEMIF_DRIVE_MODE===`vision`?-3:-.5)&&i.stop_line_ahead_m<=(String(globalThis.SEMIF_WORLD_TYPE??globalThis.SEMIF_SIM?.world?.type??``).startsWith(`coast`)?Math.max(2.5,Math.abs(e.speed_mps??0)*1.2+1):2.5)&&(i.control===`stop`&&!i.stop_completed||i.control===`signal`&&(i.signal==null&&globalThis.SEMIF_DRIVE_MODE===`vision`||[`red`,`amber`].includes(i.signal)))&&n.push(`required_stop_line_within_2_5m`)'),
     ('vision-stop-offer-worker', WORKER,
      'i.stop_line_ahead_m>=-.5&&i.stop_line_ahead_m<=2.5&&(i.control===`stop`&&!i.stop_completed||i.control===`signal`&&[`red`,`amber`].includes(i.signal))&&n.push(`required_stop_line_within_2_5m`)',
-     'i.stop_line_ahead_m>=(globalThis.SEMIF_DRIVE_MODE===`vision`?-3:-.5)&&i.stop_line_ahead_m<=2.5&&(i.control===`stop`&&!i.stop_completed||i.control===`signal`&&(i.signal==null&&globalThis.SEMIF_DRIVE_MODE===`vision`||[`red`,`amber`].includes(i.signal)))&&n.push(`required_stop_line_within_2_5m`)'),
+     'i.stop_line_ahead_m>=(globalThis.SEMIF_DRIVE_MODE===`vision`?-3:-.5)&&i.stop_line_ahead_m<=(String(globalThis.SEMIF_WORLD_TYPE??globalThis.SEMIF_SIM?.world?.type??``).startsWith(`coast`)?Math.max(2.5,Math.abs(e.speed_mps??0)*1.2+1):2.5)&&(i.control===`stop`&&!i.stop_completed||i.control===`signal`&&(i.signal==null&&globalThis.SEMIF_DRIVE_MODE===`vision`||[`red`,`amber`].includes(i.signal)))&&n.push(`required_stop_line_within_2_5m`)'),
     ('vision-recovery', MAIN,
      'Zt(r,r.steering,f,[...this.world.objects.filter(e=>e.type===`building`),...this.traffic,...this.pedestrians])',
      'Zt(r,r.steering,f,globalThis.SEMIF_DRIVE_MODE===`vision`?this.world.objects.filter(e=>e.type===`building`):[...this.world.objects.filter(e=>e.type===`building`),...this.traffic,...this.pedestrians])'),
     ('vision-mode-worker', WORKER,
      'globalThis.SEMIF_MAP=e.map;',
-     'globalThis.SEMIF_MAP=e.map;globalThis.SEMIF_DRIVE_MODE=e.driveMode;globalThis.SEMIF_SEEN_SIGNAL=e.seenSignal;'),
+     'globalThis.SEMIF_MAP=e.map;globalThis.SEMIF_DRIVE_MODE=e.driveMode;globalThis.SEMIF_SEEN_SIGNAL=e.seenSignal;globalThis.SEMIF_WORLD_TYPE=e.type;'),
     # --- coast signal lamps face their own approach only, like real hooded lamps: a front-facing
-    # disc instead of a sphere, behind a 20 cm hood, so beyond about 40 degrees off its axis (the
-    # cross street, the back) a lit lamp shows nothing (#18). The onboard camera otherwise reads
-    # the cross street's colour off its heads.
+    # disc instead of a sphere, behind a 20 cm hood, so from the cross street (about 60 degrees off
+    # its axis and more) and from behind a lit lamp shows nothing (#18). The onboard camera
+    # otherwise reads the cross street's colour off its heads.
     ("coast-signal-lamp-faces", MAIN,
      'let r=new K(new gc(.17,10,8),new Dc({color:`#394d43`,emissive:`#000000`}));r.position.set(0,4.73-n*.5,.22)',
      'let L=this.sim.world.type===`coast`,r=new K(L?new hc(.32,.32):new gc(.17,10,8),new Dc({color:`#394d43`,emissive:`#000000`}));r.position.set(0,4.73-n*.5,L?.2:.22),L&&(X(t,.03,.34,.2,-.18,4.73-n*.5,.3,`#344e47`),X(t,.03,.34,.2,.18,4.73-n*.5,.3,`#344e47`),X(t,.4,.03,.2,0,4.73-n*.5+.17,.3,`#344e47`))'),
+    # --- the planner worker's URL carries the asset version, so a cached worker never runs
+    # without the patches above
+    ("coast-worker-version", MAIN,
+     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js`",
+     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=20261002l`"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",
@@ -430,3 +438,28 @@ def test_the_page_and_the_planner_worker_load_the_same_worldgen_version():
     page = re.search(r"semif-worldgen\.js\?v=(\w+)", html).group(1)
     assert worker.startswith(f'import"/jevpilot/semif-worldgen.js?v={page}";')
     assert re.search(r"planner\.worker-DFdG3q6n\.js\?v=\w+`", main), "the worker URL is versioned"
+
+
+
+def test_on_the_coast_a_red_line_offers_the_stop_as_far_out_as_the_next_decision_could_cross_it():
+    """#18: the snapshot offers the stop only within 2.5 m of a red line. Decisions come every
+    0.7-1.0 s plus 0.2 s to answer, so at 3-4 m/s the car can pass the whole window between two
+    decisions. On the coast the stop is offered within max(2.5, 1.2 s of travel + 1 m); old maps
+    keep 2.5 m."""
+    got = _sim(
+        "const s = new Ae(42, 'coast:festival'); const pts = s.world.route.points;"
+        "const line = s.player.route.crossings[0]; const res = [];"
+        "for (const world of ['coast:festival', 'city']) {"
+        "  globalThis.SEMIF_WORLD_TYPE = world;"
+        "  const p = pts.find((q) => q.s >= line.stopS - 7.5), q = pts.find((r) => r.s >= line.stopS - 5.5);"
+        "  Object.assign(s.player, { x: p.x, z: p.z, s: p.s, heading: Math.atan2(q.x - p.x, p.z - q.z), speed: 4 });"
+        "  for (let t = 0; t < 30; t += 0.5) { s.time = t; if (s.rule(s.player, true).color === 'red') break; }"
+        "  s.lastPlan = null; const st = s.decisionState();"
+        "  res.push({ world, ahead: st.scene.intersection && st.scene.intersection.stop_line_ahead_m, reasons: st.stop_availability.reasons });"
+        "}"
+        "out(res);"
+    )
+    coast, city = got
+    assert 2.5 < coast["ahead"] < 5.8, coast
+    assert "required_stop_line_within_2_5m" in coast["reasons"], coast
+    assert "required_stop_line_within_2_5m" not in city["reasons"], city

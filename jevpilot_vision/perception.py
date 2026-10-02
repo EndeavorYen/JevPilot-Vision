@@ -126,6 +126,9 @@ def _hue_state(rgb: np.ndarray) -> np.ndarray:
     return out
 
 
+MAX_LIT_PIXELS = 4000  # a frame this full of bright colour has no lamp worth finding
+
+
 def find_lamps(image: np.ndarray, camera: "CameraModel", max_area: int = 400) -> List[Dict[str, Any]]:
     """Lit signal lamps found from pixels alone, for heads the detector did not box: a small bright
     coloured blob (red, amber, green) above the horizon whose surroundings are dark (the housing).
@@ -133,6 +136,8 @@ def find_lamps(image: np.ndarray, camera: "CameraModel", max_area: int = 400) ->
     h = int(camera.cy)
     rgb = image[:h, :, :3].astype(np.float64) / 255.0
     state = _hue_state(rgb)
+    if np.count_nonzero(state) > MAX_LIT_PIXELS:
+        return []
     value = rgb.max(axis=-1)
     seen = np.zeros(state.shape, dtype=bool)
     lamps = []
@@ -288,7 +293,8 @@ class Tracker:
                     if old["kind"] != obj["kind"]:
                         continue
                     d = math.hypot(old["ahead_m"] - obj["ahead_m"], old["right_m"] - obj["right_m"])
-                    if d <= self.gate_m and d / dt <= self.MAX_SPEED_MPS:
+                    # Within the gate plus what a car could cover in dt, and not faster than 40 m/s.
+                    if d <= self.gate_m + 12.0 * dt and d / dt <= self.MAX_SPEED_MPS:
                         pairs.append((d, i, j))
             used_i, used_j = set(), set()
             for _, i, j in sorted(pairs):
@@ -428,8 +434,14 @@ class Perception:
                 lights = [d for d in far if d["kind"] == "traffic_light"]
                 nw, nh = narrow.size
                 seen = perceive(lights, np.asarray(narrow.convert("RGB")), CameraModel(width=nw, height=nh, hfov_deg=NARROW_HFOV_DEG))["signal"]
-                if seen["state"] != "unknown" or seen.get("conflict"):
-                    out["signal"] = {**seen, "camera": "narrow"}
+                wide = out["signal"]
+                if wide["state"] == "unknown" and not wide.get("conflict"):
+                    if seen["state"] != "unknown" or seen.get("conflict"):
+                        out["signal"] = {**seen, "camera": "narrow"}
+                elif seen["state"] != "unknown" and seen["state"] != wide["state"]:
+                    # The narrow camera may be reading the next junction: two readings that
+                    # disagree give no answer.
+                    out["signal"] = {"state": "unknown", "conf": 0.0, "conflict": sorted({seen["state"], wide["state"]}), "camera": "both"}
         out["status"] = status  # loading / failed / ready: why a frame has no detections
         out["latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
         return out

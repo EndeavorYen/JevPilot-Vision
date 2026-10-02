@@ -88,15 +88,20 @@ def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
     from jevpilot_vision import perception, vision
 
     narrow = None
+    captured = None
     if isinstance(image, dict):
         narrow = image.get("narrow")
-        cameras = {name: frame for name, frame in image.items() if name != "narrow"}
+        captured = image.get("_captured_ms")
+        cameras = {name: frame for name, frame in image.items() if name not in ("narrow", "_captured_ms")}
         evidence = vision.get_vision_encoder().infer_surround_b64(cameras)
         front = image["front"]
     else:
         evidence = vision.get_vision_encoder().infer_b64(image)
         front = image
     evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow)
+    if captured is not None:
+        # The page's clock when these frames were grabbed: how old the evidence really is (#18).
+        evidence["captured_ms"] = captured
     return evidence
 
 
@@ -129,6 +134,9 @@ async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
         image: Any = _surround_frames(payload)
         if image is None:
             return {"error": "frames need a front camera and a JPEG (data URL or base64) per camera"}
+        t_ms = payload.get("t_ms")
+        if isinstance(t_ms, (int, float)) and not isinstance(t_ms, bool):
+            image["_captured_ms"] = float(t_ms)
     else:
         image = payload.get("image") or payload.get("image_base64")
         if not isinstance(image, str) or len(image) < 64:

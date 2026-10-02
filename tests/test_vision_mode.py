@@ -69,12 +69,12 @@ def test_collisions_are_swept_against_perceived_objects_not_the_bundles_column()
     candidates = {
         "fast": [12.0, 0.0, 0.1, 0.0, False, False],  # the bundle saw nothing in the way
         "slow": [1.0, 0.0, 0.3, 0.0, False, False],
-        "ghost": [1.0, 0.0, 0.1, 0.0, True, False],  # the bundle's own (true) collision flag
+        "wall": [1.0, 0.0, 0.1, 0.0, True, False],  # the bundle's flag: in Vision mode it sees buildings only
     }
     out = vision_mode.prepare(_payload(_perception([car], signal="green"), candidates=candidates, line=200.0, speed=5.0))["state"]["candidates"]
     assert out["fast"][4] is True, "speeding up into a parked car 11 m ahead is a collision"
     assert out["slow"][4] is False
-    assert out["ghost"][4] is False, "the true collision column is not used"
+    assert out["wall"][4] is True, "a building in the way (map data) still counts"
     ped_left = {"kind": "pedestrian", "ahead_m": 7.0, "right_m": -4.0, "closing_mps": 12.0}
     out = vision_mode.prepare(_payload(_perception([ped_left], signal="green"), candidates=candidates, line=200.0, speed=5.0))["state"]["candidates"]
     assert out["fast"][4] is False, "a person on the pavement 4 m to the left is not in the way"
@@ -123,3 +123,69 @@ def test_an_object_of_unknown_speed_is_treated_as_standing_still():
     cands = {"fast": [9.0, 0.0, 0.1, 0.0, False, False], "crawl": [0.5, 0.0, 0.2, 0.0, False, False]}
     out = vision_mode.prepare(_payload(_perception([car], signal="green"), candidates=cands, line=200.0, speed=9.0))["state"]["candidates"]
     assert out["fast"][4] is True and out["crawl"][4] is False
+
+
+
+def test_review_h3_without_perception_only_a_crawl_or_a_stop_is_safe():
+    cands = {"cruise": [12.0, 0.0, 0.1, 0.0, False, False], "crawl": [0.8, 0.0, 0.2, 0.0, False, False]}
+    out = vision_mode.prepare(_payload(_perception(signal="green", backend="none"), candidates=cands, line=200.0))["state"]["candidates"]
+    assert out["cruise"][4] is True and out["crawl"][4] is False
+
+
+def test_review_h4_the_sweep_follows_the_planners_own_path_when_it_is_sent():
+    """The planner re-steers to follow the lane; a constant steer of 0.1 would bend 4 m clear of a
+    car parked 20 m ahead that the real (lane-following, straight) path hits."""
+    car = {"kind": "car", "ahead_m": 20.0, "right_m": 0.0, "closing_mps": 10.0}
+    cands = {"lane": [10.0, 0.1, 0.1, 0.0, False, False]}
+    straight = [[round(0.2 * k, 1), round(10.0 * 0.2 * k, 2), 0.0, 0.0] for k in range(1, 16)]
+    payload = _payload(_perception([car], signal="green"), candidates=cands, line=200.0, speed=10.0)
+    payload["state"]["candidate_paths"] = {"lane": straight}
+    assert vision_mode.prepare(payload)["state"]["candidates"]["lane"][4] is True
+    payload["state"].pop("candidate_paths")
+    assert vision_mode.prepare(payload)["state"]["candidates"]["lane"][4] is False, "the fallback model is the old constant steer"
+
+
+def test_review_h5_objects_are_moved_by_the_age_of_the_evidence():
+    """A parked car 18 m ahead in a frame taken 1 s ago at 10 m/s is 8 m ahead now."""
+    car = {"kind": "car", "ahead_m": 18.0, "right_m": 0.0, "closing_mps": 10.0}
+    cands = {"slow": [2.0, 0.0, 0.1, 0.0, False, False]}
+    fresh = vision_mode.prepare(_payload(_perception([car], signal="green"), candidates=cands, line=200.0, speed=10.0, age_ms=0))
+    old = vision_mode.prepare(_payload(_perception([car], signal="green"), candidates=cands, line=200.0, speed=10.0, age_ms=1000))
+    assert fresh["state"]["candidates"]["slow"][4] is False
+    assert old["state"]["candidates"]["slow"][4] is True
+
+
+def test_review_h6_no_signal_is_claimed_where_there_is_no_light():
+    payload = _payload(_perception(signal="unknown"))
+    payload["state"]["intersection"] = None
+    state = vision_mode.prepare(payload)["state"]
+    assert state["vision"]["signal"] == "unknown", "open road: no assumed red for the arbiter's directive"
+    stop = _payload(_perception(signal="unknown"))
+    stop["state"]["intersection"]["control"] = "stop"
+    assert vision_mode.prepare(stop)["state"]["vision"]["signal"] == "unknown"
+
+
+def test_review_m4_reversing_into_what_the_front_camera_cannot_see_counts_as_a_collision():
+    cands = {"back": [-1.5, 0.0, 0.1, 0.0, False, False], "crawl": [0.5, 0.0, 0.1, 0.0, False, False]}
+    out = vision_mode.prepare(_payload(_perception(signal="green"), candidates=cands, line=200.0, speed=0.0))["state"]["candidates"]
+    assert out["back"][4] is True and out["crawl"][4] is False
+
+
+def test_review_l4_a_malformed_object_is_ignored_not_a_crash():
+    bad = {"kind": "car", "ahead_m": "near", "right_m": 0.0, "closing_mps": "fast"}
+    good = {"kind": "car", "ahead_m": 30.0, "right_m": 0.0, "closing_mps": "?"}
+    out = vision_mode.prepare(_payload(_perception([bad, good], signal="green"), line=200.0))
+    assert out["state"]["perceived_objects"][0]["ahead_m"] == 30.0
+
+
+def test_a_car_in_our_lane_is_never_assumed_to_drive_back_at_us():
+    """#18 regression: ranging noise put a stopped car's closing speed above our own, which reads as
+    the car reversing toward us, and flagged even the slowest candidate. Traffic ahead in our lane
+    moves away or stands; only a car in another lane may come toward us."""
+    noisy = {"kind": "car", "ahead_m": 25.0, "right_m": 0.0, "closing_mps": 16.0}
+    cands = {"slow": [2.0, 0.0, 0.1, 0.0, False, False]}
+    out = vision_mode.prepare(_payload(_perception([noisy], signal="green"), candidates=cands, line=200.0, speed=10.0, age_ms=0))
+    assert out["state"]["candidates"]["slow"][4] is False
+    oncoming = {"kind": "car", "ahead_m": 25.0, "right_m": -2.0, "closing_mps": 20.0}
+    out = vision_mode.prepare(_payload(_perception([oncoming], signal="green"), candidates=cands, line=200.0, speed=10.0, age_ms=0))
+    assert out["state"]["candidates"]["slow"][4] is True, "a car over the centre line still comes toward us"
