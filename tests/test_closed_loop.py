@@ -61,15 +61,33 @@ def test_the_summary_reports_counts_and_rates_per_mode_never_clean():
     assert summary[("held_out", "privileged", 150, 0)]["runs_with_red_light"] == 0
 
 
-def test_failed_runs_are_counted_apart_not_as_good_drives():
+def test_runs_that_could_not_be_driven_are_counted_apart_and_retried():
+    """A setup failure (the tab, the page, the browser) says nothing about driving: it is listed,
+    left out of the rates, and a later run of the same seed replaces it."""
     rows = [_row("vision", 1, "festival"), _row("vision", 2, "festival", ok=False, error="tab crashed")]
     v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
     assert v["runs"] == 1 and v["failed_runs"] == 1
     assert v["failures"] == {"tab crashed": 1}
-    # Review: a run retried after a failure counts once, by its latest result.
     retried = rows + [_row("vision", 2, "festival")]
     v = cl.summarize(retried)[("held_out", "vision", 150, 0)]
     assert v["runs"] == 2 and v["failed_runs"] == 0
+
+
+def test_review2_a_disengagement_or_a_stall_is_a_result_never_retried_away():
+    """Review #28: the autopilot giving up (three failed or expired decisions) or a car that never
+    moves is what the drive did. It counts in its own k/n, and resuming does not drive it again."""
+    gave_up = _row("vision", 2, "festival", disengaged=True, distance_m=300.0)
+    parked = _row("vision", 3, "festival", stalled=True, distance_m=12.0)
+    rows = [_row("vision", 1, "festival"), gave_up, parked]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    assert v["runs"] == 3 and v["runs_disengaged"] == 1 and v["runs_stalled"] == 1
+    text = cl.report(cl.summarize(rows))
+    assert "autopilot gave up 1/3 runs" in text and "car did not move 1/3 runs" in text
+    plan = cl.plan_runs([1, 2, 3], ["festival"], ["vision"], seconds=150, lag_ms=0)
+    assert cl.pending(plan, [dict(r, set="held_out") for r in rows]) == []
+    # A later lucky run of the same seed does not replace the disengagement.
+    v = cl.summarize(rows + [_row("vision", 2, "festival")])[("held_out", "vision", 150, 0)]
+    assert v["runs_disengaged"] == 1
 
 
 def test_a_results_file_is_resumed_not_rerun(tmp_path):
@@ -100,19 +118,24 @@ def test_review_runs_are_pooled_only_with_their_own_set_mode_duration_and_lag():
     assert "held_out · vision · 150 s · lag 400 ms" in text
 
 
-def test_review_a_drive_that_did_not_happen_is_not_a_good_run():
-    """The autopilot never engaged, quit after failed requests, the tab was hidden (the sim does not
-    step), or the page drove another mode, route or lag than asked: not a run to count."""
+def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
+    """The tab was hidden (the sim does not step), the sim ran too little, or the page drove another
+    mode, route or lag than asked: a setup failure, not a result."""
     run = {"seed": 7, "route": "harbour", "mode": "vision", "seconds": 150, "lag_ms": 400}
     good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 400, "autopilot": True, "crash": False,
-            "sim_time_s": 150, "hidden": False}
+            "sim_time_s": 150, "hidden": False, "distance_m": 1800}
     assert cl.validate(run, good) is None
     assert cl.validate(run, dict(good, crash=True, autopilot=False, sim_time_s=80)) is None, "a crash is a result"
-    for change, words in [({"autopilot": False}, "autopilot"), ({"sim_time_s": 20}, "sim"), ({"hidden": True}, "hidden"),
+    assert cl.validate(run, dict(good, autopilot=False)) is None, "giving up is a result too"
+    for change, words in [({"sim_time_s": 20}, "sim"), ({"hidden": True}, "hidden"),
                           ({"mode_seen": "privileged"}, "mode"), ({"world_seen": "coast:festival"}, "route"),
                           ({"lag_seen": 0}, "lag")]:
         reason = cl.validate(run, dict(good, **change))
         assert reason and words in reason, (change, reason)
+    assert cl.outcome(run, good) == {"disengaged": False, "stalled": False}
+    assert cl.outcome(run, dict(good, autopilot=False)) == {"disengaged": True, "stalled": False}
+    assert cl.outcome(run, dict(good, distance_m=40)) == {"disengaged": False, "stalled": True}
+    assert cl.outcome(run, dict(good, crash=True, autopilot=False, distance_m=40)) == {"disengaged": False, "stalled": False}
 
 
 def test_review_a_held_out_seed_moved_to_debugged_no_longer_reports_as_held_out(tmp_path):
@@ -129,7 +152,15 @@ def test_review_the_seed_rule_is_checked_where_seeds_are_used(tmp_path):
         cl.load_seeds(bad)
 
 
-def test_review_the_cli_refuses_routes_modes_and_lags_the_page_would_not_honour():
-    for argv in (["--routes", "harbor"], ["--modes", "heuristic2"], ["--lag-ms", "1500"], ["--lag-ms", "-1"]):
+def test_review_the_cli_refuses_routes_modes_lags_and_durations_the_page_would_not_honour(tmp_path, monkeypatch):
+    # Never a browser from a unit test: any attempt to drive fails loudly instead.
+    monkeypatch.setattr(cl, "_cdp", lambda *a, **k: (_ for _ in ()).throw(AssertionError("tried to drive")))
+    for argv in (["--routes", "harbor"], ["--modes", "heuristic2"], ["--lag-ms", "1500"], ["--lag-ms", "-1"],
+                 ["--seconds", "0"], ["--seconds", "10"]):
         with pytest.raises(SystemExit):
-            cl.main(argv + ["--out", str(REPO / "x.jsonl")])
+            cl.main(argv + ["--out", str(tmp_path / "runs.jsonl")])
+
+
+def test_review2_rows_without_a_seed_set_are_not_reported(tmp_path):
+    kept, dropped = cl.current_rows([{"mode": "vision", "seed": 1, "ok": True}], cl.load_seeds())
+    assert kept == [] and len(dropped) == 1
