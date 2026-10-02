@@ -2,6 +2,12 @@
   const params = new URLSearchParams(location.search);
   const rawParam = params.get("raw") === "1" || params.get("rawMode") === "1";
   window.SEMIF_RAW_MODE = window.SEMIF_RAW_MODE || rawParam;
+  // Driving mode (#18): vision decides from the cameras and the map only; privileged (the default)
+  // and heuristic are the references it is tuned against. The planner patches read the global.
+  const modeParam = params.get("mode");
+  window.SEMIF_DRIVE_MODE = ["vision", "privileged", "heuristic"].includes(modeParam)
+    ? modeParam
+    : window.SEMIF_DRIVE_MODE || "privileged";
   const seedParam = params.get("seed");
   if (seedParam && Number.isFinite(Number(seedParam))) {
     window.SEMIF_SEED = Number(seedParam);
@@ -510,31 +516,111 @@
     }
   }
 
+  // What every decision request carries besides the bundle's own state.
+  function shapeDecisionBody(body) {
+    body.raw_mode = !!window.SEMIF_RAW_MODE;
+    if (window.SEMIF_SIM && window.SEMIF_SIM.world) {
+      body.state = body.state || {};
+      body.state.seed = window.SEMIF_SIM.world.seed;
+      body.state.raw_mode = !!window.SEMIF_RAW_MODE;
+    }
+    const sim = window.SEMIF_SIM;
+    const laneOffset =
+      sim &&
+      ((sim.lastDecisionState && sim.lastDecisionState.lane && sim.lastDecisionState.lane.offset_m) ??
+        (sim.lastPlan && sim.lastPlan.lane && sim.lastPlan.lane.offset_m));
+    if (typeof laneOffset === "number" && Number.isFinite(laneOffset)) {
+      body.state = body.state || {};
+      body.state.lateral_offset_m = laneOffset;
+    }
+    if (window.SEMIF_VISION) {
+      body.state = body.state || {};
+      body.state.vision = window.SEMIF_VISION;
+      if (Number.isFinite(window.SEMIF_VISION_AT)) body.state.vision_age_ms = Math.round(performance.now() - window.SEMIF_VISION_AT);
+    }
+    if (window.SEMIF_DRIVE_MODE === "vision") {
+      body.drive_mode = "vision";
+      updateSeenSignal();
+      body.state = body.state || {};
+      body.state.seen_signal = window.SEMIF_SEEN_SENT || null;
+      const paths = candidatePaths(body.state.candidates);
+      if (paths) body.state.candidate_paths = paths;
+    }
+    return body;
+  }
+
+  // The planner's own projection of each candidate, so the server sweeps the path the car will
+  // drive (it re-steers to follow its lane) rather than a constant steer. Candidates arrive under
+  // aliases; each is matched to the plan's vector by speed and steer. [t s, ahead m, right m,
+  // heading rad] in the car's frame at planning time, every 0.2 s for 3 s.
+  function candidatePaths(candidates) {
+    const plan = window.SEMIF_SIM && window.SEMIF_SIM.lastPlan;
+    if (!plan || !plan.projections || !plan.vectors || !plan.origin || !candidates) return null;
+    const { x: ox, z: oz, heading: oh } = plan.origin;
+    const sin = Math.sin(oh), cos = Math.cos(oh);
+    const keys = Object.keys(plan.vectors);
+    const out = {};
+    for (const [alias, vec] of Object.entries(candidates)) {
+      if (!Array.isArray(vec)) continue;
+      let best = null;
+      let gap = Infinity;
+      for (const key of keys) {
+        const v = plan.vectors[key];
+        const d = Math.abs(v.velocity_mps - vec[0]) + Math.abs(v.steering - vec[1]);
+        if (d < gap) {
+          gap = d;
+          best = key;
+        }
+      }
+      const points = best && gap <= 0.06 && plan.projections[best] && plan.projections[best].points;
+      if (!points) continue;
+      const path = [];
+      for (let k = 4; k < points.length && k <= 60; k += 4) {
+        const p = points[k];
+        const dx = p.x - ox, dz = p.z - oz;
+        path.push([
+          Math.round(k * 5) / 100,
+          Math.round((dx * sin - dz * cos) * 100) / 100,
+          Math.round((dx * cos + dz * sin) * 100) / 100,
+          Math.round((p.heading - oh) * 1000) / 1000,
+        ]);
+      }
+      out[alias] = path;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  window.SEMIF_SHAPE_DECISION = shapeDecisionBody;
+
+  // Vision mode's signal colour: what the cameras read, counted from when the frame was taken. A
+  // red or amber reading is kept 2.5 s; a green only 0.8 s, so with a decision taking effect up to
+  // 1.2 s later a lost reading cannot carry a green past an amber phase (2 s). Evidence more than
+  // 1.5 s old, or from the future (another page's clock), says nothing.
+  // SEMIF_SEEN_SENT goes to the server: the reading, or null when there is none.
+  // SEMIF_SEEN_SIGNAL goes to the planner (BUNDLE_PATCHES.md vision-plan): the same, red when null;
+  // the planner applies it only at a signalled line, as the server does (jevpilot_vision/vision_mode.py).
+  const SEEN_MEMORY_MS = { red: 2500, amber: 2500, green: 800 };
+  let lastSeen = null;
+  function updateSeenSignal() {
+    const now = performance.now();
+    const vis = window.SEMIF_VISION;
+    const p = vis && vis.perception;
+    const taken = window.SEMIF_VISION_AT;
+    const fresh = Number.isFinite(taken) && now >= taken && now - taken <= 1500;
+    const ok = fresh && p && p.backend && p.backend !== "none" && (p.status || "ready") === "ready";
+    const state = ok && p.signal && p.signal.state;
+    if (["red", "amber", "green"].includes(state) && !(lastSeen && lastSeen.at > taken)) lastSeen = { state, at: taken };
+    const held = ok && lastSeen && now >= lastSeen.at && now - lastSeen.at <= SEEN_MEMORY_MS[lastSeen.state] ? lastSeen.state : null;
+    window.SEMIF_SEEN_SENT = held;
+    window.SEMIF_SEEN_SIGNAL = held || "red";
+  }
+  window.SEMIF_UPDATE_SEEN = updateSeenSignal;
+
   const origFetch = window.fetch.bind(window);
   window.fetch = function (url, opts) {
     const href = typeof url === "string" ? url : url && url.url;
     if (href && href.indexOf("/classifier") !== -1 && opts && typeof opts.body === "string") {
       try {
-        const body = JSON.parse(opts.body);
-        body.raw_mode = !!window.SEMIF_RAW_MODE;
-        if (window.SEMIF_SIM && window.SEMIF_SIM.world) {
-          body.state = body.state || {};
-          body.state.seed = window.SEMIF_SIM.world.seed;
-          body.state.raw_mode = !!window.SEMIF_RAW_MODE;
-        }
-        const sim = window.SEMIF_SIM;
-        const laneOffset =
-          sim &&
-          ((sim.lastDecisionState && sim.lastDecisionState.lane && sim.lastDecisionState.lane.offset_m) ??
-            (sim.lastPlan && sim.lastPlan.lane && sim.lastPlan.lane.offset_m));
-        if (typeof laneOffset === "number" && Number.isFinite(laneOffset)) {
-          body.state = body.state || {};
-          body.state.lateral_offset_m = laneOffset;
-        }
-        if (window.SEMIF_VISION) {
-          body.state = body.state || {};
-          body.state.vision = window.SEMIF_VISION;
-        }
+        const body = shapeDecisionBody(JSON.parse(opts.body));
         opts = Object.assign({}, opts, { body: JSON.stringify(body) });
       } catch (_err) {
         /* leave request unchanged */
@@ -902,6 +988,10 @@
   // Four onboard cameras, about 100° horizontal each. Yaw turns clockwise from forward.
   const ONBOARD_HFOV = 100;
   const ONBOARD_VFOV = 2 * Math.atan(Math.tan((ONBOARD_HFOV * Math.PI) / 360) / (PIP_W / PIP_H)) * (180 / Math.PI);
+  // Vision mode adds a narrow forward camera, as production cars carry, for lights the wide one
+  // sees as a few pixels (jevpilot_vision/perception.py NARROW_HFOV_DEG).
+  const NARROW_HFOV = 40;
+  const NARROW_VFOV = 2 * Math.atan(Math.tan((NARROW_HFOV * Math.PI) / 360) / (FRONT_W / FRONT_H)) * (180 / Math.PI);
   const SURROUND_SIDES = [
     ["right", Math.PI / 2],
     ["rear", Math.PI],
@@ -909,11 +999,11 @@
   ];
   const surroundCanvases = {};
 
-  function surroundCanvas(name) {
+  function surroundCanvas(name, w = PIP_W, h = PIP_H) {
     if (!surroundCanvases[name]) {
       const node = document.createElement("canvas");
-      node.width = PIP_W;
-      node.height = PIP_H;
+      node.width = w;
+      node.height = h;
       surroundCanvases[name] = node;
     }
     return surroundCanvases[name];
@@ -923,7 +1013,7 @@
     return renderView(world, 0, pipCanvas, FRONT_W, FRONT_H);
   }
 
-  function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H) {
+  function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H, vfov = ONBOARD_VFOV) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
     const scene = world && world.scene;
@@ -932,7 +1022,7 @@
     const mount = onboardMount(player, yaw);
     if (!world._onboardCam) world._onboardCam = world.camera.clone();
     const cam = world._onboardCam;
-    cam.fov = ONBOARD_VFOV;
+    cam.fov = vfov;
     cam.aspect = w / h;
     cam.position.set(mount.x, mount.y, mount.z);
     cam.lookAt(mount.lookX, mount.lookY, mount.lookZ);
@@ -1077,6 +1167,7 @@
       /* The onboard view must not kill the drive loop */
     }
     if (painted) visionTick(true);
+    if (window.SEMIF_DRIVE_MODE === "vision") updateSeenSignal();
     requestAnimationFrame(tick);
   }
 
@@ -1099,6 +1190,11 @@
       const canvas = surroundCanvas(name);
       if (!renderView(world, yaw, canvas)) return null;
       frames[name] = canvas.toDataURL("image/jpeg", 0.55);
+    }
+    if (window.SEMIF_DRIVE_MODE === "vision") {
+      const narrow = surroundCanvas("narrow", FRONT_W, FRONT_H);
+      if (!renderView(world, 0, narrow, FRONT_W, FRONT_H, NARROW_VFOV)) return null;
+      frames.narrow = narrow.toDataURL("image/jpeg", FRONT_JPEG);
     }
     return frames;
   }
@@ -1130,7 +1226,7 @@
       const res = await origFetch("/v1/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frames: frames }),
+        body: JSON.stringify({ frames: frames, t_ms: tGrab }),
       });
       const data = await res.json();
       const rttMs = performance.now() - tVis;
@@ -1145,10 +1241,13 @@
       const vis = data.vision;
       const incoming = Number(data.vision_gen);
       const held = Number(window.SEMIF_VISION_GEN);
-      if (Number.isFinite(incoming) && Number.isFinite(held) && incoming < held) {
-        return;
+      if (Number.isFinite(incoming) && Number.isFinite(held) && incoming <= held) {
+        return; // older, or the same evidence handed back while the server was busy
       }
       window.SEMIF_VISION = vis;
+      // Age counts from when the frames were grabbed, not from when the answer arrived.
+      window.SEMIF_VISION_AT = Number.isFinite(Number(vis.captured_ms)) ? Number(vis.captured_ms) : performance.now();
+      updateSeenSignal();
       if (Number.isFinite(incoming)) window.SEMIF_VISION_GEN = incoming;
       const encode = Number(data.vision_encode_ms);
       if (telemetry && Number.isFinite(encode)) {

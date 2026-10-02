@@ -42,6 +42,8 @@ MAX_RANGE_M = 80.0
 # The onboard camera (jevpilot_vision/web/semif-layer.js: ONBOARD_HFOV, onboardMount).
 ONBOARD_HFOV_DEG = 100.0
 ONBOARD_HEIGHT_M = 1.45
+# The narrow forward camera (semif-layer.js NARROW_HFOV), for lights too far for the wide one.
+NARROW_HFOV_DEG = 40.0
 
 # r50: on Solmare Coast frames (640x360) it finds 94% of cars within 40 m against r18's 45%, ~45 ms
 # on an RTX 5080; set SEMIF_DETECTOR to change it.
@@ -108,6 +110,60 @@ def classify_light(crop: np.ndarray) -> str:
     }
     state, n = max(counts.items(), key=lambda kv: kv[1])
     return state if n >= 2 else "unknown"
+
+
+def _hue_state(rgb: np.ndarray) -> np.ndarray:
+    """Per pixel: 0 none, 1 red, 2 amber, 3 green, for bright, coloured pixels (lamp candidates)."""
+    mx, mn = rgb.max(axis=-1), rgb.min(axis=-1)
+    span = np.maximum(mx - mn, 1e-6)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    hue = np.where(mx == r, ((g - b) / span) % 6.0, np.where(mx == g, (b - r) / span + 2.0, (r - g) / span + 4.0)) * 60.0
+    lit = (mx > 0.75) & ((mx - mn) / np.maximum(mx, 1e-6) > 0.18)
+    out = np.zeros(mx.shape, dtype=np.int8)
+    out[lit & ((hue < 18) | (hue > 340))] = 1
+    out[lit & (hue >= 25) & (hue <= 62)] = 2
+    out[lit & (hue >= 85) & (hue <= 165)] = 3
+    return out
+
+
+MAX_LIT_PIXELS = 4000  # a frame this full of bright colour has no lamp worth finding
+
+
+def find_lamps(image: np.ndarray, camera: "CameraModel", max_area: int = 400) -> List[Dict[str, Any]]:
+    """Lit signal lamps found from pixels alone, for heads the detector did not box: a small bright
+    coloured blob (red, amber, green) above the horizon whose surroundings are dark (the housing).
+    Sky is blue and fails the colour test; a sunlit warm slope has nothing dark around it."""
+    h = int(camera.cy)
+    rgb = image[:h, :, :3].astype(np.float64) / 255.0
+    state = _hue_state(rgb)
+    if np.count_nonzero(state) > MAX_LIT_PIXELS:
+        return []
+    value = rgb.max(axis=-1)
+    seen = np.zeros(state.shape, dtype=bool)
+    lamps = []
+    for y0, x0 in zip(*np.nonzero(state)):
+        if seen[y0, x0]:
+            continue
+        kind = state[y0, x0]
+        stack, pixels = [(y0, x0)], []
+        seen[y0, x0] = True
+        while stack and len(pixels) <= max_area:
+            y, x = stack.pop()
+            pixels.append((y, x))
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < state.shape[0] and 0 <= nx < state.shape[1] and not seen[ny, nx] and state[ny, nx] == kind:
+                    seen[ny, nx] = True
+                    stack.append((ny, nx))
+        if not (2 <= len(pixels) <= max_area):
+            continue
+        ys, xs = [p[0] for p in pixels], [p[1] for p in pixels]
+        bx0, bx1, by0, by1 = min(xs), max(xs) + 1, min(ys), max(ys) + 1
+        bw, bh = bx1 - bx0, by1 - by0
+        ring = value[max(0, by0 - 2 * bh) : min(h, by1 + 2 * bh), max(0, bx0 - bw) : min(state.shape[1], bx1 + bw)]
+        if ring.size and float(np.median(ring)) < 0.45:
+            lamps.append({"state": {1: "red", 2: "amber", 3: "green"}[int(kind)], "box": [float(bx0), float(by0), float(bx1), float(by1)], "area": len(pixels)})
+    return lamps
 
 
 def decode_detections(
@@ -192,12 +248,19 @@ def perceive(
         state = classify_light(crop)
         if state != "unknown":
             readable.append(((x1 - x0) * (y1 - y0) * (1.0 - 0.5 * off), state, det))
+    if not readable:
+        # No boxed head was readable: look for lit lamps in dark housings directly.
+        for lamp in find_lamps(image, camera):
+            x0, y0, x1, y1 = lamp["box"]
+            off = abs((x0 + x1) / 2.0 - camera.cx) / (0.35 * camera.width)
+            if off <= 1.0:
+                readable.append((lamp["area"] * (1.0 - 0.5 * off), lamp["state"], {"conf": 0.5, "box": lamp["box"], "source": "lamp"}))
     if readable:
         readable.sort(key=lambda r: -r[0])
         states = {state for _, state, _ in readable}
         if len(states) == 1:
             _, state, det = readable[0]
-            signal = {"state": state, "conf": round(float(det["conf"]), 3), "box": [round(v, 1) for v in det["box"]]}
+            signal = {"state": state, "conf": round(float(det["conf"]), 3), "box": [round(v, 1) for v in det["box"]], "source": det.get("source", "detector")}
         else:
             signal = {"state": "unknown", "conf": 0.0, "conflict": sorted(states)}
     return {"backend": backend, "objects": objects, "signal": signal}
@@ -207,11 +270,12 @@ class Tracker:
     """Matches each object to the same kind nearby in the previous frame, for a closing speed.
 
     Pairs are one to one, nearest first. A pair that would mean more than 40 m/s is two different
-    objects. After a gap of more than half a second, or if time runs backwards (a reload), nothing
-    is matched.
+    objects. After a gap of more than 1.5 s (one perception cycle can take most of a second), or if
+    time runs backwards (a reload), nothing is matched. An unmatched object's closing speed is
+    None: unknown, not zero (zero would mean it drives away at our own speed).
     """
 
-    MAX_GAP_S = 0.5
+    MAX_GAP_S = 1.5
     MAX_SPEED_MPS = 40.0
 
     def __init__(self, gate_m: float = 3.0) -> None:
@@ -221,7 +285,7 @@ class Tracker:
 
     def update(self, objects: List[Dict[str, Any]], t: float) -> List[Dict[str, Any]]:
         dt = None if self.prev_t is None else t - self.prev_t
-        closing = [0.0] * len(objects)
+        closing: List[Optional[float]] = [None] * len(objects)
         if dt is not None and 0 < dt <= self.MAX_GAP_S:
             pairs = []
             for i, obj in enumerate(objects):
@@ -229,7 +293,8 @@ class Tracker:
                     if old["kind"] != obj["kind"]:
                         continue
                     d = math.hypot(old["ahead_m"] - obj["ahead_m"], old["right_m"] - obj["right_m"])
-                    if d <= self.gate_m and d / dt <= self.MAX_SPEED_MPS:
+                    # Within the gate plus what a car could cover in dt, and not faster than 40 m/s.
+                    if d <= self.gate_m + 12.0 * dt and d / dt <= self.MAX_SPEED_MPS:
                         pairs.append((d, i, j))
             used_i, used_j = set(), set()
             for _, i, j in sorted(pairs):
@@ -238,7 +303,7 @@ class Tracker:
                 used_i.add(i)
                 used_j.add(j)
                 closing[i] = (self.prev[j]["ahead_m"] - objects[i]["ahead_m"]) / dt
-        out = [{**obj, "closing_mps": round(c, 2)} for obj, c in zip(objects, closing)]
+        out = [{**obj, "closing_mps": None if c is None else round(c, 2)} for obj, c in zip(objects, closing)]
         self.prev, self.prev_t = out, t
         return out
 
@@ -341,6 +406,29 @@ class Detector:
         )
 
 
+# The narrow camera's reading counts only from a head near enough to govern the coming stop line.
+# Coast junctions are at least 100 m apart, and the next junction's near-side head stands about
+# 101 m past this junction's line; this junction's own heads are within 75 m while the car is up
+# to about 60 m out (closer in, the wide camera reads them). Range comes from size, as drawn
+# (semif-scenery.js restyleSignals): a boxed head with its backplate is 2.05 m tall, a lamp found
+# from pixels 0.368 m. A one-row error in a 3-4 px lamp is about 25%, inside the 75-101 m gap.
+NARROW_MAX_RANGE_M = 75.0
+HEAD_HEIGHT_M = {"detector": 2.05, "lamp": 0.368}
+
+
+def _within_narrow_range(signal: Dict[str, Any], camera: CameraModel) -> Dict[str, Any]:
+    box = signal.get("box")
+    if signal.get("state") == "unknown" or not box:
+        return signal
+    tall = float(box[3]) - float(box[1])
+    if tall <= 0:
+        return {"state": "unknown", "conf": 0.0}
+    range_m = camera.fx * HEAD_HEIGHT_M.get(signal.get("source", "detector"), HEAD_HEIGHT_M["detector"]) / tall
+    if range_m > NARROW_MAX_RANGE_M:
+        return {"state": "unknown", "conf": 0.0}
+    return {**signal, "range_m": round(range_m, 1)}
+
+
 class Perception:
     """The detector and the tracker behind /v1/vision's `perception` field."""
 
@@ -348,7 +436,9 @@ class Perception:
         self.detector = detector or Detector()
         self.tracker = Tracker()
 
-    def front(self, image: Any, t: Optional[float] = None) -> Dict[str, Any]:
+    def front(self, image: Any, t: Optional[float] = None, narrow: Any = None) -> Dict[str, Any]:
+        """Objects and the light from the wide front camera; with `narrow`, the light comes from the
+        narrow camera whenever it can read one (2.5 times the magnification)."""
         t0 = time.perf_counter()
         width, height = image.size
         status, detections = self.detector.detect_or_status(image)
@@ -360,6 +450,23 @@ class Perception:
             tracker=self.tracker,
             t=t,
         )
+        out["signal"]["camera"] = "front"
+        if narrow is not None and detections is not None:
+            _, far = self.detector.detect_or_status(narrow)
+            if far is not None:
+                lights = [d for d in far if d["kind"] == "traffic_light"]
+                nw, nh = narrow.size
+                narrow_cam = CameraModel(width=nw, height=nh, hfov_deg=NARROW_HFOV_DEG)
+                seen = perceive(lights, np.asarray(narrow.convert("RGB")), narrow_cam)["signal"]
+                seen = _within_narrow_range(seen, narrow_cam)
+                wide = out["signal"]
+                if wide["state"] == "unknown" and not wide.get("conflict"):
+                    if seen["state"] != "unknown" or seen.get("conflict"):
+                        out["signal"] = {**seen, "camera": "narrow"}
+                elif seen["state"] != "unknown" and seen["state"] != wide["state"]:
+                    # The narrow camera may be reading the next junction: two readings that
+                    # disagree give no answer.
+                    out["signal"] = {"state": "unknown", "conf": 0.0, "conflict": sorted({seen["state"], wide["state"]}), "camera": "both"}
         out["status"] = status  # loading / failed / ready: why a frame has no detections
         out["latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
         return out

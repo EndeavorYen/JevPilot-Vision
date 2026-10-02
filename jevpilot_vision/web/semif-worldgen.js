@@ -212,6 +212,11 @@
       for (const { from, heading } of approaches(n, edges)) {
         const p = along(along(n, heading, -9), heading + Math.PI / 2, 6.9);
         objects.push({ id: `${n.control}-${n.id}-${from}`, type: n.control === "stop" ? "stop_sign" : "traffic_light", x: p.x, z: p.z, nodeId: n.id, approach: heading, height: n.control === "stop" ? 2.8 : 4.8 });
+        if (n.control !== "signal") continue;
+        // A far-side head across the junction on the right: from the stop line the near head is
+        // overhead, out of the onboard camera's view, and this one is about 20 m ahead (#18).
+        const q = along(along(n, heading, 9), heading + Math.PI / 2, 6.9);
+        objects.push({ id: `${n.control}-far-${n.id}-${from}`, type: "traffic_light", x: q.x, z: q.z, nodeId: n.id, approach: heading, height: 4.8 });
       }
     }
     return objects;

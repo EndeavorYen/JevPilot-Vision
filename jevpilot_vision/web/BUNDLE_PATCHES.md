@@ -33,7 +33,7 @@
 | `coast-turn-caps`、`coast-turn-caps-worker` | main、wk | 路口轉彎的減速在 `coast` 照常生效 | 打包檔在路線帶路段資訊時會關掉它；港口的號誌路口需要它 |
 | `coast-pedestrians`、`coast-pedestrians-worker` | main、wk | 行人由 `world.pedestrians()` 產生 | 原本的步道是兩節點間的直線，在彎路上會走到路外 |
 | `coast-no-parked`、`coast-no-parked-worker` | main、wk | `coast` 不產生停在車道上的交通車 | 停車只右移 1.6 m，仍佔車道，後車不超車會永久排隊 |
-| `coast-worker-message`、`coast-worker-map` | main、wk | 規劃請求附上地圖名稱（含出發地點）與 `SEMIF_MAP`，worker 先設好再建世界 | worker 才能建出和頁面相同的地圖 |
+| `coast-worker-message`、`coast-worker-map` | main、wk | 規劃請求附上地圖名稱（含出發地點）、`SEMIF_MAP` 與駕駛模式，worker 先設好再建世界 | worker 才能建出和頁面相同的地圖 |
 | `map-size-city-worker`、`map-size-town-worker` | wk | worker 的城市、小鎮尺寸改讀 `SEMIF_MAP`（getter） | 修正 #11 的問題：自由駕駛 7×7 時，worker 原本一直在 5×5 地圖上規劃。`lap=1` 本來就是 5×5，不受影響 |
 | `coast-default-world`、`coast-world-fallback` | main | 沒指定 `world` 時，改用 `index.html` 設的 `SEMIF_DEFAULT_WORLD`；`coast:<出發地點>` 是合法的地圖名稱 | 自由駕駛預設開新地圖，`lap=1` 維持城市 |
 | `coast-world-picker`、`coast-picker-value`、`coast-new-layout` | main | 新地圖上，選單改為「Start from」加 5 個出發地點；「New layout」保留出發地點 | 舊地圖不再列在新地圖的選單裡 |
@@ -44,3 +44,12 @@
 | `coast-present` | main | 主畫面輸出先問 `SEMIF_SCENERY.present(view)` | 後製只作用在主畫面；車載相機另外渲染，不受影響 |
 | `coast-hero` | main | 主角車先問 `SEMIF_WORLD_KIT.hero(view)`；coast 回傳程式生成的車，其他地圖回傳 undefined、照舊載入 Model Y | 新地圖的主角車由 `semif-world/vehicles.js` 產生，也省掉 glb 下載（#25） |
 | `coast-signal-lamps` | main | coast 上點亮的號誌燈改用純色的紅、黃、綠（不含其他色光的成分，陽光再強也不會變白）並自發光；舊地圖維持打包檔原本的粉彩燈色 | 車載相機經過 ACES 後要讀得出燈色：原本的粉彩燈在畫面裡只剩淡橘、淡綠，任何依像素判讀號誌的方法都讀不到（#18） |
+| `coast-worker-version` | main | 規劃 worker 的網址帶上資產版本號（與頁面、`semif-worldgen.js` 相同） | 快取的舊 worker 不會在少了上面那些補丁的情況下規劃 |
+| `coast-signal-lamp-faces` | main | coast 上的燈泡改成朝向自己進口的平面燈片（原本是突出燈殼的球體），加 20 cm 遮光罩 | 真實號誌有遮光罩；20 cm 的罩在偏離燈軸約 60° 以上（橫向道路）與背面完全擋住亮光；球體從側面也亮，相機在停止線會讀到橫向道路的燈色而判讀衝突（#18） |
+| `vision-perception`、`vision-perception-worker` | main、wk | Vision 模式下，決策狀態的 `perception`（模擬器裡每個物體與號誌的真實顏色）是空的 | Vision 模式不讀模擬器（#18）；決策請求的號誌、附近物體、前車與衝突欄位因此都是空的，改由相機感知提供 |
+| `vision-lead`、`vision-lead-worker` | main、wk | Vision 模式下，自車的速度包絡不跟隨真實前車 | 同上：跟車距離改由感知到的物體決定 |
+| `vision-conflict`、`vision-conflict-worker` | main、wk | Vision 模式下，自車不依真實衝突物體煞車（模擬器自己的緊急煞車） | 同上：碰撞改由伺服器對感知到的物體推演候選軌跡判斷 |
+| `vision-plan`、`vision-plan-worker` | main、wk | Vision 模式下，候選軌跡產生器只看地圖上的建築，停車規則的燈色是相機看到的（`SEMIF_SEEN_SIGNAL`，沒看到就當紅燈） | 原本它用真實的車、行人與燈色決定候選的速度與碰撞；改成看到的燈色後，它照樣產生停車用的慢速候選，但只在相機沒看到綠燈時 |
+| `vision-stop-offer`、`vision-stop-offer-worker` | main、wk | Vision 模式下，號誌停止線 2.5 m 內、燈色未知時也提供 `motion: stop`；車頭越線 3 m 內（車身中心還沒進路口）也提供。coast 地圖上（各模式），停車選項從 max(2.5 m, 維持車速 1.5 s 再以 2.5 m/s² 煞停所需距離 + 1 m) 開始提供（與 `demo/server.py` `_may_cross_before_next` 同一模型），車頭越線 3 m 內也提供；舊地圖維持 2.5 m 到 −0.5 m | 是否停車由看到的燈色決定，不是模擬器的燈色。下一次決策可能 1.5 s 後才生效、這段時間車速幾乎不降，以 3–4 m/s 接近時固定 2.5 m 的窗口可能整個落在兩次決策之間而越線；停在線後 0.6 m 的車原本只剩前進候選，會以 0.2 m/s 爬過紅燈（#18） |
+| `vision-recovery` | main | Vision 模式下，脫困檢查只看建築 | 同上 |
+| `vision-mode-worker`（main 端併入 `coast-worker-message`） | main、wk | 規劃 worker 的每個工作都帶上 `SEMIF_DRIVE_MODE` 與 `SEMIF_SEEN_SIGNAL`，worker 另記下地圖種類（`SEMIF_WORLD_TYPE`，給停車選項判斷是不是 coast） | worker 自己會用時間算出燈色，需要知道現在是不是 Vision 模式、相機看到什麼 |

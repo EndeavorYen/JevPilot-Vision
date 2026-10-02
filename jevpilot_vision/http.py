@@ -87,26 +87,37 @@ def reset_vision_slot() -> None:
 def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
     from jevpilot_vision import perception, vision
 
+    narrow = None
+    captured = None
     if isinstance(image, dict):
-        evidence = vision.get_vision_encoder().infer_surround_b64(image)
+        narrow = image.get("narrow")
+        captured = image.get("_captured_ms")
+        cameras = {name: frame for name, frame in image.items() if name not in ("narrow", "_captured_ms")}
+        evidence = vision.get_vision_encoder().infer_surround_b64(cameras)
         front = image["front"]
     else:
         evidence = vision.get_vision_encoder().infer_b64(image)
         front = image
-    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front)
+    taken_s = captured / 1000.0 if isinstance(captured, (int, float)) else None
+    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow, taken_s)
+    if captured is not None:
+        # The page's clock when these frames were grabbed: how old the evidence really is (#18).
+        evidence["captured_ms"] = captured
     return evidence
 
 
-def _perceive_front(perception: Any, decode: Any, front: str) -> Dict[str, Any]:
-    """Objects with range and the light ahead, from the front camera (#18). A detector that fails
-    says so (backend "none"): Vision mode must slow down, not read it as an empty road."""
+def _perceive_front(perception: Any, decode: Any, front: str, narrow: Optional[str] = None, t: Optional[float] = None) -> Dict[str, Any]:
+    """Objects with range and the light ahead, from the front camera and, in Vision mode, the
+    narrow camera (#18). A detector that fails says so (backend "none"): Vision mode must slow
+    down, not read it as an empty road. `t` is when the frames were taken (the page's clock, s):
+    the tracker's closing speeds are timed by it."""
     try:
-        return perception.get_perception().front(decode(front))
+        return perception.get_perception().front(decode(front), t=t, narrow=decode(narrow) if narrow else None)
     except Exception as err:
         return {"backend": "none", "objects": [], "signal": {"state": "unknown", "conf": 0.0}, "error": str(err)[:200]}
 
 
-_CAMERA_NAMES = frozenset({"front", "right", "rear", "left"})
+_CAMERA_NAMES = frozenset({"front", "right", "rear", "left", "narrow"})
 
 
 def _surround_frames(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
@@ -125,6 +136,9 @@ async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
         image: Any = _surround_frames(payload)
         if image is None:
             return {"error": "frames need a front camera and a JPEG (data URL or base64) per camera"}
+        t_ms = payload.get("t_ms")
+        if isinstance(t_ms, (int, float)) and not isinstance(t_ms, bool):
+            image["_captured_ms"] = float(t_ms)
     else:
         image = payload.get("image") or payload.get("image_base64")
         if not isinstance(image, str) or len(image) < 64:
