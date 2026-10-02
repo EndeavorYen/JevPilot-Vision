@@ -56,7 +56,9 @@ def test_t2_red_close_takes_the_slowest_safe_candidate(engine):
 def test_t3_motion_stops_at_the_line(engine):
     assert ask(engine, {"signal": "red", "distance_to_line_m": 1.5}, speed=1.0, motion=True)[1] == "stop"
     assert ask(engine, {"control": "stop", "signal": None, "distance_to_line_m": 2.0}, speed=0.8, motion=True)[1] == "stop"
-    assert ask(engine, {"signal": "red", "distance_to_line_m": 6}, speed=3.0, motion=True)[1] == "drive", "not yet at the line"
+    # Not yet: at 3 m/s it can hold its speed 1.5 s and still brake 0.5 m short of a line 10 m off
+    # (6 m was too close; see the test below).
+    assert ask(engine, {"signal": "red", "distance_to_line_m": 10}, speed=3.0, motion=True)[1] == "drive", "not yet at the line"
 
 
 @pytest.mark.parametrize(
@@ -142,22 +144,24 @@ def test_when_every_candidate_collides_the_slowest_forward_one_is_taken(engine):
     assert choice == "slow"
 
 
-def test_a_stop_offered_before_the_line_is_taken_when_the_slowest_path_could_cross_first(engine):
+def test_a_stop_offered_before_the_line_is_taken_when_the_car_could_not_stop_after_the_next_decision(engine):
     """#18: on the coast the stop is offered from further out (BUNDLE_PATCHES.md vision-stop-offer),
-    because a decision comes only every 0.7-1.0 s plus 0.2 s to answer. 4.5 m short of a red line
-    at 3.8 m/s with nothing slower than 3.6 m/s offered, the next decision may come after the car
-    has crossed (3.6 m/s * 1.2 s = 4.3 m > 4.5 - 0.5 m): stop now. With a 1 m/s path offered, drive on."""
-    fast_only = {"a": [3.6, 0.0, 0.1, 0.0, False, False], "b": [4.2, 0.0, 0.1, 0.0, False, False]}
+    because the next decision can come 1.5 s later and the car sheds little speed toward a slower
+    path in that time (3.3 -> 2.7 m/s in 1.5 s, measured). Holding its speed until then and braking
+    at 2.5 m/s^2 must still stop it 0.5 m short of the line, or it stops now: at 3.3 m/s that needs
+    3.3 * 1.5 + 3.3^2 / 5 + 0.5 = 7.6 m, so 6.6 m out it stops (it rolled 0.1 m over when it drove
+    on), 12 m out it drives on (the stopping curve picks its path)."""
+    cands = {"a": [1.6, 0.0, 0.1, 0.0, False, False], "b": [3.4, 0.0, 0.1, 0.0, False, False]}
     questions = {
-        "vector": {"type": "choice", "instructions": "Choose a path.", "criteria": {k: None for k in fast_only}},
+        "vector": {"type": "choice", "instructions": "Choose a path.", "criteria": {k: None for k in cands}},
         "motion": {"type": "choice", "instructions": "Stop means zero target now.", "criteria": {"drive": None, "stop": None}},
     }
-    inter = {"control": "signal", "signal": "red", "distance_to_line_m": 4.5, "stop_completed": False, "already_entered": False}
-    state = {"speed_mps": 3.8, "on_road": True, "candidates": fast_only, "intersection": inter}
-    answers = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]
-    assert answers["motion"]["choice"] == "stop"
-    slow = {**fast_only, "c": [1.0, 0.0, 0.1, 0.0, False, False]}
-    state = {**state, "candidates": slow}
-    questions["vector"]["criteria"] = {k: None for k in slow}
-    answers = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]
-    assert answers["motion"]["choice"] == "drive" and answers["vector"]["choice"] == "c"
+
+    def motion(dist):
+        inter = {"control": "signal", "signal": "red", "distance_to_line_m": dist, "stop_completed": False, "already_entered": False}
+        state = {"speed_mps": 3.3, "on_road": True, "candidates": cands, "intersection": inter}
+        answers = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]
+        return answers["motion"]["choice"], answers["vector"]["choice"]
+
+    assert motion(6.6)[0] == "stop"
+    assert motion(12.0)[0] == "drive"

@@ -668,28 +668,24 @@ class DecisionEngine:
             return dist
         return None
 
-    # Time from one decision's state to the next decision taking effect: 0.7-1.0 s between
-    # decisions plus about 0.2 s to answer (#18, measured in the browser).
-    DECISION_GAP_S = 1.2
+    # Time from one decision's state to the next taking effect: 0.7-1.5 s between decisions plus
+    # about 0.2 s to answer, measured in the browser; the longer end, since a car that stops early
+    # creeps on. In that time the car sheds little speed toward a slower path (3.3 -> 2.7 m/s in
+    # 1.5 s), and a stop brakes at about 2.5 m/s^2 (#18).
+    DECISION_GAP_S = 1.5
+    STOP_DECEL_MPS2 = 2.5
 
     @classmethod
     def _may_cross_before_next(cls, state: Dict[str, Any], stop_m: float) -> bool:
-        """Whether the slowest forward path offered, held until the next decision, could reach the
-        line (0.5 m short of it) first. The stop is offered this far out on the coast only."""
-        candidates = state.get("candidates") if isinstance(state, dict) else None
-        speeds = []
-        for vec in (candidates or {}).values() if isinstance(candidates, dict) else []:
-            if not isinstance(vec, (list, tuple)) or len(vec) < 6 or vec[4]:
-                continue
-            try:
-                v = float(vec[0])
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(v) and v > 0:
-                speeds.append(v)
-        if not speeds:
+        """Whether, holding its speed until the next decision and braking then, the car would fail
+        to stop 0.5 m short of the line. The stop is offered this far out on the coast only."""
+        try:
+            v = abs(float(state.get("speed_mps") or 0.0))
+        except (TypeError, ValueError):
             return True
-        return min(speeds) * cls.DECISION_GAP_S > stop_m - 0.5
+        if not math.isfinite(v):
+            return True
+        return v * cls.DECISION_GAP_S + v * v / (2.0 * cls.STOP_DECEL_MPS2) + 0.5 > stop_m
 
     @staticmethod
     def _stopping_choice(candidates: Dict[str, Any], ids: List[str], dist: float, speed: float) -> Optional[str]:
