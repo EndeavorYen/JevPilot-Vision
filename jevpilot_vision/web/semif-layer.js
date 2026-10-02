@@ -542,7 +542,7 @@
       body.drive_mode = "vision";
       updateSeenSignal();
       body.state = body.state || {};
-      body.state.seen_signal = window.SEMIF_SEEN_SIGNAL;
+      body.state.seen_signal = window.SEMIF_SEEN_SENT || null;
       const paths = candidatePaths(body.state.candidates);
       if (paths) body.state.candidate_paths = paths;
     }
@@ -591,21 +591,27 @@
   }
   window.SEMIF_SHAPE_DECISION = shapeDecisionBody;
 
-  // Vision mode's signal colour for the planner (BUNDLE_PATCHES.md vision-plan): what the cameras
-  // read, red when nothing was seen or the evidence is more than 1.5 s old. A red or amber reading
-  // is kept 2.5 s; a green only 0.8 s, well inside an amber phase (2 s), so a lost reading cannot
-  // carry a green into the red. The server applies the same rule (jevpilot_vision/vision_mode.py).
+  // Vision mode's signal colour: what the cameras read, counted from when the frame was taken. A
+  // red or amber reading is kept 2.5 s; a green only 0.8 s, so with a decision taking effect up to
+  // 1.2 s later a lost reading cannot carry a green past an amber phase (2 s). Evidence more than
+  // 1.5 s old, or from the future (another page's clock), says nothing.
+  // SEMIF_SEEN_SENT goes to the server: the reading, or null when there is none.
+  // SEMIF_SEEN_SIGNAL goes to the planner (BUNDLE_PATCHES.md vision-plan): the same, red when null;
+  // the planner applies it only at a signalled line, as the server does (jevpilot_vision/vision_mode.py).
   const SEEN_MEMORY_MS = { red: 2500, amber: 2500, green: 800 };
   let lastSeen = null;
   function updateSeenSignal() {
     const now = performance.now();
     const vis = window.SEMIF_VISION;
     const p = vis && vis.perception;
-    const fresh = Number.isFinite(window.SEMIF_VISION_AT) && now - window.SEMIF_VISION_AT <= 1500;
+    const taken = window.SEMIF_VISION_AT;
+    const fresh = Number.isFinite(taken) && now >= taken && now - taken <= 1500;
     const ok = fresh && p && p.backend && p.backend !== "none" && (p.status || "ready") === "ready";
     const state = ok && p.signal && p.signal.state;
-    if (["red", "amber", "green"].includes(state)) lastSeen = { state, at: now };
-    window.SEMIF_SEEN_SIGNAL = ok && lastSeen && now - lastSeen.at <= SEEN_MEMORY_MS[lastSeen.state] ? lastSeen.state : "red";
+    if (["red", "amber", "green"].includes(state) && !(lastSeen && lastSeen.at > taken)) lastSeen = { state, at: taken };
+    const held = ok && lastSeen && now >= lastSeen.at && now - lastSeen.at <= SEEN_MEMORY_MS[lastSeen.state] ? lastSeen.state : null;
+    window.SEMIF_SEEN_SENT = held;
+    window.SEMIF_SEEN_SIGNAL = held || "red";
   }
   window.SEMIF_UPDATE_SEEN = updateSeenSignal;
 

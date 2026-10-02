@@ -406,6 +406,27 @@ class Detector:
         )
 
 
+# The narrow camera's reading counts only from a head near enough to govern the coming stop line:
+# coast junctions are at least 100 m apart and a junction's far-side head is about 15 m past its
+# line, so a head over 90 m away belongs to the next junction (review #18). Its range comes from
+# its size: a boxed head is 1.65 m tall, a lamp found from pixels 0.32 m.
+NARROW_MAX_RANGE_M = 90.0
+HEAD_HEIGHT_M = {"detector": 1.65, "lamp": 0.32}
+
+
+def _within_narrow_range(signal: Dict[str, Any], camera: CameraModel) -> Dict[str, Any]:
+    box = signal.get("box")
+    if signal.get("state") == "unknown" or not box:
+        return signal
+    tall = float(box[3]) - float(box[1])
+    if tall <= 0:
+        return {"state": "unknown", "conf": 0.0}
+    range_m = camera.fx * HEAD_HEIGHT_M.get(signal.get("source", "detector"), HEAD_HEIGHT_M["detector"]) / tall
+    if range_m > NARROW_MAX_RANGE_M:
+        return {"state": "unknown", "conf": 0.0}
+    return {**signal, "range_m": round(range_m, 1)}
+
+
 class Perception:
     """The detector and the tracker behind /v1/vision's `perception` field."""
 
@@ -433,7 +454,9 @@ class Perception:
             if far is not None:
                 lights = [d for d in far if d["kind"] == "traffic_light"]
                 nw, nh = narrow.size
-                seen = perceive(lights, np.asarray(narrow.convert("RGB")), CameraModel(width=nw, height=nh, hfov_deg=NARROW_HFOV_DEG))["signal"]
+                narrow_cam = CameraModel(width=nw, height=nh, hfov_deg=NARROW_HFOV_DEG)
+                seen = perceive(lights, np.asarray(narrow.convert("RGB")), narrow_cam)["signal"]
+                seen = _within_narrow_range(seen, narrow_cam)
                 wide = out["signal"]
                 if wide["state"] == "unknown" and not wide.get("conflict"):
                     if seen["state"] != "unknown" or seen.get("conflict"):

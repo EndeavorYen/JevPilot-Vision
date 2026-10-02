@@ -50,6 +50,6 @@
 | `vision-lead`、`vision-lead-worker` | main、wk | Vision 模式下，自車的速度包絡不跟隨真實前車 | 同上：跟車距離改由感知到的物體決定 |
 | `vision-conflict`、`vision-conflict-worker` | main、wk | Vision 模式下，自車不依真實衝突物體煞車（模擬器自己的緊急煞車） | 同上：碰撞改由伺服器對感知到的物體推演候選軌跡判斷 |
 | `vision-plan`、`vision-plan-worker` | main、wk | Vision 模式下，候選軌跡產生器只看地圖上的建築，停車規則的燈色是相機看到的（`SEMIF_SEEN_SIGNAL`，沒看到就當紅燈） | 原本它用真實的車、行人與燈色決定候選的速度與碰撞；改成看到的燈色後，它照樣產生停車用的慢速候選，但只在相機沒看到綠燈時 |
-| `vision-stop-offer`、`vision-stop-offer-worker` | main、wk | Vision 模式下，號誌停止線 2.5 m 內、燈色未知時也提供 `motion: stop`；車頭越線 3 m 內（車身中心還沒進路口）也提供。coast 地圖上（兩種模式），停車選項從 max(2.5 m, 1.2 s 車程 + 1 m) 開始提供；舊地圖維持 2.5 m | 是否停車由看到的燈色決定，不是模擬器的燈色。決策每 0.7–1.0 s 一次、回應再約 0.2 s，以 3–4 m/s 接近時固定 2.5 m 的窗口可能整個落在兩次決策之間而越線（#18） |
+| `vision-stop-offer`、`vision-stop-offer-worker` | main、wk | Vision 模式下，號誌停止線 2.5 m 內、燈色未知時也提供 `motion: stop`；車頭越線 3 m 內（車身中心還沒進路口）也提供。coast 地圖上（各模式），停車選項從 max(2.5 m, 1.2 s 車程 + 1 m) 開始提供，車頭越線 3 m 內也提供；舊地圖維持 2.5 m 到 −0.5 m | 是否停車由看到的燈色決定，不是模擬器的燈色。決策每 0.7–1.0 s 一次、回應再約 0.2 s，以 3–4 m/s 接近時固定 2.5 m 的窗口可能整個落在兩次決策之間而越線；停在線後 0.6 m 的車原本只剩前進候選，會以 0.2 m/s 爬過紅燈（#18） |
 | `vision-recovery` | main | Vision 模式下，脫困檢查只看建築 | 同上 |
 | `vision-mode-worker`（main 端併入 `coast-worker-message`） | main、wk | 規劃 worker 的每個工作都帶上 `SEMIF_DRIVE_MODE` 與 `SEMIF_SEEN_SIGNAL`，worker 另記下地圖種類（`SEMIF_WORLD_TYPE`，給停車選項判斷是不是 coast） | worker 自己會用時間算出燈色，需要知道現在是不是 Vision 模式、相機看到什麼 |

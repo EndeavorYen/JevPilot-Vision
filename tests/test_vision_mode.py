@@ -9,6 +9,7 @@ perception fails closed.
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -189,3 +190,32 @@ def test_a_car_in_our_lane_is_never_assumed_to_drive_back_at_us():
     oncoming = {"kind": "car", "ahead_m": 25.0, "right_m": -2.0, "closing_mps": 20.0}
     out = vision_mode.prepare(_payload(_perception([oncoming], signal="green"), candidates=cands, line=200.0, speed=10.0, age_ms=0))
     assert out["state"]["candidates"]["slow"][4] is True, "a car over the centre line still comes toward us"
+
+
+def test_review2_h1_an_open_road_with_no_sighting_is_not_a_red_light():
+    """The page sends seen_signal null when it saw nothing; the arbiter's directive must not become
+    RED_LIGHT_STOP away from a signalled line."""
+    from jevpilot_vision.drive import prepare_drive_request
+
+    payload = _payload(_perception(signal="unknown"))
+    payload["state"]["intersection"] = None
+    payload["state"]["seen_signal"] = None
+    state = vision_mode.prepare(payload)["state"]
+    assert state["vision"]["signal"] == "unknown"
+    assert "RED_LIGHT_STOP" not in json.dumps(prepare_drive_request(vision_mode.prepare(payload)))
+
+
+def test_review2_m3_a_green_reading_is_trusted_for_0_8_s_from_when_it_was_taken():
+    """A green the page did not remember (or an old client that sends nothing) counts only while the
+    frame is under 0.8 s old: past that, an amber could have come and gone before the decision acts."""
+    fresh = vision_mode.prepare(_payload(_perception(signal="green"), age_ms=500))["state"]
+    old = vision_mode.prepare(_payload(_perception(signal="green"), age_ms=1200))["state"]
+    red = vision_mode.prepare(_payload(_perception(signal="red"), age_ms=1200))["state"]
+    assert fresh["intersection"]["signal"] == "green"
+    assert old["intersection"]["signal"] == "red" and old["intersection"]["signal_source"] == "assumed"
+    assert red["intersection"]["signal"] == "red" and red["intersection"]["signal_source"] == "perception"
+
+
+def test_review2_l5_evidence_from_the_future_is_not_fresh():
+    state = vision_mode.prepare(_payload(_perception(signal="green"), age_ms=-400))["state"]
+    assert state["perception_ok"] is False

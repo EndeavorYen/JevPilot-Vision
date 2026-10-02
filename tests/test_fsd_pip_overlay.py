@@ -375,7 +375,8 @@ if (spec.cmd === "shape") {
   nowMs += 300;
   const shaped = window.SEMIF_SHAPE_DECISION({ state: { candidates: { v0: [4, 0.2, 0, 0, false, false], v1: [10, 0, 0, 0, false, false] } } });
   const seen = [];
-  const at = (state, age) => { window.SEMIF_VISION = { perception: { backend: "rtdetr", status: "ready", signal: { state } } }; window.SEMIF_VISION_AT = nowMs - age; window.SEMIF_UPDATE_SEEN(); seen.push(window.SEMIF_SEEN_SIGNAL); };
+  const sent = [];
+  const at = (state, age) => { window.SEMIF_VISION = { perception: { backend: "rtdetr", status: "ready", signal: { state } } }; window.SEMIF_VISION_AT = nowMs - age; window.SEMIF_UPDATE_SEEN(); seen.push(window.SEMIF_SEEN_SIGNAL); sent.push(window.SEMIF_SEEN_SENT); };
   at("unknown", 100);   // never seen yet: red
   at("green", 100);     // seen green
   nowMs += 500; at("unknown", 100);    // lost it half a second later: still green
@@ -384,7 +385,10 @@ if (spec.cmd === "shape") {
   nowMs += 2000; at("unknown", 100);   // a red is kept 2.5 s
   nowMs += 1000; at("unknown", 100);   // then forgotten: red anyway
   at("green", 4000);    // a stale frame says nothing: red
-  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen }));
+  at("green", 700);     // a green taken 0.7 s ago
+  nowMs += 200; at("unknown", 100);    // 0.9 s after it was taken: no longer trusted
+  at("green", -500);    // evidence from the future (another page's clock) is not fresh
+  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen, sent }));
 } else if (spec.cmd === "dom") {
   process.stdout.write(JSON.stringify(out));
 } else if (spec.cmd === "project") {
@@ -1012,14 +1016,18 @@ def test_vision_mode_marks_each_decision_and_says_how_old_its_evidence_is():
     assert vision["body"]["drive_mode"] == "vision"
     assert vision["body"]["state"]["vision"]["perception"]["backend"] == "rtdetr"
     assert vision["body"]["state"]["vision_age_ms"] == 300
-    assert vision["body"]["state"]["seen_signal"] in ("red", "amber", "green")
+    assert vision["body"]["state"]["seen_signal"] is None, "nothing seen yet: the server assumes red only at a signalled line"
     # Each candidate carries the planner's own path, matched by speed and steer: [t, ahead, right, heading].
     paths = vision["body"]["state"]["candidate_paths"]
     assert sorted(paths) == ["v0", "v1"]
     assert paths["v1"][-1][0] == pytest.approx(3.0) and paths["v1"][-1][1] == pytest.approx(30.0)
     assert paths["v0"][-1][1] == pytest.approx(12.0) and paths["v0"][-1][2] == pytest.approx(6.0)
     # The planner's signal colour is the camera's: red until green is seen, kept 2.5 s, stale is red.
-    assert vision["seen"] == ["red", "green", "green", "red", "red", "red", "red", "red"]
+    # Memory counts from when the frame was taken, not from when it was last looked at.
+    assert vision["seen"] == ["red", "green", "green", "red", "red", "red", "red", "red", "green", "red", "red"]
+    # What the server is told: a reading the cameras made, or nothing. The planner's red default is
+    # not a sighting; on an open road it would order a stop (review #18).
+    assert vision["sent"] == [None, "green", "green", None, "red", "red", None, None, "green", None, None]
     plain = _run({"cmd": "shape", "vision": "1"})
     assert plain["mode"] == "privileged" and "drive_mode" not in plain["body"]
 

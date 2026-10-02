@@ -331,11 +331,46 @@ def test_review_h1_evidence_says_when_its_frame_was_grabbed(monkeypatch):
             assert "_captured_ms" not in frames
             return {"backend": "stub"}
 
+    times = []
+
     class Fake:
         def front(self, image, t=None, narrow=None):
+            times.append(t)
             return {"backend": "fake", "objects": [], "signal": {"state": "unknown"}}
 
     monkeypatch.setattr(vision, "get_vision_encoder", lambda: Encoder())
     monkeypatch.setattr(perception, "get_perception", lambda: Fake())
     frames = {"front": _jpeg(64, 36), "right": _jpeg(32, 18), "_captured_ms": 1234.5}
     assert http._infer_latest_jpeg(frames)["captured_ms"] == 1234.5
+    # Review #18: the tracker times closing speeds by when the frames were taken, not by when the
+    # server got to them (upload and a busy slot add jitter that reads as a slower closing).
+    assert times == [pytest.approx(1.2345)]
+
+
+def test_review2_m4_the_narrow_camera_does_not_read_a_light_beyond_this_junction():
+    """The narrow camera fills in only with a head near enough to govern the coming stop line. A
+    1.65 m head 12 px tall in the 40 degree camera is about 120 m away: the next junction (coast
+    junctions are at least 100 m apart; this one's far-side head is under 90 m away while it matters)."""
+    from PIL import Image
+
+    import jevpilot_vision.perception as P
+
+    wide = Image.new("RGB", (640, 360), (90, 90, 90))
+    narrow_px = np.full((360, 640, 3), 90, dtype=np.uint8)
+    narrow_px[120:124, 319:322] = (70, 250, 110)
+    narrow = Image.fromarray(narrow_px)
+
+    class Fake(P.Detector):
+        def __init__(self, box):
+            self.box = box
+            self.model_id = "fake"
+
+        def detect_or_status(self, image):
+            if image is narrow:
+                return "ready", [{"kind": "traffic_light", "conf": 0.7, "box": self.box}]
+            return "ready", []
+
+    far = P.Perception(Fake([316, 116, 325, 128])).front(wide, narrow=narrow)
+    near = P.Perception(Fake([310, 110, 332, 150])).front(wide, narrow=narrow)
+    assert far["signal"]["state"] == "unknown"
+    assert near["signal"]["state"] == "green" and near["signal"]["range_m"] == pytest.approx(36.3, abs=0.5)

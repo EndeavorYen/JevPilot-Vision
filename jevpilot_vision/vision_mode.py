@@ -37,6 +37,7 @@ PRIVILEGED = (
 )
 
 STALE_MS = 1500.0  # perception older than this is no perception
+GREEN_TRUST_MS = 800.0  # a green reading, from when its frame was taken
 WHEELBASE_M = 2.7
 CAMERA_AHEAD_M = 0.15  # the onboard camera sits this far ahead of the car's centre
 EGO_HALF = (2.375, 0.95)  # half length, half width
@@ -59,7 +60,8 @@ def _perception_ok(state: Dict[str, Any]) -> tuple[bool, Dict[str, Any]]:
         age = float(state.get("vision_age_ms"))
     except (TypeError, ValueError):
         age = math.inf
-    ok = bool(perception) and perception.get("backend") not in (None, "none") and perception.get("status", "ready") == "ready" and age <= STALE_MS
+    # Negative: the frames carry another page's clock (a reload while the server was busy).
+    ok = bool(perception) and perception.get("backend") not in (None, "none") and perception.get("status", "ready") == "ready" and 0 <= age <= STALE_MS
     return ok, perception
 
 
@@ -159,6 +161,8 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     # while the evidence is fresh.
     remembered = state.get("seen_signal") if ok else None
     reading = (perception.get("signal") or {}).get("state") if ok else None
+    if reading == "green" and (_num(state.get("vision_age_ms")) or 0.0) > GREEN_TRUST_MS:
+        reading = None  # an amber could have come and gone since (semif-layer.js SEEN_MEMORY_MS)
     seen = remembered if remembered in ("red", "amber", "green") else reading if reading in ("red", "amber", "green") else None
     signal, source = (seen, "perception") if seen else ("red", "assumed")
 

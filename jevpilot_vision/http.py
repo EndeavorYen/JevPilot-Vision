@@ -98,19 +98,21 @@ def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
     else:
         evidence = vision.get_vision_encoder().infer_b64(image)
         front = image
-    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow)
+    taken_s = captured / 1000.0 if isinstance(captured, (int, float)) else None
+    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow, taken_s)
     if captured is not None:
         # The page's clock when these frames were grabbed: how old the evidence really is (#18).
         evidence["captured_ms"] = captured
     return evidence
 
 
-def _perceive_front(perception: Any, decode: Any, front: str, narrow: Optional[str] = None) -> Dict[str, Any]:
+def _perceive_front(perception: Any, decode: Any, front: str, narrow: Optional[str] = None, t: Optional[float] = None) -> Dict[str, Any]:
     """Objects with range and the light ahead, from the front camera and, in Vision mode, the
     narrow camera (#18). A detector that fails says so (backend "none"): Vision mode must slow
-    down, not read it as an empty road."""
+    down, not read it as an empty road. `t` is when the frames were taken (the page's clock, s):
+    the tracker's closing speeds are timed by it."""
     try:
-        return perception.get_perception().front(decode(front), narrow=decode(narrow) if narrow else None)
+        return perception.get_perception().front(decode(front), t=t, narrow=decode(narrow) if narrow else None)
     except Exception as err:
         return {"backend": "none", "objects": [], "signal": {"state": "unknown", "conf": 0.0}, "error": str(err)[:200]}
 
