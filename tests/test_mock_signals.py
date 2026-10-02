@@ -165,3 +165,36 @@ def test_a_stop_offered_before_the_line_is_taken_when_the_car_could_not_stop_aft
 
     assert motion(6.6)[0] == "stop"
     assert motion(12.0)[0] == "drive"
+
+
+def test_an_amber_the_car_cannot_stop_for_at_the_stop_brake_is_driven_through(engine):
+    """Review #18: a stop brakes at about 2.5 m/s^2, so amber at 6 m/s with the line 5 m ahead
+    (6 * 0.2 + 36 / 5 = 8.4 m to stop) would leave the car in the junction mouth as it turns red:
+    drive through. A red there is still a stop."""
+    questions = {
+        "vector": {"type": "choice", "instructions": "Choose a path.", "criteria": {k: None for k in CANDIDATES}},
+        "motion": {"type": "choice", "instructions": "Stop means zero target now.", "criteria": {"drive": None, "stop": None}},
+    }
+
+    def motion(signal):
+        inter = {"control": "signal", "signal": signal, "distance_to_line_m": 5.0, "stop_completed": False, "already_entered": False}
+        state = {"speed_mps": 6.0, "on_road": True, "candidates": CANDIDATES, "intersection": inter}
+        return engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]["motion"]["choice"]
+
+    assert motion("amber") == "drive"
+    assert motion("red") == "stop"
+
+
+def test_the_bundle_offers_the_stop_at_least_as_far_out_as_the_mock_needs_it():
+    """The coast stop window in the bundle and the mock's stop threshold are one model; if either
+    changes alone, the stop may not be offered when the mock needs it."""
+    import re
+    from pathlib import Path
+
+    main = (Path(__file__).resolve().parents[1] / "jevpilot_vision" / "web" / "assets" / "main-CvLEeHjW.js").read_text(encoding="utf-8")
+    gap, quad, extra = map(float, re.search(r"\(V=>V\*([\d.]+)\+V\*V/([\d.]+)\+([\d.]+)\)", main).groups())
+    for v in (0.0, 1.0, 2.5, 4.0, 6.0, 9.0, 13.0):
+        window = max(2.5, v * gap + v * v / quad + extra)
+        need = v * DecisionEngine.DECISION_GAP_S + v * v / (2 * DecisionEngine.STOP_DECEL_MPS2) + 0.5
+        assert window >= need, (v, window, need)
+    assert DecisionEngine._may_cross_before_next({"speed_mps": "fast"}, 10.0) is True

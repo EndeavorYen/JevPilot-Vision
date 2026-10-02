@@ -687,6 +687,19 @@ class DecisionEngine:
             return True
         return v * cls.DECISION_GAP_S + v * v / (2.0 * cls.STOP_DECEL_MPS2) + 0.5 > stop_m
 
+    @classmethod
+    def _amber_too_late(cls, state: Dict[str, Any], stop_m: float) -> bool:
+        """An amber the stop brake (0.2 s to answer, then STOP_DECEL_MPS2) cannot stop for before the
+        line: stopping would leave the car in the junction mouth as it turns red, so it drives on."""
+        inter = state.get("intersection") if isinstance(state, dict) else None
+        if not isinstance(inter, dict) or str(inter.get("signal") or "").lower() != "amber":
+            return False
+        try:
+            v = abs(float(state.get("speed_mps") or 0.0))
+        except (TypeError, ValueError):
+            return False
+        return v * 0.2 + v * v / (2.0 * cls.STOP_DECEL_MPS2) > stop_m
+
     @staticmethod
     def _stopping_choice(candidates: Dict[str, Any], ids: List[str], dist: float, speed: float) -> Optional[str]:
         """Fastest safe candidate on a 2 m/s^2 stopping curve that allows for two 0.8 s decisions:
@@ -896,7 +909,7 @@ class DecisionEngine:
             if q_key == "motion":
                 ids = [o["id"] for o in options]
                 pick = "drive" if "drive" in ids else ids[0]
-                if stop_m is not None and "stop" in ids and (stop_m <= 2.5 or self._may_cross_before_next(state, stop_m)):
+                if stop_m is not None and "stop" in ids and (stop_m <= 2.5 or self._may_cross_before_next(state, stop_m)) and not self._amber_too_late(state, stop_m):
                     pick = "stop"
                 answers[q_key] = {
                     "choice": pick,
