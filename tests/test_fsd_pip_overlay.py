@@ -215,7 +215,8 @@ document.querySelector = (sel) => {
   let found = null;
   walk(document, (node) => {
     if (found || !node.tagName) return;
-    if (sel[0] === "#" && node.id === sel.slice(1)) found = node;
+    if (sel === "dialog[open]" && node.tagName === "DIALOG" && node.open) found = node;
+    else if (sel[0] === "#" && node.id === sel.slice(1)) found = node;
     else if (sel[0] === "." && node.classList && node.classList.contains(sel.slice(1))) found = node;
   });
   return found;
@@ -404,8 +405,22 @@ if (spec.cmd === "mode") {
   strategy.value = "semif";
   strategy.dispatchEvent({ type: "change", bubbles: true });
   steps.push({ at: "select semif", mode: window.SEMIF_DRIVE_MODE, shaped: shape() });
-  document.body.dispatchEvent({ type: "keydown", code: "KeyV", key: "v", bubbles: true });
-  steps.push({ at: "key V", mode: window.SEMIF_DRIVE_MODE });
+  // The bundle's own shortcuts (1, 2, 3) and buttons set the dropdown without a change event.
+  strategy.value = "heuristic";
+  window.__raf();
+  steps.push({ at: "bundle sets heuristic", mode: window.SEMIF_DRIVE_MODE });
+  strategy.value = "semif";
+  window.__raf();
+  steps.push({ at: "bundle sets semif", mode: window.SEMIF_DRIVE_MODE });
+  const pipHidden = () => document.getElementById("fsd-pip").classList.contains("fsd-pip-hidden");
+  const pipBefore = pipHidden();
+  document.body.dispatchEvent({ type: "keydown", code: "KeyM", key: "m", bubbles: true });
+  steps.push({ at: "key M", mode: window.SEMIF_DRIVE_MODE, pipToggled: pipHidden() !== pipBefore });
+  const dialog = el("dialog");
+  dialog.open = true;
+  document.body.appendChild(dialog);
+  document.body.dispatchEvent({ type: "keydown", code: "KeyM", key: "m", bubbles: true });
+  steps.push({ at: "key M with a dialog open", mode: window.SEMIF_DRIVE_MODE });
   const h = window.SEMIF_MODE.health;
   const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
   const health = {
@@ -414,6 +429,8 @@ if (spec.cmd === "mode") {
     loading: h({ backend: "stub", perception: { backend: "none", status: "loading" } }, 400),
     failed: h({ backend: "stub", perception: { backend: "none", status: "failed" } }, 400),
     stale: h({ backend: "stub", perception: ready }, 2100),
+    nullStatus: h({ backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd", status: null } }, 400),
+    noStatus: h({ backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd" } }, 400),
     none: h(null, null),
     future: h({ backend: "stub", perception: ready }, -300),
   };
@@ -1117,8 +1134,10 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat"}
     assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
     assert steps["click vision"]["checked"] == "true"
-    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "heuristic"}
+    # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
+    # bundle then decides locally and asks no server); nothing in the request is rewritten.
     assert steps["click heuristic"]["select"] == "heuristic"
+    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "flat"}
     assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat"}
     assert steps["click privileged"]["select"] == "semif"
     assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
@@ -1134,13 +1153,18 @@ def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
     assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
 
 
-def test_the_strategy_dropdown_and_the_v_key_drive_the_indicator_too():
+def test_the_strategy_dropdown_the_bundles_shortcuts_and_the_m_key_drive_the_indicator_too():
     steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "vision"})["steps"]}
     assert steps["select heuristic"]["mode"] == "heuristic"
-    assert steps["select heuristic"]["shaped"]["mode"] == "heuristic"
     # Back to SemArbiter in the dropdown: the last SemArbiter mode (privileged, clicked last).
     assert steps["select semif"]["mode"] == "privileged"
-    assert steps["key V"]["mode"] == "heuristic", "V cycles vision -> privileged -> heuristic -> vision"
+    # Review #21 H2: the bundle's 1/2/3 keys change the dropdown with no event; the next frame notices.
+    assert steps["bundle sets heuristic"]["mode"] == "heuristic"
+    assert steps["bundle sets semif"]["mode"] == "privileged"
+    assert steps["key M"]["mode"] == "heuristic", "M cycles vision -> privileged -> heuristic -> vision"
+    # Review #21 H1: V hides the camera view; the mode key must not touch it.
+    assert steps["key M"]["pipToggled"] is False
+    assert steps["key M with a dialog open"]["mode"] == "heuristic", "keys wait while a dialog is open"
 
 
 def test_vision_health_says_when_the_car_is_held_to_a_crawl():
@@ -1149,7 +1173,10 @@ def test_vision_health_says_when_the_car_is_held_to_a_crawl():
     h = _run({"cmd": "mode"})["health"]
     assert h["ok"] == {"state": "ok", "text": "Detector ready · 0.4 s · SigLIP"}
     assert h["stub"]["state"] == "ok" and h["stub"]["text"].endswith("SigLIP stub")
-    for key, words in [("loading", "Detector loading"), ("failed", "Detector failed"), ("stale", "Evidence 2.1 s old"),
+    # Review #21 L1: the same rule as vision_mode._perception_ok: a missing status is ready, a null one is not.
+    assert h["noStatus"]["state"] == "ok"
+    for key, words in [("loading", "Detector loading"), ("failed", "Detector failed"), ("nullStatus", "Detector failed"),
+                       ("stale", "Evidence 2.1 s old"),
                        ("none", "Waiting for the cameras"), ("future", "Waiting for the cameras")]:
         assert h[key]["state"] == "degraded", key
         assert h[key]["text"].startswith(words) and h[key]["text"].endswith("holding to a crawl"), h[key]

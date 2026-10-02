@@ -1315,6 +1315,11 @@ body.fsd-theme .drive-header-row {
   background: var(--sol-hover);
 }
 
+.sol-mode-option:focus-visible {
+  outline: 2px solid var(--sol-accent);
+  outline-offset: 1px;
+}
+
 .sol-mode-option[aria-checked="true"],
 .sol-mode-option[aria-checked="true"]:hover {
   color: var(--sol-panel-deep);
@@ -1390,10 +1395,13 @@ body.fsd-theme .drive-header-row {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Health as the dot alone (amber when degraded); the words are in the tooltip. */
-  #sol-mode-health {
+  /* Health as the dot alone while all is well; degraded, its words replace the boundary line. */
+  #sol-mode[data-health="ok"] #sol-mode-health {
     font-size: 0;
     gap: 0;
+  }
+  #sol-mode[data-health="degraded"] #sol-mode-reads {
+    display: none;
   }
   body.fsd-theme .semif-clock {
     display: none;

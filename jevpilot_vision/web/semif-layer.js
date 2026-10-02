@@ -77,13 +77,11 @@
   };
   const modeEl = document.createElement("div");
   modeEl.id = "sol-mode";
-  modeEl.setAttribute("role", "group");
-  modeEl.setAttribute("aria-label", "Driving mode");
   modeEl.innerHTML = `
-    <div class="sol-mode-switch" role="radiogroup" aria-label="Driving mode" title="Driving mode · V">
+    <div class="sol-mode-switch" role="radiogroup" aria-label="Driving mode" title="Driving mode · M">
       ${DRIVE_MODES.map((m) => `<button type="button" id="sol-mode-${m}" class="sol-mode-option" role="radio" aria-checked="false">${MODE_INFO[m].label}</button>`).join("")}
     </div>
-    <p class="sol-mode-line"><span id="sol-mode-reads"></span><span id="sol-mode-health"></span></p>
+    <p class="sol-mode-line"><span id="sol-mode-reads"></span><span id="sol-mode-health" aria-live="polite"></span></p>
   `;
   document.body.appendChild(modeEl);
   const modeReads = document.getElementById("sol-mode-reads");
@@ -104,7 +102,8 @@
     const crawl = " — holding to a crawl";
     if (!vis || !Number.isFinite(ageMs) || ageMs < 0) return { state: "degraded", text: "Waiting for the cameras" + crawl };
     if (p && p.status === "loading") return { state: "degraded", text: "Detector loading" + crawl };
-    if (!p || !p.backend || p.backend === "none" || (p.status || "ready") !== "ready") {
+    const status = p && "status" in p ? p.status : "ready";
+    if (!p || p.backend == null || p.backend === "none" || status !== "ready") {
       return { state: "degraded", text: "Detector failed" + crawl };
     }
     const age = (ageMs / 1000).toFixed(1);
@@ -117,7 +116,9 @@
     modeEl.setAttribute("data-mode", mode);
     for (const m of DRIVE_MODES) {
       const btn = document.getElementById(`sol-mode-${m}`);
-      if (btn) btn.setAttribute("aria-checked", String(m === mode));
+      if (!btn) continue;
+      btn.setAttribute("aria-checked", String(m === mode));
+      btn.setAttribute("tabindex", m === mode ? "0" : "-1");
     }
     modeReads.textContent = MODE_INFO[mode].reads;
     // Until a decision names its intent, the status card names who will decide.
@@ -159,30 +160,54 @@
     try {
       const q = new URLSearchParams(location.search);
       q.set("mode", mode);
-      history.replaceState(history.state, "", `${location.pathname || ""}?${q.toString()}`);
+      history.replaceState(history.state, "", `${location.pathname || ""}?${q.toString()}${location.hash || ""}`);
     } catch (_) {}
     if (!fromStrategy) syncStrategy(mode);
     renderMode();
   }
+  const stepMode = (by) =>
+    DRIVE_MODES[(DRIVE_MODES.indexOf(window.SEMIF_DRIVE_MODE) + by + DRIVE_MODES.length) % DRIVE_MODES.length];
   for (const m of DRIVE_MODES) {
-    document.getElementById(`sol-mode-${m}`).addEventListener("click", () => setDriveMode(m));
+    const btn = document.getElementById(`sol-mode-${m}`);
+    btn.addEventListener("click", () => setDriveMode(m));
+    // Arrow keys move along the switch, as in any radio group.
+    btn.addEventListener("keydown", (ev) => {
+      const by = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
+      if (!by) return;
+      ev.preventDefault();
+      const next = stepMode(by);
+      setDriveMode(next);
+      const target = document.getElementById(`sol-mode-${next}`);
+      if (target && target.focus) target.focus();
+    });
   }
+  // M cycles the mode (V already hides the camera view). Not while typing or with a dialog open.
   document.addEventListener("keydown", (ev) => {
-    if (ev.repeat || ev.code !== "KeyV" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (ev.repeat || ev.code !== "KeyM" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (/input|select|textarea/i.test((ev.target && ev.target.tagName) || "")) return;
-    setDriveMode(DRIVE_MODES[(DRIVE_MODES.indexOf(window.SEMIF_DRIVE_MODE) + 1) % DRIVE_MODES.length]);
+    if (document.querySelector("dialog[open]")) return;
+    setDriveMode(stepMode(1));
   });
-  // The dropdown is the bundle's: it may mount after this script. Attach once it exists.
+  // The dropdown is the bundle's: it may mount after this script, and the bundle's own 1/2/3 keys
+  // and strategy buttons set its value without a change event. So the indicator also compares it
+  // every frame (tick) and follows whoever drives.
   let strategyWired = false;
+  function followStrategy() {
+    const select = document.getElementById("strategy-select");
+    if (!select) return;
+    if (select.value === "heuristic" && window.SEMIF_DRIVE_MODE !== "heuristic") setDriveMode("heuristic", true);
+    else if (select.value && select.value !== "heuristic" && window.SEMIF_DRIVE_MODE === "heuristic") setDriveMode(lastModelMode, true);
+  }
   function wireStrategy() {
     const select = document.getElementById("strategy-select");
-    if (strategyWired || !select) return;
-    strategyWired = true;
-    select.addEventListener("change", () => {
-      if (select.value === "heuristic" && window.SEMIF_DRIVE_MODE !== "heuristic") setDriveMode("heuristic", true);
-      else if (select.value !== "heuristic" && window.SEMIF_DRIVE_MODE === "heuristic") setDriveMode(lastModelMode, true);
-    });
-    syncStrategy(window.SEMIF_DRIVE_MODE);
+    if (!select) return;
+    if (!strategyWired) {
+      strategyWired = true;
+      select.addEventListener("change", followStrategy);
+      syncStrategy(window.SEMIF_DRIVE_MODE);
+      return;
+    }
+    followStrategy();
   }
   wireStrategy();
   renderMode();
@@ -669,10 +694,6 @@
       body.state.vision = window.SEMIF_VISION;
       if (Number.isFinite(window.SEMIF_VISION_AT)) body.state.vision_age_ms = Math.round(performance.now() - window.SEMIF_VISION_AT);
     }
-    // The decision path follows the mode on the indicator (#21): heuristic asks the heuristic
-    // scorer; the other two ask SemArbiter.
-    if (window.SEMIF_DRIVE_MODE === "heuristic") body.mode = "heuristic";
-    else if (body.mode === "heuristic") body.mode = "flat";
     if (window.SEMIF_DRIVE_MODE === "vision") {
       body.drive_mode = "vision";
       updateSeenSignal();
