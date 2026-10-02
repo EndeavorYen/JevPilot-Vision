@@ -85,3 +85,33 @@ def test_traffic_models_fit_their_footprints_and_paint_is_picked_per_car():
     assert {look["kind"] for look in got["looks"]} == {"hatch", "sedan", "wagon", "suv", "van", "pickup", "motorcycle"}
     assert all(look["kind"] == "motorcycle" for i, look in enumerate(got["looks"]) if i % 10 == 0)
     assert got["again"] == got["looks"][7], "the same car always looks the same"
+
+
+def test_lathes_face_outward_on_every_axis_and_loft_caps_have_their_own_vertices():
+    """Review: lathes around x and z were inside out; caps shared ring vertices, so ends shaded like domes."""
+    got = _render(
+        "const S = await mod('shapes.js');"
+        "const normalAt = (part, i) => { const p = part.positions, [a, b, c] = part.index.slice(i, i + 3).map((k) => [p[3 * k], p[3 * k + 1], p[3 * k + 2]]);"
+        "  const u = b.map((v, k) => v - a[k]), w = c.map((v, k) => v - a[k]); const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];"
+        "  const centre = [0, 1, 2].map((k) => (a[k] + b[k] + c[k]) / 3); return { n, centre }; };"
+        "const outward = (axis) => { const part = S.lathe([[1, -0.5], [1, 0.5]], { axis, segments: 12 }); let ok = 0, all = 0;"
+        "  for (let i = 0; i < part.index.length; i += 3) { const { n, centre } = normalAt(part, i); const k = { x: 0, y: 1, z: 2 }[axis];"
+        "    const radial = centre.map((v, j) => (j === k ? 0 : v)); all++; if (n[0] * radial[0] + n[1] * radial[1] + n[2] * radial[2] > 0) ok++; } return ok / all; };"
+        "const body = S.loft({ z0: -1, z1: 1, half: () => 1, bottom: () => 0, top: () => 1, around: 12, step: 0.5 });"
+        "const rings = body.positions.length / 3; const sideMax = 5 * 12;"
+        "const capIdx = body.index.slice(4 * 12 * 6);"
+        "out({ x: outward('x'), y: outward('y'), z: outward('z'), shared: capIdx.filter((k) => k < sideMax).length });"
+    )
+    assert got["x"] == 1 and got["y"] == 1 and got["z"] == 1, got
+    assert got["shared"] == 0, "cap triangles use their own copies of the end rings"
+
+
+def test_a_failing_hero_build_rejects_instead_of_throwing_into_the_bundle():
+    got = _render(
+        "const K = await mod('kit.js'); const Group = K.T.Group; K.T.Group = undefined;"  # the build cannot make a group
+        "let threw = false, rejected = false;"
+        "try { const p = window.SEMIF_WORLD_KIT.hero({ sim: { world } }); await p.then(() => {}, () => { rejected = true; }); } catch (e) { threw = true; }"
+        "K.T.Group = Group;"
+        "out({ threw, rejected });"
+    )
+    assert got == {"threw": False, "rejected": True}

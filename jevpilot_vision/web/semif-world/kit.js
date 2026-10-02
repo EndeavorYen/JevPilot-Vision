@@ -61,7 +61,7 @@ export const PALETTE = {
     hair: ["#7d6252", "#a08a78", "#b8a088", "#7a6f68", "#4f4a47"],
     top: ["#e9e4da", "#5f7fa0", "#c4808a", "#7a9a72", "#d9c27a", "#8a6b8f", "#5d8a8c"],
     bottom: ["#5f6f86", "#b7a98c", "#7b7f86", "#e6e1d5"],
-    hat: ["#d8c48e", "#3f5f7f", "#e9e4da"],
+    hat: ["#d8c48e", "#3f5f7f", "#efe8d8"],
     bag: ["#7d6252", "#c9b48e"],
     shades: "#4a4f57",
   },

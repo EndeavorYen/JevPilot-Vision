@@ -89,7 +89,12 @@ function heroModel() {
 window.SEMIF_WORLD_KIT = {
   hero(view) {
     if (view?.sim?.world?.type !== "coast") return undefined;
-    return Promise.resolve(buildHero(heroModel()));
+    // It runs inside the bundle's build(): a failure must reach its .catch, not abort the build.
+    try {
+      return Promise.resolve(buildHero(heroModel()));
+    } catch (err) {
+      return Promise.reject(err);
+    }
   },
 };
 

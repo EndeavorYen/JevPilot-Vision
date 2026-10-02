@@ -2,8 +2,8 @@
 //
 // Sim pedestrians: head, neck, torso, pelvis, arms and legs, with pivots at the shoulders and hips
 // that the bundle swings (`userData.limbs = {legs, arms}`). Build, skin, hair, clothes and
-// accessories vary per id. The lower body is always PALETTE.people.silhouette: the onboard
-// camera's pedestrian mask looks for that dark shape.
+// accessories vary per id. The lower body is always PALETTE.people.silhouette and nothing covers
+// it (no dresses): the onboard camera's pedestrian mask looks for that dark shape.
 //
 // Crowds at the festival, the cafés and the beach are decoration, not in the simulation:
 // instanced, at least 8 m from the lanes, never in the silhouette colour.
@@ -29,7 +29,6 @@ export function pedestrianLook(id) {
     hair: pick(P.hair, 3),
     style: pick(STYLES, 6),
     top: pick(P.top, 9),
-    dress: (h >>> 13) % 5 === 0,
     hat: pick(P.hat, 15),
     bag: (h >>> 18) % 3 === 0 ? pick(P.bag, 20) : null,
     shades: (h >>> 22) % 3 === 0,
@@ -67,7 +66,10 @@ function head(parts, look) {
     parts.add(mat(look.hat), lathe([[0.1, 1.69], [0.1, 1.77], [0.001, 1.78]], { axis: "y", segments: 14 }));
   }
   if (look.style === "cap") {
-    parts.add(mat(look.hat), sphere(0.115, 1.625, 6, 14));
+    // The crown only: the cap sits above the face.
+    const crown = sphere(0.115, 1.625, 6, 14);
+    for (let i = 1; i < crown.positions.length; i += 3) crown.positions[i] = Math.max(1.61, crown.positions[i]);
+    parts.add(mat(look.hat), crown);
     parts.add(mat(look.hat), box(0.14, 0.015, 0.1, 0, 1.68, -0.12));
   }
   if (look.shades) parts.add(mat(P.shades), box(0.15, 0.035, 0.02, 0, 1.62, -0.1));
@@ -88,7 +90,6 @@ export function buildPedestrian(id) {
 
   const body = new Parts();
   body.add(top, scale(lathe([[0.001, 0.95], [0.16, 0.97], [0.18, 1.15], [0.2, 1.33], [0.13, 1.42], [0.001, 1.44]], { axis: "y", segments: 16 }), 1, 1, 0.66));
-  if (look.dress) body.add(top, lathe([[0.17, 0.98], [0.26, 0.58]], { axis: "y", segments: 16 }));
   head(body, look);
   if (look.bag) body.add(mat(look.bag), box(0.06, 0.22, 0.28, 0.22, 1.0, 0.02));
   const torso = new T.Group();
@@ -202,6 +203,9 @@ function figurePart(part) {
   return p.meshes()[0];
 }
 
+// Each part picks its colour from its own bits of the person's look number.
+const SHIFT = { legs: 3, torso: 8, head: 13, hair: 18 };
+
 export function buildCrowds(spots) {
   const group = new T.Group();
   group.name = "semif-crowds";
@@ -218,7 +222,7 @@ export function buildCrowds(spots) {
       pos.set(s.x, s.y, s.z);
       mesh.setMatrixAt(i, m4.compose(pos, q, new T.Vector3(size, size, size)));
       const list = colourOf[part];
-      mesh.setColorAt(i, colour.set(list[(s.look >>> (part.length * 3)) % list.length]));
+      mesh.setColorAt(i, colour.set(list[(s.look >>> SHIFT[part]) % list.length]));
     });
     mesh.castShadow = true;
     mesh.receiveShadow = true;

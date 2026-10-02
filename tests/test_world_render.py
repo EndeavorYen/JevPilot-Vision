@@ -39,7 +39,7 @@ const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: fun
   TextureLoader: class { load(url) { return { url }; } }, RepeatWrapping: 1000, SRGBColorSpace: "srgb",
   WebGLRenderTarget: class { constructor(w, h, o) { this.width = w; this.height = h; this.options = o; this.texture = {}; } dispose() {} },
   OrthographicCamera: class {}, PlaneGeometry: Geo, CylinderGeometry: Geo, BoxGeometry: Geo, ConeGeometry: Geo, mergeGeometries: () => new Geo(),
-  InstancedMesh: class extends Mesh { constructor(g, m, n) { super(g, m); this.count = n; this.matrices = []; } setMatrixAt(i, m) { this.matrices[i] = m; } setColorAt() {} computeBoundingSphere() {} },
+  InstancedMesh: class extends Mesh { constructor(g, m, n) { super(g, m); this.count = n; this.matrices = []; this.colours = []; } setMatrixAt(i, m) { this.matrices[i] = m; } setColorAt(i, c) { this.colours[i] = c.hex; } computeBoundingSphere() {} },
   Matrix4: class { compose() { return this; } }, Quaternion: class { setFromAxisAngle() { return this; } },
   CanvasTexture: class { constructor(c) { this.image = c; } },
   Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } } };

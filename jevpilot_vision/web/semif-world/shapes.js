@@ -61,13 +61,19 @@ export function loft({ z0, z1, half, bottom, top, n = 4, step = 0.06, around = 2
     for (const [key, list] of indexOf) out[key] = { positions: positions.slice(), index: list };
     return out;
   }
+  // Each cap has its own copy of its ring, so its flat normals do not bend the sides.
   for (const [r, sign] of [[0, -1], [zs.length - 1, 1]]) {
-    const c = positions.length / 3;
-    let x = 0, y = 0;
-    for (let k = 0; k < around; k++) y += positions[(r * around + k) * 3 + 1] / around;
-    positions.push(x, y, zs[r]);
+    const first = positions.length / 3;
+    let y = 0;
     for (let k = 0; k < around; k++) {
-      const a = r * around + k, b = r * around + ((k + 1) % around);
+      const i = (r * around + k) * 3;
+      positions.push(positions[i], positions[i + 1], positions[i + 2]);
+      y += positions[i + 1] / around;
+    }
+    const c = positions.length / 3;
+    positions.push(0, y, zs[r]);
+    for (let k = 0; k < around; k++) {
+      const a = first + k, b = first + ((k + 1) % around);
       if (sign < 0) index.push(c, b, a);
       else index.push(c, a, b);
     }
@@ -86,10 +92,13 @@ export function lathe(profile, { axis = "x", segments = 20, phase = 0 } = {}) {
       else positions.push(c, t, s);
     }
   }
+  // Around x or z the axes are a mirror image of the y case, so the winding flips with them.
+  const flip = axis !== "y";
   for (let p = 0; p < profile.length - 1; p++) {
     for (let k = 0; k < segments; k++) {
       const a0 = p * segments + k, a1 = p * segments + ((k + 1) % segments), b0 = a0 + segments, b1 = a1 + segments;
-      index.push(a0, b0, a1, a1, b0, b1);
+      if (flip) index.push(a0, a1, b0, a1, b1, b0);
+      else index.push(a0, b0, a1, a1, b0, b1);
     }
   }
   return { positions, index };
