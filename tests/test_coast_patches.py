@@ -161,6 +161,11 @@ COAST_PATCHES = [
     ("coast-hero", MAIN,
      "d=Jm().then(e=>{",
      "d=(window.SEMIF_WORLD_KIT?.hero?.(this)??Jm()).then(e=>{"),
+    # --- lit signal lamps on the coast are real lights: saturated and bright, so the onboard
+    # camera can read them through ACES (#18). Old maps keep the bundle's pastel lamps.
+    ("coast-signal-lamps", MAIN,
+     'e.mesh.material.color.set(n?[`#f0836b`,`#f4cb69`,`#afdf92`][e.index]:`#34483e`),e.mesh.material.emissive.set(n?[`#98301d`,`#ad770e`,`#508e38`][e.index]:`#000000`),e.mesh.material.emissiveIntensity=n?.9:0',
+     'let L=this.sim.world.type===`coast`;e.mesh.material.color.set(n?(L?[`#ff0800`,`#ff9a00`,`#00ff28`]:[`#f0836b`,`#f4cb69`,`#afdf92`])[e.index]:`#34483e`),e.mesh.material.emissive.set(n?(L?[`#ff0800`,`#ff9a00`,`#00ff28`]:[`#98301d`,`#ad770e`,`#508e38`])[e.index]:`#000000`),e.mesh.material.emissiveIntensity=n?(L?1:.9):0'),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",

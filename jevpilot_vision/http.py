@@ -85,11 +85,25 @@ def reset_vision_slot() -> None:
 
 
 def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
-    from jevpilot_vision.vision import get_vision_encoder
+    from jevpilot_vision import perception, vision
 
     if isinstance(image, dict):
-        return get_vision_encoder().infer_surround_b64(image)
-    return get_vision_encoder().infer_b64(image)
+        evidence = vision.get_vision_encoder().infer_surround_b64(image)
+        front = image["front"]
+    else:
+        evidence = vision.get_vision_encoder().infer_b64(image)
+        front = image
+    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front)
+    return evidence
+
+
+def _perceive_front(perception: Any, decode: Any, front: str) -> Dict[str, Any]:
+    """Objects with range and the light ahead, from the front camera (#18). A detector that fails
+    says so (backend "none"): Vision mode must slow down, not read it as an empty road."""
+    try:
+        return perception.get_perception().front(decode(front))
+    except Exception as err:
+        return {"backend": "none", "objects": [], "signal": {"state": "unknown", "conf": 0.0}, "error": str(err)[:200]}
 
 
 _CAMERA_NAMES = frozenset({"front", "right", "rear", "left"})
