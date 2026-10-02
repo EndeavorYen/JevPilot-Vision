@@ -34,6 +34,37 @@ export const PALETTE = {
   // The festival's colours: sea teal, blue, purple, sand; no signal red, green or cone orange.
   festival: { ink: "#36414f", sand: "#e8d9b5", teal: "#2f8f8f", blue: "#3a5f9a", purple: "#6b5a9a", white: "#f4f1ea" },
   minimap: { sea: "#cfe3ea", building: "#dcdfe4" },
+  // Car paints: white, silver, champagne, teal, navy, wine, olive, sand. No cone orange, no
+  // signal red or green; the wine and the taillights lean blue so warm light keeps them off red.
+  paint: ["#e9e8e3", "#b9bec4", "#d8c7a6", "#3f7f80", "#2e3d5c", "#6a3046", "#6b6f48", "#cdb68f"],
+  // Car parts. Tyres and trim are a dark grey, not black: black reads as a pedestrian.
+  car: {
+    tyre: "#4c4d50",
+    rim: "#a9adb2",
+    disc: "#7d8085",
+    caliper: "#8a8f96",
+    trim: "#55595e",
+    glass: "#45525e",
+    lens: "#e8ecef",
+    taillight: "#663046",
+    interior: "#5b5751",
+    leather: "#7a6458",
+    chrome: "#c9cdd2",
+    plate: "#e7e4dc",
+  },
+  // People. `silhouette` is the sim pedestrians' lower body and the only colour allowed in the
+  // camera's pedestrian mask; crowds never wear it. Skin, hair and leather lean pink or grey: warm
+  // browns turn into the camera's construction orange in the evening light.
+  people: {
+    silhouette: "#202326",
+    skin: ["#e6c2b0", "#d0a690", "#a2827a", "#7a5e58"],
+    hair: ["#7d6252", "#a08a78", "#b8a088", "#7a6f68", "#4f4a47"],
+    top: ["#e9e4da", "#5f7fa0", "#c4808a", "#7a9a72", "#d9c27a", "#8a6b8f", "#5d8a8c"],
+    bottom: ["#5f6f86", "#b7a98c", "#7b7f86", "#e6e1d5"],
+    hat: ["#d8c48e", "#3f5f7f", "#e9e4da"],
+    bag: ["#7d6252", "#c9b48e"],
+    shades: "#4a4f57",
+  },
 };
 
 // The bundle's three.js classes, handed over by its build() through the kit() hook.
@@ -50,6 +81,19 @@ export function resetCaches() {
 export function material(color, opts = {}) {
   const key = `${color}|${JSON.stringify(opts)}`;
   if (!materials.has(key)) materials.set(key, new T.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0, ...opts }));
+  return materials.get(key);
+}
+
+// Clearcoat paint and glass. `name` survives the cache: the bundle hides the `Glass` material in
+// its hood view.
+export function physical(color, opts = {}) {
+  const key = `physical|${color}|${JSON.stringify(opts)}`;
+  if (!materials.has(key)) {
+    const { name, ...rest } = opts;
+    const mat = new T.MeshPhysicalMaterial({ color, roughness: 0.3, metalness: 0.3, ...rest });
+    if (name) mat.name = name;
+    materials.set(key, mat);
+  }
   return materials.get(key);
 }
 
