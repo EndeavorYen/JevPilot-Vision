@@ -634,6 +634,62 @@ class DecisionEngine:
             "explain_bucket": (walked.get("path") or [{}])[-1].get("choice") if walked.get("path") else None,
         }
 
+    @staticmethod
+    def _required_stop_m(state: Dict[str, Any]) -> Optional[float]:
+        """Metres to a stop line the mock must stop at (#17), or None.
+
+        Red, an amber it can still stop for (v^2 / 16, the client's hard-braking distance: amber
+        lasts 2 s and the client's stop-line speed cap slows the car through it anyway), or a stop
+        sign not yet stopped at; never once inside the junction.
+        """
+        inter = state.get("intersection") if isinstance(state.get("intersection"), dict) else None
+        if not inter or inter.get("already_entered"):
+            return None
+        try:
+            dist = float(inter.get("distance_to_line_m"))
+            speed = abs(float(state.get("speed_mps") or 0.0))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(dist) or dist < -0.5:
+            return None
+        signal = str(inter.get("signal") or "").lower()
+        control = str(inter.get("control") or "").lower()
+        if signal == "red":
+            return dist
+        if signal in {"amber", "yellow"} and speed * speed / 16.0 <= dist:
+            return dist
+        if control == "stop" and not inter.get("stop_completed"):
+            return dist
+        return None
+
+    @staticmethod
+    def _stopping_choice(candidates: Dict[str, Any], ids: List[str], dist: float, speed: float) -> Optional[str]:
+        """Fastest safe candidate on a 2 m/s^2 stopping curve that allows for two 0.8 s decisions:
+        the client drops an answer when the light changes colour while it is in flight.
+
+        Close to the line the car creeps: one decision may close at most half of what is left past
+        a 2 m margin, so it never overruns the line before the next answer arrives.
+        """
+        safe = []
+        for cid in ids:
+            vec = candidates.get(cid)
+            if not isinstance(vec, (list, tuple)) or len(vec) < 6 or vec[4]:
+                continue
+            try:
+                speed_c = float(vec[0])
+                if float(vec[3]) > 0.1 or speed_c < 0:  # off the road, or reversing
+                    continue
+                safe.append((cid, speed_c))
+            except (TypeError, ValueError):
+                continue
+        if not safe:
+            return None
+        allowed = min(math.sqrt(2.0 * 2.0 * max(0.0, dist - abs(speed) * 1.6 - 1.0)), max(0.0, dist - 2.0) / 1.6)
+        fits = [item for item in safe if item[1] <= allowed + 1e-6]
+        if fits:
+            return max(fits, key=lambda item: item[1])[0]
+        return min(safe, key=lambda item: item[1])[0]
+
     def _mock_probs(self, option_ids: List[str], choice: str) -> Dict[str, float]:
         probs = {oid: 0.05 for oid in option_ids}
         if option_ids:
@@ -784,6 +840,9 @@ class DecisionEngine:
             state = {}
 
         visual_meta: Dict[str, Any] = {}
+        # Signals and stop signs (#17). Heuristic and raw runs keep their plain ranking, as the
+        # red-light veto in jevpilot_vision/drive.py leaves them alone too.
+        stop_m = None if raw_mode or mode == "heuristic" else self._required_stop_m(state)
         for q_key, q_data in questions.items():
             instructions = q_data.get("instructions", "Choose optimal driving option.")
             criteria = q_data.get("criteria", {})
@@ -803,6 +862,8 @@ class DecisionEngine:
             if q_key == "motion":
                 ids = [o["id"] for o in options]
                 pick = "drive" if "drive" in ids else ids[0]
+                if stop_m is not None and stop_m <= 2.5 and "stop" in ids:
+                    pick = "stop"
                 answers[q_key] = {
                     "choice": pick,
                     "probabilities": self._mock_probs(ids, pick),
@@ -861,6 +922,12 @@ class DecisionEngine:
 
             ranked_candidates.sort(key=lambda x: x[1], reverse=True)
             best_choice = ranked_candidates[0][0]
+            if q_key == "vector" and stop_m is not None and isinstance(candidates, dict):
+                try:
+                    speed_now = float(state.get("speed_mps") or 0.0)
+                except (TypeError, ValueError):
+                    speed_now = 0.0
+                best_choice = self._stopping_choice(candidates, [o["id"] for o in options], stop_m, speed_now) or best_choice
 
             probs = {opt["id"]: 0.05 for opt in options}
             probs[best_choice] = max(0.80, 1.0 - 0.05 * (len(options) - 1))
