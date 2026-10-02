@@ -252,3 +252,33 @@ def test_review5_a_run_whose_shared_tab_check_failed_is_counted():
     rows = [_row("vision", 1, "festival", tab_check="failed"), _row("vision", 2, "festival", tab_check="ok")]
     text = cl.report(cl.summarize(rows))
     assert "tab check could not be made for 1" in text
+
+
+def test_review5_a_busy_server_is_not_an_outage(monkeypatch):
+    """During a Vision drive the server is busy with the detector; one slow /health is not an
+    outage. It is asked again after the drive stopped, a few times."""
+    import urllib.request
+
+    calls = []
+
+    class Res:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        if len(calls) < 3:
+            raise TimeoutError("busy")
+        return Res()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    assert cl.server_ok("http://x") is True and len(calls) == 3
+    calls.clear()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout: (_ for _ in ()).throw(TimeoutError("down")))
+    assert cl.server_ok("http://x") is False

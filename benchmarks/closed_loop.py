@@ -358,15 +358,21 @@ def outcome(run: Dict[str, Any], got: Dict[str, Any]) -> Dict[str, bool]:
     )
 
 
-def server_ok(base: str) -> bool:
-    """The decision server answers its health check (infrastructure, independent of the drive)."""
+def server_ok(base: str, tries: int = 3) -> bool:
+    """The decision server answers its health check (infrastructure, independent of the drive).
+    Asked after the drive stopped, and a few times: a server busy with the detector is not down."""
     import urllib.request
 
-    try:
-        with urllib.request.urlopen(f"{base.rstrip('/')}/health", timeout=10) as res:
-            return 200 <= res.status < 300
-    except Exception:
-        return False
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(f"{base.rstrip('/')}/health", timeout=10) as res:
+                if 200 <= res.status < 300:
+                    return True
+        except Exception:
+            pass
+        if attempt + 1 < tries:
+            time.sleep(5)
+    return False
 
 
 def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -384,6 +390,7 @@ def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
         got = _js(target, _READ)
         if isinstance(got, str):
             got = json.loads(got)
+        _cdp("nav", target, f"{base.rstrip('/')}/openapi.json")  # stop the drive before asking the server
         got["server_ok"] = server_ok(base)
         reason = validate(run, got)
         row.update(got, ok=reason is None)
