@@ -135,8 +135,9 @@ function el(tag) {
     const e = ev || {};
     e.target = e.target || node;
     e.preventDefault = e.preventDefault || function () {};
+    e.stopPropagation = e.stopPropagation || function () { e.__stopped = true; };
     (node.listeners[e.type] || []).forEach((fn) => fn(e));
-    if (node.parentElement && node.parentElement.dispatchEvent && e.bubbles) {
+    if (node.parentElement && node.parentElement.dispatchEvent && e.bubbles && !e.__stopped) {
       node.parentElement.dispatchEvent(e);
     }
   };
@@ -385,6 +386,7 @@ const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
 if (spec.cmd === "mode") {
+  const DRIVE_MODES_T = ["vision", "privileged", "heuristic"];
   const shape = () => {
     const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
     return { drive_mode: body.drive_mode || null, mode: body.mode };
@@ -421,6 +423,18 @@ if (spec.cmd === "mode") {
   document.body.appendChild(dialog);
   document.body.dispatchEvent({ type: "keydown", code: "KeyM", key: "m", bubbles: true });
   steps.push({ at: "key M with a dialog open", mode: window.SEMIF_DRIVE_MODE });
+  // Arrow keys on the switch: they move the mode and stop there (the bundle steers on arrows).
+  const bundleKeys = [];
+  document.addEventListener("keydown", (ev) => bundleKeys.push(ev.key));
+  dialog.open = false;
+  const radio = document.getElementById("sol-mode-" + window.SEMIF_DRIVE_MODE);
+  const before = window.SEMIF_DRIVE_MODE;
+  radio.dispatchEvent({ type: "keydown", key: "ArrowRight", code: "ArrowRight", bubbles: true });
+  steps.push({ at: "arrow right on the switch", from: before, mode: window.SEMIF_DRIVE_MODE, reachedBundle: bundleKeys.slice(),
+    tabindex: DRIVE_MODES_T.map((m) => document.getElementById("sol-mode-" + m).getAttribute("tabindex")) });
+  const live = document.getElementById("sol-mode-announce");
+  const healthEl = document.getElementById("sol-mode-health");
+  steps.push({ at: "live regions", announce: live && live.getAttribute("aria-live"), health: healthEl.getAttribute("aria-live") });
   const h = window.SEMIF_MODE.health;
   const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
   const health = {
@@ -433,6 +447,7 @@ if (spec.cmd === "mode") {
     noStatus: h({ backend: "stub", perception: { backend: "PekingU/rtdetr_r50vd" } }, 400),
     none: h(null, null),
     future: h({ backend: "stub", perception: ready }, -300),
+    notObject: h({ backend: "stub", perception: "failed" }, 400),
   };
   process.stdout.write(JSON.stringify({ steps, stored, urls, strategyChanges, health }));
 } else if (spec.cmd === "shape") {
@@ -906,10 +921,22 @@ function _perspectiveElements(w, h) {
 """
 
 
+def _harness_file() -> str:
+    """The harness outgrew Windows' command-line limit for `node -e`; node requires it from a file
+    (process.argv is the same either way)."""
+    import hashlib
+    import tempfile
+
+    path = Path(tempfile.gettempdir()) / f"semif-overlay-harness-{hashlib.sha1(_HARNESS.encode()).hexdigest()[:12]}.js"
+    if not path.exists():
+        path.write_text(_HARNESS, encoding="utf-8")
+    return path.as_posix()
+
+
 def _run(cmd: dict, view: list[float] | None = None) -> dict:
     view = view if view is not None else _view_at(0.0, 1.4, 8.0)
     proc = subprocess.run(
-        ["node", "-e", _HARNESS, str(OVERLAY_JS), json.dumps(view), json.dumps(cmd)],
+        ["node", "-e", f"require({json.dumps(_harness_file())})", str(OVERLAY_JS), json.dumps(view), json.dumps(cmd)],
         cwd=str(REPO),
         capture_output=True,
         text=True,
@@ -1141,7 +1168,8 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat"}
     assert steps["click privileged"]["select"] == "semif"
     assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
-    assert out["stored"]["semif.driveMode"] == out["steps"][-1]["mode"], "the last choice is remembered"
+    last = [s["mode"] for s in out["steps"] if "mode" in s][-1]
+    assert out["stored"]["semif.driveMode"] == last, "the last choice is remembered"
     # The address follows (other parameters kept): vision, heuristic, privileged for the three clicks.
     assert out["urls"][:3] == ["/jevpilot/?vision=0&mode=vision", "/jevpilot/?vision=0&mode=heuristic", "/jevpilot/?vision=0&mode=privileged"]
 
@@ -1177,7 +1205,8 @@ def test_vision_health_says_when_the_car_is_held_to_a_crawl():
     assert h["noStatus"]["state"] == "ok"
     for key, words in [("loading", "Detector loading"), ("failed", "Detector failed"), ("nullStatus", "Detector failed"),
                        ("stale", "Evidence 2.1 s old"),
-                       ("none", "Waiting for the cameras"), ("future", "Waiting for the cameras")]:
+                       ("none", "Waiting for the cameras"), ("future", "Waiting for the cameras"),
+                       ("notObject", "Detector failed")]:
         assert h[key]["state"] == "degraded", key
         assert h[key]["text"].startswith(words) and h[key]["text"].endswith("holding to a crawl"), h[key]
 
@@ -1187,3 +1216,19 @@ def test_before_any_decision_the_status_names_the_mode_that_will_decide():
     steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
     assert steps["click heuristic"]["intent"] == "Heuristic"
     assert steps["click privileged"]["intent"] == "SemArbiter"
+
+
+def test_review2_arrow_keys_on_the_switch_change_the_mode_and_never_reach_the_driving_keys():
+    """The bundle steers (and drops autopilot) on arrow keys it hears on window; a keyboard user
+    moving along the switch must not steer the car. One tab stop: the selected mode."""
+    steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "vision"})["steps"]}
+    arrow = steps["arrow right on the switch"]
+    order = ["vision", "privileged", "heuristic"]
+    assert arrow["mode"] == order[(order.index(arrow["from"]) + 1) % 3]
+    assert arrow["reachedBundle"] == []
+    assert arrow["tabindex"] == ["0" if m == arrow["mode"] else "-1" for m in order]
+
+
+def test_review2_only_health_changes_are_announced_not_every_age_tick():
+    live = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["live regions"]
+    assert live["announce"] == "polite" and live["health"] is None

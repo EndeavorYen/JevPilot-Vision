@@ -81,11 +81,13 @@
     <div class="sol-mode-switch" role="radiogroup" aria-label="Driving mode" title="Driving mode · M">
       ${DRIVE_MODES.map((m) => `<button type="button" id="sol-mode-${m}" class="sol-mode-option" role="radio" aria-checked="false">${MODE_INFO[m].label}</button>`).join("")}
     </div>
-    <p class="sol-mode-line"><span id="sol-mode-reads"></span><span id="sol-mode-health" aria-live="polite"></span></p>
+    <p class="sol-mode-line"><span id="sol-mode-reads"></span><span id="sol-mode-health"></span></p>
+    <span id="sol-mode-announce" class="sol-visually-hidden"></span>
   `;
   document.body.appendChild(modeEl);
   const modeReads = document.getElementById("sol-mode-reads");
   const modeHealth = document.getElementById("sol-mode-health");
+  document.getElementById("sol-mode-announce").setAttribute("aria-live", "polite");
   let lastModelMode = window.SEMIF_DRIVE_MODE === "vision" ? "vision" : "privileged";
   let modeFrames = 0;
 
@@ -98,7 +100,7 @@
     return /siglip/i.test(b) ? "SigLIP" : b.split("/").pop();
   }
   function modeHealthOf(vis, ageMs) {
-    const p = vis && vis.perception;
+    const p = vis && vis.perception && typeof vis.perception === "object" ? vis.perception : null;
     const crawl = " — holding to a crawl";
     if (!vis || !Number.isFinite(ageMs) || ageMs < 0) return { state: "degraded", text: "Waiting for the cameras" + crawl };
     if (p && p.status === "loading") return { state: "degraded", text: "Detector loading" + crawl };
@@ -128,10 +130,20 @@
     }
     renderModeHealth();
   }
+  // Screen readers hear the mode and a change of health (ready / which failure), not every tick
+  // of the evidence age.
+  let announced = "";
+  function announce(text) {
+    if (text === announced) return;
+    announced = text;
+    const live = document.getElementById("sol-mode-announce");
+    if (live) live.textContent = text;
+  }
   function renderModeHealth() {
     if (window.SEMIF_DRIVE_MODE !== "vision") {
       modeEl.setAttribute("data-health", "");
       modeHealth.textContent = "";
+      announce(`${MODE_INFO[window.SEMIF_DRIVE_MODE].label} mode`);
       return;
     }
     const age = Number.isFinite(window.SEMIF_VISION_AT) ? performance.now() - window.SEMIF_VISION_AT : NaN;
@@ -139,6 +151,7 @@
     modeEl.setAttribute("data-health", h.state);
     modeHealth.textContent = h.text;
     modeHealth.setAttribute("title", h.text);
+    announce(h.state === "ok" ? "Vision mode, detector ready" : `Vision mode, ${h.text.split(" — ")[0]}, holding to a crawl`);
   }
 
   // The bundle's strategy dropdown is the switch for SemArbiter vs the heuristic; it follows the
@@ -175,6 +188,7 @@
       const by = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
       if (!by) return;
       ev.preventDefault();
+      ev.stopPropagation(); // the bundle steers, and drops autopilot, on arrows that reach window
       const next = stepMode(by);
       setDriveMode(next);
       const target = document.getElementById(`sol-mode-${next}`);
