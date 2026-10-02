@@ -1115,14 +1115,21 @@ def _six_column_candidates(payload: Dict[str, Any]) -> bool:
 async def classifier_endpoint(payload: Dict[str, Any]):
     if _payload_has_pixels(payload):
         raise HTTPException(status_code=422, detail="image is not accepted")
-    if _six_column_candidates(payload):
-        try:
-            from jevpilot_vision.drive import score_drive_request
-        except ModuleNotFoundError:
-            logger.warning("jevpilot_vision is missing; refusing a six-column driving request")
-            raise HTTPException(status_code=500, detail="driving package is not available")
-        return score_drive_request(get_engine(), payload)
-    return get_engine().classify_jev(payload)
+    try:
+        if _six_column_candidates(payload):
+            try:
+                from jevpilot_vision.drive import score_drive_request
+            except ModuleNotFoundError:
+                logger.warning("jevpilot_vision is missing; refusing a six-column driving request")
+                raise HTTPException(status_code=503, detail="driving package is not available")
+            return score_drive_request(get_engine(), payload)
+        return get_engine().classify_jev(payload)
+    # The model server behind this one (SemArbiter) down or hung is an outage, not this service
+    # failing: gateway statuses, which the closed-loop evaluation keeps apart from a 500 (#28).
+    except httpx.TimeoutException as err:
+        raise HTTPException(status_code=504, detail=f"model server timed out: {err}")
+    except (httpx.HTTPStatusError, httpx.RequestError) as err:
+        raise HTTPException(status_code=502, detail=f"model server unavailable: {err}")
 
 
 @app.post("/decide")

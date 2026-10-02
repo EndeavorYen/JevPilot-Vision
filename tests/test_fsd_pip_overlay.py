@@ -228,6 +228,13 @@ let search = specEarly.vision === "1" ? "" : "?vision=0";
 if (specEarly.lap === "1") search += (search ? "&" : "?") + "lap=1";
 if (specEarly.fleet) search += (search ? "&" : "?") + "fleet=" + specEarly.fleet;
 if (specEarly.mode) search += (search ? "&" : "?") + "mode=" + specEarly.mode;
+if (specEarly.lag) search += (search ? "&" : "?") + "lag_ms=" + specEarly.lag;
+// Latency stress (#28): timers the overlay sets, and when the decision request really goes out.
+const timers = [];
+const sentAt = [];
+if (specEarly.cmd === "lag") {
+  global.setTimeout = (fn, ms) => { timers.push(ms); fn(); return timers.length; };
+}
 const location = { search };
 let nowMs = 0;
 const window = global;
@@ -322,6 +329,24 @@ if (specEarly.cmd === "fleet") {
     return Promise.resolve({ ok: true, json: async () => ({ policy: sent.policy, decisions }) });
   };
 }
+// Classifier replies in order: ok JSON, an HTTP 500 error page, a network failure, ok JSON that
+// is not JSON (#28: the evaluation counts request failures from the page, not from event text).
+if (specEarly.cmd === "cstats") {
+  const replies = [
+    () => Promise.resolve({ ok: true, status: 200, statusText: "OK", json: async () => ({ answers: {} }), text: async () => "{}" }),
+    () => Promise.resolve({ ok: false, status: 500, statusText: "Internal Server Error",
+      json: async () => { throw new SyntaxError("Unexpected token 'I'"); }, text: async () => "Internal Server Error" }),
+    () => Promise.reject(new TypeError("Failed to fetch")),
+    () => Promise.resolve({ ok: true, status: 200, statusText: "OK",
+      json: async () => { throw new SyntaxError("bad"); }, text: async () => "<html>" }),
+    () => Promise.resolve({ ok: false, status: 503, statusText: "Service Unavailable",
+      json: async () => ({}), text: async () => "{}" }),
+    () => Promise.reject(Object.assign(new Error("signal timed out"), { name: "TimeoutError" })),
+  ];
+  let at = 0;
+  window.fetch = () => replies[Math.min(at++, replies.length - 1)]();
+  global.Response = class { constructor(body, init) { this.body = body; this.status = init && init.status; this.ok = this.status >= 200 && this.status < 300; } };
+}
 window.URL = { createObjectURL: () => "blob:pip", revokeObjectURL() {} };
 // Per-browser storage and the address bar, for the driving-mode preference (#21).
 const stored = Object.assign({}, specEarly.storage || {});
@@ -385,7 +410,25 @@ const spec = specEarly;
 const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
-if (spec.cmd === "mode") {
+if (spec.cmd === "cstats") {
+  (async () => {
+    const outcomes = [];
+    for (let i = 0; i < 6; i++) {
+      try {
+        const res = await window.fetch("/v1/classifier", { method: "POST", body: JSON.stringify({ mode: "flat", state: {} }) });
+        outcomes.push(res.status);
+      } catch (err) {
+        outcomes.push("threw");
+      }
+    }
+    process.stdout.write(JSON.stringify({ outcomes, stats: window.SEMIF_CLASSIFIER_STATS }));
+  })();
+} else if (spec.cmd === "lag") {
+  (async () => {
+    await window.fetch("/v1/classifier", { method: "POST", body: JSON.stringify({ mode: "flat", state: {} }) });
+    process.stdout.write(JSON.stringify({ timers, lag: window.SEMIF_LAG_MS }));
+  })();
+} else if (spec.cmd === "mode") {
   const DRIVE_MODES_T = ["vision", "privileged", "heuristic"];
   const shape = () => {
     const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
@@ -1256,3 +1299,26 @@ def test_review2_only_health_changes_are_announced_not_every_age_tick():
     said = steps["announcements"]["said"]
     assert said[0] == said[1] == "Vision mode, evidence stale, holding to a crawl", said
     assert said[2] == "Vision mode, detector failed, holding to a crawl", said
+
+
+def test_lag_ms_holds_every_decision_request_back_by_that_long():
+    """#28: ?lag_ms= stresses the loop with a slower decision path, to see whether a result holds
+    only at one timing. Without it nothing waits."""
+    lagged = _run({"cmd": "lag", "lag": "300"})
+    assert lagged["lag"] == 300 and 300 in lagged["timers"]
+    plain = _run({"cmd": "lag"})
+    assert plain["lag"] == 0 and 300 not in plain["timers"]
+    assert _run({"cmd": "lag", "lag": "-5"})["lag"] == 0, "nonsense is no lag"
+    # Review #28: the bundle drops a decision older than 1.8 s from when it asked, lag included, so
+    # a stress above 1.2 s would only park the car.
+    assert _run({"cmd": "lag", "lag": "5000"})["lag"] == 1200
+
+
+def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
+    """#28: whether the decision path failed (HTTP error, network failure, a reply that is not
+    JSON) is counted where the requests are made, not guessed from the bundle's event text."""
+    out = _run({"cmd": "cstats"})
+    assert out["outcomes"] == [200, 500, "threw", 200, 503, "threw"]
+    # Review #28 (8): an outage (network failure, 502/503/504) is told apart from a failure of the
+    # system under test (a 500, a 12 s timeout, a reply that is not JSON).
+    assert out["stats"] == {"ok": 1, "http_errors": 1, "network_errors": 1, "bad_replies": 1, "gateway_errors": 1, "timeouts": 1}

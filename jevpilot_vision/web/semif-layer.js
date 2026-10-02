@@ -18,6 +18,11 @@
     : DRIVE_MODES.includes(modeSaved)
       ? modeSaved
       : "privileged";
+  // Latency stress (#28, benchmarks/closed_loop.py --lag-ms): every decision request waits this long
+  // before it goes out, to see whether a result holds only at one timing. At most 1.2 s: the bundle
+  // drops a decision that arrives 1.8 s after it asked, lag included, so more would only park the car.
+  const lagParam = Number(params.get("lag_ms"));
+  window.SEMIF_LAG_MS = Number.isFinite(lagParam) && lagParam > 0 ? Math.min(lagParam, 1200) : 0;
   const seedParam = params.get("seed");
   if (seedParam && Number.isFinite(Number(seedParam))) {
     window.SEMIF_SEED = Number(seedParam);
@@ -788,6 +793,13 @@
   window.SEMIF_UPDATE_SEEN = updateSeenSignal;
 
   const origFetch = window.fetch.bind(window);
+  // How the decision path's requests went, for the closed-loop evaluation (#28): counted where the
+  // requests are made. An outage (the request never reached a working server: a network failure, a
+  // 502/503/504) is told apart from the system under test failing (a 500, the bundle's 12 s
+  // timeout, a reply that is not JSON).
+  window.SEMIF_CLASSIFIER_STATS = { ok: 0, http_errors: 0, network_errors: 0, bad_replies: 0, gateway_errors: 0, timeouts: 0 };
+  const isTimeout = (err) => !!err && (err.name === "TimeoutError" || err.name === "AbortError");
+  const classifierStats = window.SEMIF_CLASSIFIER_STATS;
   window.fetch = function (url, opts) {
     const href = typeof url === "string" ? url : url && url.url;
     if (href && href.indexOf("/classifier") !== -1 && opts && typeof opts.body === "string") {
@@ -797,14 +809,30 @@
       } catch (_err) {
         /* leave request unchanged */
       }
-      const tClass = performance.now();
-      return origFetch(url, opts).then(async (res) => {
+      let tClass = performance.now();
+      // The classifier's latency is timed from when the request really goes out (after any lag).
+      const sent = window.SEMIF_LAG_MS > 0
+        ? new Promise((resolve) => setTimeout(resolve, window.SEMIF_LAG_MS)).then(() => {
+            tClass = performance.now();
+            return origFetch(url, opts);
+          })
+        : origFetch(url, opts);
+      return sent.then(async (res) => {
+        if ([502, 503, 504].includes(res.status)) classifierStats.gateway_errors += 1;
+        else if (!res.ok) classifierStats.http_errors += 1;
         let data;
+        let raw = "";
         try {
-          data = await res.json();
-        } catch (_err) {
-          return res;
+          raw = await res.text();
+          data = JSON.parse(raw);
+        } catch (err) {
+          if (isTimeout(err)) classifierStats.timeouts += 1;
+          else if (res.ok) classifierStats.bad_replies += 1;
+          // The body is read: hand the bundle a fresh response with the same text, status and
+          // headers (the original's body is used and cannot be read again).
+          return new Response(raw, { status: res.status, statusText: res.statusText, headers: res.headers });
         }
+        if (res.ok) classifierStats.ok += 1;
         try {
           data = fillJevAnswers(data, JSON.parse(opts.body));
         } catch (_err) {
@@ -827,6 +855,10 @@
           statusText: res.statusText,
           headers: { "Content-Type": "application/json" },
         });
+      }, (err) => {
+        if (isTimeout(err)) classifierStats.timeouts += 1;
+        else classifierStats.network_errors += 1;
+        throw err;
       });
     }
     return origFetch(url, opts);
