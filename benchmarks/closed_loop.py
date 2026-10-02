@@ -102,8 +102,13 @@ def read_rows(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def _complete_row(row: Dict[str, Any]) -> bool:
+    """An ok row written under the current rules (with its outcomes)."""
+    return bool(row.get("ok")) and "stalled" in row
+
+
 def pending(plan: List[Dict[str, Any]], done: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen = {_key(r) for r in done if r.get("ok")}
+    seen = {_key(r) for r in done if _complete_row(r)}
     return [run for run in plan if _key(run) not in seen]
 
 
@@ -160,7 +165,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         return {"runs": 0, "attempts": 0, "retried": 0, "failed_runs": 0, "failures": {}, "never_driven": [],
                 "distance_km": 0.0, "runs_with_red_light": 0, "red_light_events": 0, "runs_with_collision": 0,
                 "collision_events": 0, "pedestrian_casualties": 0, "crashes": 0, "runs_disengaged": 0,
-                "runs_stalled": 0, "runs_broke": 0, "drove": 0, "drove_with_red_light": 0, "drove_with_collision": 0}
+                "runs_stalled": 0, "runs_broke": 0, "runs_arrived": 0, "drove": 0, "drove_with_red_light": 0,
+                "drove_with_collision": 0}
 
     # Every attempt is visible: a run that needed retries says so.
     failed_keys = set()
@@ -192,8 +198,10 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         s["runs_disengaged"] += 1 if row.get("disengaged") else 0
         s["runs_stalled"] += 1 if row.get("stalled") else 0
         s["runs_broke"] += 1 if row.get("broke") else 0
-        # Violation rates are over runs that really drove: a parked or given-up car commits none.
-        if not (row.get("disengaged") or row.get("stalled") or row.get("broke")):
+        s["runs_arrived"] += 1 if row.get("arrived") else 0
+        # Violation rates are over runs that moved: a car that never moved commits none. A run that
+        # ran a red light and then gave up (or broke) still ran it.
+        if not row.get("stalled"):
             s["drove"] += 1
             s["drove_with_red_light"] += 1 if red else 0
             s["drove_with_collision"] += 1 if hits or row.get("crash") else 0
@@ -224,12 +232,13 @@ def report(summary: Dict[Group, Dict[str, Any]]) -> str:
             lines.append(f"  could not be driven {s['failed_runs']} (setup, left out of the rates): {why}; "
                          f"never driven: seeds {s['never_driven']}")
         lines.append(f"  autopilot gave up {_share(s['runs_disengaged'], n)}; car did not move {_share(s['runs_stalled'], n)}; "
-                     f"drive broke (page stopped) {_share(s['runs_broke'], n)}")
+                     f"drive broke (page stopped) {_share(s['runs_broke'], n)}; arrived {s['runs_arrived']}")
         d = s["drove"]
-        lines.append(f"  red light {_share(s['drove_with_red_light'], d).replace(' runs', ' runs that drove', 1)} "
-                     f"({s['runs_with_red_light']}/{n} of all runs); {s['red_light_events']} events, {per_km(s['red_light_per_km'])}")
-        lines.append(f"  collision {_share(s['drove_with_collision'], d).replace(' runs', ' runs that drove', 1)} "
-                     f"({s['runs_with_collision']}/{n} of all runs); {s['collision_events']} events, {per_km(s['collisions_per_km'])}")
+        moved = lambda k: _share(k, d).replace(" runs", " runs that moved", 1)
+        lines.append(f"  red light {moved(s['drove_with_red_light'])} · {_share(s['runs_with_red_light'], n).replace(' runs', ' of all runs', 1)}"
+                     f"; {s['red_light_events']} events, {per_km(s['red_light_per_km'])}")
+        lines.append(f"  collision {moved(s['drove_with_collision'])} · {_share(s['runs_with_collision'], n).replace(' runs', ' of all runs', 1)}"
+                     f"; {s['collision_events']} events, {per_km(s['collisions_per_km'])}")
         lines.append(f"  of those, pedestrians {s['pedestrian_casualties']}; a collision ends the drive")
     lines.append(CONSTANTS_NOTE)
     return "\n".join(lines)
@@ -267,7 +276,7 @@ _START = (
 )
 _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
-    " return { engaged: window.__eval.engaged, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
+    " return { engaged: window.__eval.engaged, complete: !!s.complete, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -309,22 +318,37 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"page lag {got.get('lag_seen')} ms"
     if got.get("engaged") is False:
         return "autopilot never engaged"
-    if not got.get("autopilot") and not got.get("crash") and any("failed requests" in str(e) for e in got.get("events") or []):
-        return "decision service failed (the bundle paused after three failed requests)"
+    if got.get("server_ok") is False:
+        return "decision server unreachable after the run"
     return None
 
 
 def outcome(run: Dict[str, Any], got: Dict[str, Any]) -> Dict[str, bool]:
     """Results that are not violations but are not good drives either: the autopilot gave up
     (three failed or expired decisions), or the car hardly moved. A crash is its own result."""
+    none = {"disengaged": False, "stalled": False, "broke": False, "arrived": False}
     if got.get("crash"):
-        return {"disengaged": False, "stalled": False, "broke": False}
-    return {
-        "disengaged": not got.get("autopilot"),
-        "stalled": float(got.get("distance_m") or 0) < STALL_MPS * run["seconds"],
+        return none
+    if got.get("complete"):
+        return dict(none, arrived=True)  # reaching the destination turns the autopilot off
+    return dict(
+        none,
+        disengaged=not got.get("autopilot"),
+        stalled=float(got.get("distance_m") or 0) < STALL_MPS * run["seconds"],
         # The page stopped stepping while the car drove (a freeze, an error): a result, not setup.
-        "broke": float(got.get("sim_time_s") or 0) < MIN_SIM_SHARE * run["seconds"],
-    }
+        broke=float(got.get("sim_time_s") or 0) < MIN_SIM_SHARE * run["seconds"],
+    )
+
+
+def server_ok(base: str) -> bool:
+    """The decision server answers its health check (infrastructure, independent of the drive)."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{base.rstrip('/')}/health", timeout=10) as res:
+            return 200 <= res.status < 300
+    except Exception:
+        return False
 
 
 def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -342,6 +366,7 @@ def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
         got = _js(target, _READ)
         if isinstance(got, str):
             got = json.loads(got)
+        got["server_ok"] = server_ok(base)
         reason = validate(run, got)
         row.update(got, ok=reason is None)
         if reason:
@@ -373,7 +398,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.report:
         kept, dropped = current_rows(read_rows(args.report), load_seeds())
         if dropped:
-            print(f"left out {len(dropped)} held_out rows whose seeds are no longer held out")
+            print(f"left out {len(dropped)} rows: no seed set, written before outcomes were recorded, "
+                  "or a held_out seed that has since been looked into")
         print(report(summarize(kept)))
         return 0
     if not args.out or not args.out.is_absolute():
@@ -398,11 +424,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 def _drive_all(args: argparse.Namespace, todo: List[Dict[str, Any]], target: str) -> None:
     for i, run in enumerate(todo, 1):
-        others = [t for t in _jevpilot_tabs() if t != target]
+        try:
+            others = [t for t in _jevpilot_tabs() if t != target]
+        except Exception:
+            others = []  # could not check; the check after the run records it
         if others:
             raise SystemExit(f"another simulation tab {others} opened during the evaluation: it shares the vision slot")
         row = drive(target, args.base, run)
-        if [t for t in _jevpilot_tabs() if t != target]:
+        try:
+            shared = [t for t in _jevpilot_tabs() if t != target]
+            row["tab_check"] = "ok"
+        except Exception:
+            shared = []
+            row["tab_check"] = "failed"  # the run is kept; the check could not be made
+        if shared:
             # Another tab shared the vision slot during this run: its evidence is not this drive's.
             row.update(ok=False, error="another simulation tab shared the vision slot during the run")
             row["set"] = args.set
