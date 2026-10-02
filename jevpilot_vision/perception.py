@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
@@ -102,7 +103,7 @@ def classify_light(crop: np.ndarray) -> str:
     ) * 60.0
     counts = {
         "red": int(np.count_nonzero((hue < 18) | (hue > 340))),
-        "amber": int(np.count_nonzero((hue >= 25) & (hue <= 58))),
+        "amber": int(np.count_nonzero((hue >= 25) & (hue <= 62))),  # a clipped amber core is pure yellow
         "green": int(np.count_nonzero((hue >= 85) & (hue <= 165))),
     }
     state, n = max(counts.items(), key=lambda kv: kv[1])
@@ -177,23 +178,41 @@ def perceive(
     if tracker is not None:
         objects = tracker.update(objects, time.monotonic() if t is None else t)
 
-    # The light that governs us is ahead, near the middle of the view, above the horizon.
+    # The light that governs us is ahead, above the horizon, near the middle of the view; the
+    # biggest such box is the nearest. Readable lights that disagree give no answer at all.
     signal = {"state": "unknown", "conf": 0.0}
     h, w = image.shape[0], image.shape[1]
-    for det in sorted(lights, key=lambda d: -d["conf"]):
+    readable = []
+    for det in lights:
         x0, y0, x1, y1 = det["box"]
-        if abs((x0 + x1) / 2.0 - camera.cx) > 0.35 * camera.width or (y0 + y1) / 2.0 > camera.cy:
+        off = abs((x0 + x1) / 2.0 - camera.cx) / (0.35 * camera.width)
+        if off > 1.0 or (y0 + y1) / 2.0 > camera.cy:
             continue
         crop = image[max(0, int(y0)) : min(h, int(math.ceil(y1))), max(0, int(x0)) : min(w, int(math.ceil(x1)))]
         state = classify_light(crop)
         if state != "unknown":
+            readable.append(((x1 - x0) * (y1 - y0) * (1.0 - 0.5 * off), state, det))
+    if readable:
+        readable.sort(key=lambda r: -r[0])
+        states = {state for _, state, _ in readable}
+        if len(states) == 1:
+            _, state, det = readable[0]
             signal = {"state": state, "conf": round(float(det["conf"]), 3), "box": [round(v, 1) for v in det["box"]]}
-            break
+        else:
+            signal = {"state": "unknown", "conf": 0.0, "conflict": sorted(states)}
     return {"backend": backend, "objects": objects, "signal": signal}
 
 
 class Tracker:
-    """Matches each object to the same kind nearby in the previous frame, for a closing speed."""
+    """Matches each object to the same kind nearby in the previous frame, for a closing speed.
+
+    Pairs are one to one, nearest first. A pair that would mean more than 40 m/s is two different
+    objects. After a gap of more than half a second, or if time runs backwards (a reload), nothing
+    is matched.
+    """
+
+    MAX_GAP_S = 0.5
+    MAX_SPEED_MPS = 40.0
 
     def __init__(self, gate_m: float = 3.0) -> None:
         self.gate_m = gate_m
@@ -202,59 +221,110 @@ class Tracker:
 
     def update(self, objects: List[Dict[str, Any]], t: float) -> List[Dict[str, Any]]:
         dt = None if self.prev_t is None else t - self.prev_t
-        out = []
-        for obj in objects:
-            closing = 0.0
-            if dt and dt > 0:
-                same = [p for p in self.prev if p["kind"] == obj["kind"]]
-                best = min(same, key=lambda p: math.hypot(p["ahead_m"] - obj["ahead_m"], p["right_m"] - obj["right_m"]), default=None)
-                if best and math.hypot(best["ahead_m"] - obj["ahead_m"], best["right_m"] - obj["right_m"]) <= self.gate_m:
-                    closing = (best["ahead_m"] - obj["ahead_m"]) / dt
-            out.append({**obj, "closing_mps": round(closing, 2)})
+        closing = [0.0] * len(objects)
+        if dt is not None and 0 < dt <= self.MAX_GAP_S:
+            pairs = []
+            for i, obj in enumerate(objects):
+                for j, old in enumerate(self.prev):
+                    if old["kind"] != obj["kind"]:
+                        continue
+                    d = math.hypot(old["ahead_m"] - obj["ahead_m"], old["right_m"] - obj["right_m"])
+                    if d <= self.gate_m and d / dt <= self.MAX_SPEED_MPS:
+                        pairs.append((d, i, j))
+            used_i, used_j = set(), set()
+            for _, i, j in sorted(pairs):
+                if i in used_i or j in used_j:
+                    continue
+                used_i.add(i)
+                used_j.add(j)
+                closing[i] = (self.prev[j]["ahead_m"] - objects[i]["ahead_m"]) / dt
+        out = [{**obj, "closing_mps": round(c, 2)} for obj, c in zip(objects, closing)]
         self.prev, self.prev_t = out, t
         return out
 
 
+def pick_device(cuda: Optional[bool] = None) -> Optional[str]:
+    """Where the detector runs: CUDA when there is one, the CPU only when asked for
+    (SEMIF_PERCEPTION_DEVICE=cpu; r50 at 640x640 per frame is slow there), else nowhere."""
+    if os.environ.get("SEMIF_PERCEPTION", "1") == "0":
+        return None
+    asked = os.environ.get("SEMIF_PERCEPTION_DEVICE")
+    if asked:
+        return asked
+    if cuda is None:
+        try:
+            import torch
+
+            cuda = bool(torch.cuda.is_available())
+        except Exception:
+            cuda = False
+    return "cuda" if cuda else None
+
+
 class Detector:
     """RT-DETR with its pre- and post-processing done here (transformers' image processors need
-    torchvision, which is not a dependency). Loads lazily; if it cannot, `available` is False."""
+    torchvision, which is not a dependency). The weights load in a background thread on first
+    use; until then each frame reports "loading" instead of waiting (status: off / loading /
+    ready / failed)."""
 
     def __init__(self, model_id: Optional[str] = None, device: Optional[str] = None, threshold: float = 0.35) -> None:
         self.model_id = model_id or os.environ.get("SEMIF_DETECTOR", DEFAULT_DETECTOR)
         self.device = device
         self.threshold = threshold
+        self.status = "off"
         self._model = None
-        self._tried = False
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
 
-    @property
-    def available(self) -> bool:
-        self._load()
-        return self._model is not None
+    def _build(self, device: str) -> Any:
+        import torch
+        from transformers import AutoModelForObjectDetection
 
-    def _load(self) -> None:
-        if self._tried:
-            return
-        self._tried = True
-        if os.environ.get("SEMIF_PERCEPTION", "1") == "0":
-            return
+        self._torch = torch
+        return AutoModelForObjectDetection.from_pretrained(self.model_id).to(device).eval()
+
+    def _load(self, device: str) -> None:
         try:
-            import torch
-            from transformers import AutoModelForObjectDetection
-
-            device = self.device or os.environ.get("SEMIF_PERCEPTION_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
-            self._model = AutoModelForObjectDetection.from_pretrained(self.model_id).to(device).eval()
+            self._model = self._build(device)
             self.device = device
-            self._torch = torch
+            self.status = "ready"
             logger.info("perception: %s on %s", self.model_id, device)
         except Exception as err:  # no weights, no torch, no network: Vision mode must know
             logger.warning("perception: detector unavailable (%s)", err)
-            self._model = None
+            self.status = "failed"
+
+    def start(self) -> None:
+        """Begin loading the weights in the background (once)."""
+        with self._lock:
+            if self._thread is not None or self.status != "off":
+                return
+            device = self.device or pick_device()
+            if device is None:
+                self.status = "failed"
+                return
+            self.status = "loading"
+            self._thread = threading.Thread(target=self._load, args=(device,), name="perception-load", daemon=True)
+            self._thread.start()
+
+    def wait(self, timeout: Optional[float] = None) -> str:
+        """Block until loading finishes (benchmarks and tests); returns the status."""
+        self.start()
+        if self._thread is not None:
+            self._thread.join(timeout)
+        return self.status
+
+    def detect_or_status(self, image: Any) -> tuple:
+        """(status, detections in pixels of `image`); detections only when the model is ready."""
+        if self.status == "off":
+            self.start()
+        if self.status != "ready":
+            return self.status, None
+        return "ready", self._detect(image)
 
     def detect(self, image: Any) -> Optional[List[Dict[str, Any]]]:
-        """Detections in pixels of `image` (PIL), or None when there is no detector."""
-        self._load()
-        if self._model is None:
-            return None
+        return self.detect_or_status(image)[1]
+
+    def _detect(self, image: Any) -> List[Dict[str, Any]]:
         torch = self._torch
         rgb = image.convert("RGB")
         width, height = rgb.size
@@ -281,7 +351,7 @@ class Perception:
     def front(self, image: Any, t: Optional[float] = None) -> Dict[str, Any]:
         t0 = time.perf_counter()
         width, height = image.size
-        detections = self.detector.detect(image)
+        status, detections = self.detector.detect_or_status(image)
         out = perceive(
             detections,
             np.asarray(image.convert("RGB")),
@@ -290,6 +360,7 @@ class Perception:
             tracker=self.tracker,
             t=t,
         )
+        out["status"] = status  # loading / failed / ready: why a frame has no detections
         out["latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
         return out
 

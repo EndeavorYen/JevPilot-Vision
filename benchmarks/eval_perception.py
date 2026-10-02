@@ -21,6 +21,8 @@ from jevpilot_vision.perception import Detector, Perception
 
 def main(folders: list[str]) -> None:
     perception = Perception(Detector())
+    if perception.detector.wait() != "ready":
+        raise SystemExit("perception: no detector (needs CUDA, or SEMIF_PERCEPTION_DEVICE=cpu)")
     bands = {"<=15m": [0, 0, 0], "15-25m": [0, 0, 0], "25-50m": [0, 0, 0]}
     found: dict[str, list] = {}
     latency = []

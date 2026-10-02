@@ -166,3 +166,68 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     evidence = http._infer_latest_jpeg(frames)
     assert evidence["perception"]["backend"] == "none", "a failed detector is reported, never a clear road"
     assert evidence["perception"]["objects"] == [] and "error" in evidence["perception"]
+
+
+def test_a_saturated_amber_core_is_still_amber():
+    """Review: when red and green both clip, the lamp's core is pure yellow (hue 60)."""
+    assert classify_light(_crop(None, (255, 255, 40))) == "amber"
+
+
+def test_the_tracker_rejects_impossible_speeds_resets_after_a_gap_and_pairs_one_to_one():
+    tracker = Tracker()
+    tracker.update([{"kind": "car", "ahead_m": 10.0, "right_m": 0.0}], t=0.0)
+    jump = tracker.update([{"kind": "car", "ahead_m": 12.9, "right_m": 0.0}], t=0.05)
+    assert jump[0]["closing_mps"] == 0.0, "58 m/s apart is a different car, not a fast one"
+    tracker.update([{"kind": "car", "ahead_m": 20.0, "right_m": 0.0}], t=1.0)
+    late = tracker.update([{"kind": "car", "ahead_m": 18.0, "right_m": 0.0}], t=3.0)
+    assert late[0]["closing_mps"] == 0.0, "after a long gap (reload, pause) nothing is matched"
+    back = tracker.update([{"kind": "car", "ahead_m": 17.0, "right_m": 0.0}], t=2.0)
+    assert back[0]["closing_mps"] == 0.0, "time going backwards resets"
+    tracker = Tracker()
+    tracker.update([{"kind": "pedestrian", "ahead_m": 10.0, "right_m": 0.0}], t=0.0)
+    two = tracker.update([{"kind": "pedestrian", "ahead_m": 9.8, "right_m": 0.0}, {"kind": "pedestrian", "ahead_m": 9.9, "right_m": 0.3}], t=0.25)
+    assert sorted(o["closing_mps"] for o in two) == [0.0, 0.8], "one earlier object pairs with one current object"
+
+
+def test_disagreeing_lights_read_unknown_and_the_biggest_central_light_governs():
+    frame = np.zeros((180, 320, 3), dtype=np.uint8)
+    frame[30:36, 150:154] = (254, 63, 37)  # red, big and central
+    frame[40:42, 200:202] = (70, 250, 110)  # green, small, farther off centre
+    dets = [_det("traffic_light", 146, 26, 160, 56, 0.6), _det("traffic_light", 198, 38, 204, 50, 0.9)]
+    out = perceive(dets, frame, CAM)
+    assert out["signal"]["state"] == "unknown", "two readable lights that disagree are not a green light"
+    frame[40:42, 200:202] = (254, 63, 37)
+    assert perceive(dets, frame, CAM)["signal"]["state"] == "red"
+
+
+def test_without_cuda_the_detector_stays_off_unless_cpu_is_asked_for(monkeypatch):
+    import jevpilot_vision.perception as P
+
+    monkeypatch.setenv("SEMIF_PERCEPTION", "1")
+    monkeypatch.delenv("SEMIF_PERCEPTION_DEVICE", raising=False)
+    assert P.pick_device(cuda=False) is None
+    assert P.pick_device(cuda=True) == "cuda"
+    monkeypatch.setenv("SEMIF_PERCEPTION_DEVICE", "cpu")
+    assert P.pick_device(cuda=False) == "cpu"
+    monkeypatch.setenv("SEMIF_PERCEPTION", "0")
+    assert P.pick_device(cuda=True) is None
+
+
+def test_the_detector_loads_in_the_background_and_reports_loading_meanwhile(monkeypatch):
+    import threading
+
+    import jevpilot_vision.perception as P
+
+    gate = threading.Event()
+
+    class Slow(P.Detector):
+        def _build(self, device):
+            gate.wait(2)
+            return "model"
+
+    monkeypatch.setattr(P, "pick_device", lambda cuda=None: "cuda")
+    d = Slow()
+    assert d.detect_or_status(None) == ("loading", None), "the first frame does not wait for weights"
+    gate.set()
+    d._thread.join(2)
+    assert d.status == "ready"
