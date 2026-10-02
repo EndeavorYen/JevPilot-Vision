@@ -95,3 +95,25 @@ def test_stopping_never_picks_a_reversing_candidate(engine):
              "intersection": {"control": "stop", "signal": None, "distance_to_line_m": 8, "stop_completed": False, "already_entered": False}}
     choice = engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]["vector"]["choice"]
     assert choice == "crawl"
+
+
+def _choose(engine, cands, intersection, speed):
+    questions = {"vector": {"type": "choice", "instructions": "Choose a path.", "criteria": {k: None for k in cands}}}
+    state = {"speed_mps": speed, "on_road": True, "candidates": cands,
+             "intersection": {"control": "signal", "stop_completed": False, "already_entered": False, **intersection}}
+    return engine.classify_jev({"mode": "flat", "state": state, "questions": questions})["answers"]["vector"]["choice"]
+
+
+def test_a_stop_at_line_candidate_is_preferred_when_one_is_offered(engine):
+    """Review: such a trajectory brakes to the line on its own, a backup if an answer is dropped."""
+    cands = {**CANDIDATES, "halt": [8.0, 0.0, 0.2, 0.0, False, True]}
+    assert _choose(engine, cands, {"signal": "red", "distance_to_line_m": 30}, 13.4) == "halt"
+
+
+def test_route_error_breaks_ties_and_nan_candidates_are_skipped(engine):
+    cands = {
+        "off": [4.05, 0.3, 3.0, 0.0, False, False],
+        "on": [4.0, 0.0, 0.2, 0.0, False, False],
+        "nan": [float("nan"), 0.0, 0.0, 0.0, False, False],
+    }
+    assert _choose(engine, cands, {"signal": "red", "distance_to_line_m": 30}, 13.4) == "on"

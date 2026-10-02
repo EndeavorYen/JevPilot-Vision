@@ -670,25 +670,32 @@ class DecisionEngine:
         Close to the line the car creeps: one decision may close at most half of what is left past
         a 2 m margin, so it never overruns the line before the next answer arrives.
         """
-        safe = []
+        safe = []  # (id, speed, route error, stops at the line)
         for cid in ids:
             vec = candidates.get(cid)
             if not isinstance(vec, (list, tuple)) or len(vec) < 6 or vec[4]:
                 continue
             try:
-                speed_c = float(vec[0])
-                if float(vec[3]) > 0.1 or speed_c < 0:  # off the road, or reversing
-                    continue
-                safe.append((cid, speed_c))
+                speed_c, offroad, r_err = float(vec[0]), float(vec[3]), abs(float(vec[2]))
             except (TypeError, ValueError):
                 continue
+            if not all(math.isfinite(v) for v in (speed_c, offroad, r_err)):
+                continue
+            if offroad > 0.1 or speed_c < 0:  # off the road, or reversing
+                continue
+            safe.append((cid, speed_c, r_err, bool(vec[5])))
         if not safe:
             return None
+        score = lambda item: item[1] * 10.0 - item[2] * 2.0  # the mock's own ranking
+        # A trajectory that brakes to the line by itself still stops if a later answer is dropped.
+        halts = [item for item in safe if item[3]]
+        if halts:
+            return max(halts, key=score)[0]
         allowed = min(math.sqrt(2.0 * 2.0 * max(0.0, dist - abs(speed) * 1.6 - 1.0)), max(0.0, dist - 2.0) / 1.6)
         fits = [item for item in safe if item[1] <= allowed + 1e-6]
         if fits:
-            return max(fits, key=lambda item: item[1])[0]
-        return min(safe, key=lambda item: item[1])[0]
+            return max(fits, key=score)[0]
+        return min(safe, key=lambda item: (item[1], item[2]))[0]
 
     def _mock_probs(self, option_ids: List[str], choice: str) -> Dict[str, float]:
         probs = {oid: 0.05 for oid in option_ids}
