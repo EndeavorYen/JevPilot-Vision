@@ -111,10 +111,10 @@ def test_the_tracker_gives_a_closing_speed():
     tracker = Tracker()
     a = tracker.update([{"kind": "car", "ahead_m": 20.0, "right_m": 0.2}], t=10.0)
     b = tracker.update([{"kind": "car", "ahead_m": 18.0, "right_m": 0.3}], t=10.5)
-    assert a[0]["closing_mps"] == 0.0
+    assert a[0]["closing_mps"] is None, "a first sighting has no known speed"
     assert b[0]["closing_mps"] == pytest.approx(4.0)
     c = tracker.update([{"kind": "pedestrian", "ahead_m": 18.0, "right_m": 0.3}], t=11.0)
-    assert c[0]["closing_mps"] == 0.0, "a different kind is a different object"
+    assert c[0]["closing_mps"] is None, "a different kind is a different object"
 
 
 def test_without_a_detector_perception_says_so_instead_of_reporting_a_clear_road():
@@ -145,7 +145,7 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     seen = {}
 
     class Fake:
-        def front(self, image, t=None):
+        def front(self, image, t=None, narrow=None):
             seen["size"] = image.size
             return {"backend": "fake", "objects": [{"kind": "car", "ahead_m": 12.0}], "signal": {"state": "red", "conf": 0.8}}
 
@@ -159,7 +159,7 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     assert evidence["perception"]["signal"]["state"] == "red"
 
     class Broken:
-        def front(self, image, t=None):
+        def front(self, image, t=None, narrow=None):
             raise RuntimeError("CUDA out of memory")
 
     monkeypatch.setattr(perception, "get_perception", lambda: Broken())
@@ -177,16 +177,18 @@ def test_the_tracker_rejects_impossible_speeds_resets_after_a_gap_and_pairs_one_
     tracker = Tracker()
     tracker.update([{"kind": "car", "ahead_m": 10.0, "right_m": 0.0}], t=0.0)
     jump = tracker.update([{"kind": "car", "ahead_m": 12.9, "right_m": 0.0}], t=0.05)
-    assert jump[0]["closing_mps"] == 0.0, "58 m/s apart is a different car, not a fast one"
+    assert jump[0]["closing_mps"] is None, "58 m/s apart is a different car, not a fast one"
     tracker.update([{"kind": "car", "ahead_m": 20.0, "right_m": 0.0}], t=1.0)
-    late = tracker.update([{"kind": "car", "ahead_m": 18.0, "right_m": 0.0}], t=3.0)
-    assert late[0]["closing_mps"] == 0.0, "after a long gap (reload, pause) nothing is matched"
-    back = tracker.update([{"kind": "car", "ahead_m": 17.0, "right_m": 0.0}], t=2.0)
-    assert back[0]["closing_mps"] == 0.0, "time going backwards resets"
+    gap = tracker.update([{"kind": "car", "ahead_m": 18.0, "right_m": 0.0}], t=2.0)
+    assert gap[0]["closing_mps"] == pytest.approx(2.0), "a second between frames (slow inference) still pairs"
+    late = tracker.update([{"kind": "car", "ahead_m": 17.0, "right_m": 0.0}], t=5.0)
+    assert late[0]["closing_mps"] is None, "after a long gap (reload, pause) nothing is matched"
+    back = tracker.update([{"kind": "car", "ahead_m": 16.0, "right_m": 0.0}], t=4.0)
+    assert back[0]["closing_mps"] is None, "time going backwards resets"
     tracker = Tracker()
     tracker.update([{"kind": "pedestrian", "ahead_m": 10.0, "right_m": 0.0}], t=0.0)
     two = tracker.update([{"kind": "pedestrian", "ahead_m": 9.8, "right_m": 0.0}, {"kind": "pedestrian", "ahead_m": 9.9, "right_m": 0.3}], t=0.25)
-    assert sorted(o["closing_mps"] for o in two) == [0.0, 0.8], "one earlier object pairs with one current object"
+    assert [o["closing_mps"] for o in two] == [0.8, None], "one earlier object pairs with one current object"
 
 
 def test_disagreeing_lights_read_unknown_and_the_biggest_central_light_governs():
@@ -231,3 +233,47 @@ def test_the_detector_loads_in_the_background_and_reports_loading_meanwhile(monk
     gate.set()
     d._thread.join(2)
     assert d.status == "ready"
+
+
+def test_the_narrow_camera_reads_the_light_when_the_wide_one_cannot():
+    """#18: a narrow forward camera (HFOV 40 degrees, like a production car's) reads lights 30 m
+    away that are a few pixels in the wide camera. Objects still come from the wide camera."""
+    from PIL import Image
+
+    import jevpilot_vision.perception as P
+
+    wide = Image.new("RGB", (640, 360), (90, 90, 90))
+    narrow_px = np.full((360, 640, 3), 90, dtype=np.uint8)
+    narrow_px[120:128, 318:324] = (70, 250, 110)  # a green lamp
+    narrow = Image.fromarray(narrow_px)
+    v10 = 180 + P.CameraModel(640, 360).fx * 1.45 / 10.0
+
+    class Fake(P.Detector):
+        def detect_or_status(self, image):
+            if image is narrow:
+                return "ready", [{"kind": "traffic_light", "conf": 0.7, "box": [310, 110, 332, 150]}]
+            return "ready", [{"kind": "car", "conf": 0.9, "box": [300, v10 - 25, 340, v10]}]
+
+    out = P.Perception(Fake()).front(wide, narrow=narrow)
+    assert out["signal"]["state"] == "green" and out["signal"]["camera"] == "narrow"
+    assert [o["kind"] for o in out["objects"]] == ["car"]
+    assert P.NARROW_HFOV_DEG == 40.0
+
+
+def test_a_lit_lamp_in_a_dark_housing_is_found_even_when_the_detector_misses_the_head():
+    """#18: the detector does not always box our square signal heads; a bright coloured blob
+    inside a dark housing is a lamp. A sunlit warm hillside is not (nothing dark around it)."""
+    from jevpilot_vision.perception import find_lamps
+
+    img = np.zeros((360, 640, 3), dtype=np.uint8)
+    img[:, :] = (143, 171, 208)  # sky
+    img[60:110, 480:505] = (40, 52, 48)  # the housing
+    img[88:96, 488:497] = (203, 234, 175)  # its lit (bottom, green) lamp
+    img[200:260, 50:200] = (205, 182, 143)  # a bright sandy hillside
+    lamps = find_lamps(img, P_CAM_NARROW)
+    assert [lamp["state"] for lamp in lamps] == ["green"]
+    out = perceive([], img, P_CAM_NARROW)
+    assert out["signal"]["state"] == "green" and out["signal"]["source"] == "lamp"
+
+
+P_CAM_NARROW = CameraModel(width=640, height=360, hfov_deg=40.0)

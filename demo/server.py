@@ -650,8 +650,14 @@ class DecisionEngine:
             speed = abs(float(state.get("speed_mps") or 0.0))
         except (TypeError, ValueError):
             return None
-        if not math.isfinite(dist) or dist < -0.5:
+        if not math.isfinite(dist):
             return None
+        # The distance is measured from the nose and entry from the centre (already_entered): a car
+        # stopped with its nose over the line has not entered and holds where it is (#18).
+        if dist < -0.5:
+            if inter.get("already_entered") is not False:
+                return None
+            dist = 0.0
         signal = str(inter.get("signal") or "").lower()
         control = str(inter.get("control") or "").lower()
         if signal == "red":
@@ -850,6 +856,8 @@ class DecisionEngine:
         # Signals and stop signs (#17). Heuristic and raw runs keep their plain ranking, as the
         # red-light veto in jevpilot_vision/drive.py leaves them alone too.
         stop_m = None if raw_mode or mode == "heuristic" else self._required_stop_m(state)
+        if state.get("perception_ok") is False:
+            stop_m = 0.0  # Vision mode without working perception: the slowest safe path, stop when offered
         for q_key, q_data in questions.items():
             instructions = q_data.get("instructions", "Choose optimal driving option.")
             criteria = q_data.get("criteria", {})

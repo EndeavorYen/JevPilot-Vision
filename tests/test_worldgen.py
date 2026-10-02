@@ -166,12 +166,20 @@ def test_every_junction_approach_has_its_signal_or_stop_sign(world):
         if not n.get("townJunction"):
             assert n["control"] == "none" and not mine, n["id"]
             continue
-        assert len(mine) == len(n["neighbors"]), n["id"]
+        near = [o for o in mine if "-far-" not in o["id"]]
+        far = [o for o in mine if "-far-" in o["id"]]
+        assert len(near) == len(n["neighbors"]), n["id"]
         assert {o["type"] for o in mine} == {"traffic_light" if n["control"] == "signal" else "stop_sign"}, n["id"]
+        # #18: every signalled approach also has a far-side head, across the junction on the right,
+        # which the onboard camera can still see (and read) from the stop line.
+        assert len(far) == (len(n["neighbors"]) if n["control"] == "signal" else 0), n["id"]
         for o in mine:
-            # 9 m before the junction on the arriving car's right, facing its approach
+            # 9 m before (near) or past (far) the junction on the arriving car's right, facing its approach
             assert math.hypot(o["x"] - n["x"], o["z"] - n["z"]) == pytest.approx(math.hypot(9, 6.9), abs=0.01)
             assert min(abs(o["approach"] - k * math.pi / 2) for k in range(-2, 3)) < 1e-6
+            fwd = (math.sin(o["approach"]), -math.cos(o["approach"]))
+            along = (o["x"] - n["x"]) * fwd[0] + (o["z"] - n["z"]) * fwd[1]
+            assert along == pytest.approx(9 if o in far else -9, abs=0.01), o["id"]
     assert by_id["harbour-0-2"]["control"] == "stop", "a two-leg corner stops, it has no cross traffic"
     assert by_id["pass-foot"]["control"] == "stop"
 

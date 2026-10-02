@@ -65,7 +65,7 @@ def test_t3_motion_stops_at_the_line(engine):
         (None, 13.4),
         ({"signal": "green", "distance_to_line_m": 20}, 13.4),
         ({"signal": "red", "distance_to_line_m": 20, "already_entered": True}, 13.4),
-        ({"signal": "red", "distance_to_line_m": -3}, 13.4),
+        ({"signal": "red", "distance_to_line_m": -3, "already_entered": True}, 13.4),
         ({"signal": "amber", "distance_to_line_m": 8}, 13.4),  # 13.4^2 / 16 = 11.2 m > 8 m: past the point of stopping
         ({"control": "stop", "signal": None, "distance_to_line_m": 1.0, "stop_completed": True}, 3.0),
     ],
@@ -117,3 +117,11 @@ def test_route_error_breaks_ties_and_nan_candidates_are_skipped(engine):
         "nan": [float("nan"), 0.0, 0.0, 0.0, False, False],
     }
     assert _choose(engine, cands, {"signal": "red", "distance_to_line_m": 30}, 13.4) == "on"
+
+
+def test_a_nose_over_the_line_on_red_holds_until_the_car_has_entered(engine):
+    """#18: distance_to_line_m is measured from the nose, entry from the centre. A car that stopped
+    with its nose 1.7 m over the line has not entered the junction and must hold, not creep on."""
+    vector, motion = ask(engine, {"signal": "red", "distance_to_line_m": -1.7, "already_entered": False}, speed=0.0, motion=True)
+    assert motion == "stop"
+    assert vector == "crawl"

@@ -128,7 +128,14 @@ def prepare_drive_request(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def score_drive_request(engine: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Prepare a driving payload, score it on the live classifier, then apply the veto."""
+    """Prepare a driving payload, score it on the live classifier, then apply the veto.
+
+    A Vision-mode request is first reduced to what the cameras and the map say (#18); the scorer
+    and the veto both see only that.
+    """
+    from jevpilot_vision import vision_mode
+
+    payload = vision_mode.prepare(payload)
     if has_six_column_candidates(payload.get("state")):
         prepared = prepare_drive_request(payload)
         result = engine.classify_jev(prepared)

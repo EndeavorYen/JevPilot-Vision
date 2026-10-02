@@ -225,6 +225,7 @@ const specEarly = JSON.parse(process.argv[3]);
 let search = specEarly.vision === "1" ? "" : "?vision=0";
 if (specEarly.lap === "1") search += (search ? "&" : "?") + "lap=1";
 if (specEarly.fleet) search += (search ? "&" : "?") + "fleet=" + specEarly.fleet;
+if (specEarly.mode) search += (search ? "&" : "?") + "mode=" + specEarly.mode;
 const location = { search };
 let nowMs = 0;
 const window = global;
@@ -363,7 +364,20 @@ const spec = specEarly;
 const view = JSON.parse(process.argv[2]);
 const out = { title: title && title.textContent, fps0: fps && fps.textContent, canvas: canvas && { w: canvas.width, h: canvas.height }, hasPip: !!pip };
 
-if (spec.cmd === "dom") {
+if (spec.cmd === "shape") {
+  window.SEMIF_VISION = { signal: "red", perception: { backend: "rtdetr", objects: [] } };
+  window.SEMIF_VISION_AT = nowMs;
+  nowMs += 300;
+  const shaped = window.SEMIF_SHAPE_DECISION({ state: {} });
+  const seen = [];
+  const at = (state, age) => { window.SEMIF_VISION = { perception: { backend: "rtdetr", status: "ready", signal: { state } } }; window.SEMIF_VISION_AT = nowMs - age; window.SEMIF_UPDATE_SEEN(); seen.push(window.SEMIF_SEEN_SIGNAL); };
+  at("unknown", 100);   // never seen yet: red
+  at("green", 100);     // seen green
+  nowMs += 1000; at("unknown", 100);   // lost it a second later: still green from memory
+  nowMs += 3000; at("unknown", 100);   // long gone: red again
+  at("green", 4000);    // a stale frame says nothing: red
+  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen }));
+} else if (spec.cmd === "dom") {
   process.stdout.write(JSON.stringify(out));
 } else if (spec.cmd === "project") {
   const pt = api.project(camera(spec.w, spec.h), spec.x, spec.y, spec.z, spec.w, spec.h);
@@ -522,7 +536,7 @@ if (spec.cmd === "dom") {
       outputColorSpace: "srgb",
       setRenderTarget() {},
       render() {},
-      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 4) readSizes.push([w, h]); buf.fill(8); },
+      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 5) readSizes.push([w, h]); buf.fill(8); },
     },
   };
   const readSizes = [];
@@ -534,7 +548,7 @@ if (spec.cmd === "dom") {
   const paint = renderer.render;
   renderer.render = function (_scene, cam) {
     renders += 1;
-    if (surroundLooks.length < 4 && cam && cam.look) {
+    if (surroundLooks.length < 5 && cam && cam.look) {
       surroundLooks.push({
         dx: cam.look.x - cam.position.x,
         dz: cam.look.z - cam.position.z,
@@ -858,7 +872,7 @@ def test_each_display_frame_posts_four_surround_jpegs():
     assert body["frames"] == ["front", "right", "rear", "left"]
     assert body["front"] == "data:image/jpeg;base64,ONBOARD"
     # heading pi/2 faces +x; right, rear and left turn clockwise from there
-    looks = pumped["yaws"]
+    looks = pumped["yaws"][:4]
     directions = [(round(look["dx"]), round(look["dz"])) for look in looks]
     assert directions == [(25, 0), (0, 25), (-25, 0), (0, -25)]
     hfov = [2 * math.degrees(math.atan(math.tan(math.radians(look["fov"] / 2)) * PIP_W / PIP_H)) for look in looks]
@@ -867,7 +881,7 @@ def test_each_display_frame_posts_four_surround_jpegs():
     assert 700 not in pumped["intervals"]
     assert pumped["fps"] == "60 FPS"
     # #18: the front camera, which perception reads, renders at 640x360; the other three at 320x180.
-    assert pumped["readSizes"] == [[640, 360], [320, 180], [320, 180], [320, 180]]
+    assert pumped["readSizes"][:4] == [[640, 360], [320, 180], [320, 180], [320, 180]]
 
 
 def test_late_older_vision_does_not_replace_newer_evidence():
@@ -981,3 +995,30 @@ def test_fleet_mode_is_off_by_default():
     assert out["bodies"] == []
     assert out["after"]["env"] == 9 and out["after"]["stop"] is True
     assert out["hud"] == "FLEET off"
+
+
+def test_vision_mode_marks_each_decision_and_says_how_old_its_evidence_is():
+    """#18: ?mode=vision sends drive_mode and the age of the camera evidence with every decision."""
+    vision = _run({"cmd": "shape", "vision": "1", "mode": "vision"})
+    assert vision["mode"] == "vision"
+    assert vision["body"]["drive_mode"] == "vision"
+    assert vision["body"]["state"]["vision"]["perception"]["backend"] == "rtdetr"
+    assert vision["body"]["state"]["vision_age_ms"] == 300
+    assert vision["body"]["state"]["seen_signal"] in ("red", "amber", "green")
+    # The planner's signal colour is the camera's: red until green is seen, kept 2.5 s, stale is red.
+    assert vision["seen"] == ["red", "green", "green", "red", "red"]
+    plain = _run({"cmd": "shape", "vision": "1"})
+    assert plain["mode"] == "privileged" and "drive_mode" not in plain["body"]
+
+
+def test_vision_mode_adds_a_narrow_forward_camera_for_far_lights():
+    """#18: in Vision mode a fifth, narrow (40 degree) forward camera goes with the four, at 640x360."""
+    pumped = _run({"cmd": "upload", "vision": "1", "mode": "vision", "frames": 3})
+    assert pumped["bodies"][0]["frames"] == ["front", "right", "rear", "left", "narrow"]
+    assert pumped["readSizes"][4] == [640, 360]
+    narrow = pumped["yaws"][4]
+    hfov = 2 * math.degrees(math.atan(math.tan(math.radians(narrow["fov"] / 2)) * PIP_W / PIP_H))
+    assert abs(hfov - 40.0) < 0.5
+    assert (round(narrow["dx"]), round(narrow["dz"])) == (25, 0), "it looks straight ahead"
+    plain = _run({"cmd": "upload", "vision": "1", "frames": 3})
+    assert plain["bodies"][0]["frames"] == ["front", "right", "rear", "left"], "other modes keep four cameras"

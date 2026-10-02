@@ -2,6 +2,12 @@
   const params = new URLSearchParams(location.search);
   const rawParam = params.get("raw") === "1" || params.get("rawMode") === "1";
   window.SEMIF_RAW_MODE = window.SEMIF_RAW_MODE || rawParam;
+  // Driving mode (#18): vision decides from the cameras and the map only; privileged (the default)
+  // and heuristic are the references it is tuned against. The planner patches read the global.
+  const modeParam = params.get("mode");
+  window.SEMIF_DRIVE_MODE = ["vision", "privileged", "heuristic"].includes(modeParam)
+    ? modeParam
+    : window.SEMIF_DRIVE_MODE || "privileged";
   const seedParam = params.get("seed");
   if (seedParam && Number.isFinite(Number(seedParam))) {
     window.SEMIF_SEED = Number(seedParam);
@@ -510,31 +516,60 @@
     }
   }
 
+  // What every decision request carries besides the bundle's own state.
+  function shapeDecisionBody(body) {
+    body.raw_mode = !!window.SEMIF_RAW_MODE;
+    if (window.SEMIF_SIM && window.SEMIF_SIM.world) {
+      body.state = body.state || {};
+      body.state.seed = window.SEMIF_SIM.world.seed;
+      body.state.raw_mode = !!window.SEMIF_RAW_MODE;
+    }
+    const sim = window.SEMIF_SIM;
+    const laneOffset =
+      sim &&
+      ((sim.lastDecisionState && sim.lastDecisionState.lane && sim.lastDecisionState.lane.offset_m) ??
+        (sim.lastPlan && sim.lastPlan.lane && sim.lastPlan.lane.offset_m));
+    if (typeof laneOffset === "number" && Number.isFinite(laneOffset)) {
+      body.state = body.state || {};
+      body.state.lateral_offset_m = laneOffset;
+    }
+    if (window.SEMIF_VISION) {
+      body.state = body.state || {};
+      body.state.vision = window.SEMIF_VISION;
+      if (Number.isFinite(window.SEMIF_VISION_AT)) body.state.vision_age_ms = Math.round(performance.now() - window.SEMIF_VISION_AT);
+    }
+    if (window.SEMIF_DRIVE_MODE === "vision") {
+      body.drive_mode = "vision";
+      updateSeenSignal();
+      body.state = body.state || {};
+      body.state.seen_signal = window.SEMIF_SEEN_SIGNAL;
+    }
+    return body;
+  }
+  window.SEMIF_SHAPE_DECISION = shapeDecisionBody;
+
+  // Vision mode's signal colour for the planner (BUNDLE_PATCHES.md vision-plan): what the front
+  // camera read, kept for 2.5 s after it was last read, red when it has not been seen or the
+  // evidence is more than 1.5 s old. The server applies the same rule (jevpilot_vision/vision_mode.py).
+  let lastSeen = null;
+  function updateSeenSignal() {
+    const now = performance.now();
+    const vis = window.SEMIF_VISION;
+    const p = vis && vis.perception;
+    const fresh = Number.isFinite(window.SEMIF_VISION_AT) && now - window.SEMIF_VISION_AT <= 1500;
+    const ok = fresh && p && p.backend && p.backend !== "none" && (p.status || "ready") === "ready";
+    const state = ok && p.signal && p.signal.state;
+    if (["red", "amber", "green"].includes(state)) lastSeen = { state, at: now };
+    window.SEMIF_SEEN_SIGNAL = ok && lastSeen && now - lastSeen.at <= 2500 ? lastSeen.state : "red";
+  }
+  window.SEMIF_UPDATE_SEEN = updateSeenSignal;
+
   const origFetch = window.fetch.bind(window);
   window.fetch = function (url, opts) {
     const href = typeof url === "string" ? url : url && url.url;
     if (href && href.indexOf("/classifier") !== -1 && opts && typeof opts.body === "string") {
       try {
-        const body = JSON.parse(opts.body);
-        body.raw_mode = !!window.SEMIF_RAW_MODE;
-        if (window.SEMIF_SIM && window.SEMIF_SIM.world) {
-          body.state = body.state || {};
-          body.state.seed = window.SEMIF_SIM.world.seed;
-          body.state.raw_mode = !!window.SEMIF_RAW_MODE;
-        }
-        const sim = window.SEMIF_SIM;
-        const laneOffset =
-          sim &&
-          ((sim.lastDecisionState && sim.lastDecisionState.lane && sim.lastDecisionState.lane.offset_m) ??
-            (sim.lastPlan && sim.lastPlan.lane && sim.lastPlan.lane.offset_m));
-        if (typeof laneOffset === "number" && Number.isFinite(laneOffset)) {
-          body.state = body.state || {};
-          body.state.lateral_offset_m = laneOffset;
-        }
-        if (window.SEMIF_VISION) {
-          body.state = body.state || {};
-          body.state.vision = window.SEMIF_VISION;
-        }
+        const body = shapeDecisionBody(JSON.parse(opts.body));
         opts = Object.assign({}, opts, { body: JSON.stringify(body) });
       } catch (_err) {
         /* leave request unchanged */
@@ -902,6 +937,10 @@
   // Four onboard cameras, about 100° horizontal each. Yaw turns clockwise from forward.
   const ONBOARD_HFOV = 100;
   const ONBOARD_VFOV = 2 * Math.atan(Math.tan((ONBOARD_HFOV * Math.PI) / 360) / (PIP_W / PIP_H)) * (180 / Math.PI);
+  // Vision mode adds a narrow forward camera, as production cars carry, for lights the wide one
+  // sees as a few pixels (jevpilot_vision/perception.py NARROW_HFOV_DEG).
+  const NARROW_HFOV = 40;
+  const NARROW_VFOV = 2 * Math.atan(Math.tan((NARROW_HFOV * Math.PI) / 360) / (FRONT_W / FRONT_H)) * (180 / Math.PI);
   const SURROUND_SIDES = [
     ["right", Math.PI / 2],
     ["rear", Math.PI],
@@ -909,11 +948,11 @@
   ];
   const surroundCanvases = {};
 
-  function surroundCanvas(name) {
+  function surroundCanvas(name, w = PIP_W, h = PIP_H) {
     if (!surroundCanvases[name]) {
       const node = document.createElement("canvas");
-      node.width = PIP_W;
-      node.height = PIP_H;
+      node.width = w;
+      node.height = h;
       surroundCanvases[name] = node;
     }
     return surroundCanvases[name];
@@ -923,7 +962,7 @@
     return renderView(world, 0, pipCanvas, FRONT_W, FRONT_H);
   }
 
-  function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H) {
+  function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H, vfov = ONBOARD_VFOV) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
     const scene = world && world.scene;
@@ -932,7 +971,7 @@
     const mount = onboardMount(player, yaw);
     if (!world._onboardCam) world._onboardCam = world.camera.clone();
     const cam = world._onboardCam;
-    cam.fov = ONBOARD_VFOV;
+    cam.fov = vfov;
     cam.aspect = w / h;
     cam.position.set(mount.x, mount.y, mount.z);
     cam.lookAt(mount.lookX, mount.lookY, mount.lookZ);
@@ -1077,6 +1116,7 @@
       /* The onboard view must not kill the drive loop */
     }
     if (painted) visionTick(true);
+    if (window.SEMIF_DRIVE_MODE === "vision") updateSeenSignal();
     requestAnimationFrame(tick);
   }
 
@@ -1099,6 +1139,11 @@
       const canvas = surroundCanvas(name);
       if (!renderView(world, yaw, canvas)) return null;
       frames[name] = canvas.toDataURL("image/jpeg", 0.55);
+    }
+    if (window.SEMIF_DRIVE_MODE === "vision") {
+      const narrow = surroundCanvas("narrow", FRONT_W, FRONT_H);
+      if (!renderView(world, 0, narrow, FRONT_W, FRONT_H, NARROW_VFOV)) return null;
+      frames.narrow = narrow.toDataURL("image/jpeg", FRONT_JPEG);
     }
     return frames;
   }
@@ -1149,6 +1194,8 @@
         return;
       }
       window.SEMIF_VISION = vis;
+      window.SEMIF_VISION_AT = performance.now();
+      updateSeenSignal();
       if (Number.isFinite(incoming)) window.SEMIF_VISION_GEN = incoming;
       const encode = Number(data.vision_encode_ms);
       if (telemetry && Number.isFinite(encode)) {
