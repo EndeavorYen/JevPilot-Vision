@@ -90,7 +90,7 @@ def test_fsd_overlay_assets_present():
     assert "semif-layer.css" in html
     assert "semif-layer.js" in html
     assert "SEMIF_RAW_MODE" in html
-    assert "--fsd-blue" in css
+    assert "--sol-accent" in css
     assert "simple-jev-api-badge" in css and "display: none" in css
     assert "fsd-status" in css
     assert "fsd-pill" not in css and "fsd-drawer" not in css

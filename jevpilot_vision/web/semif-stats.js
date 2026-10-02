@@ -11,13 +11,15 @@
     root.SEMIF_STATS = factory();
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
-  // Categorical slots validated on the panel surface #141922 (dataviz validate_palette.js,
-  // --pairs all). End-to-end has a chart to itself; the three stages share the other.
+  // Colours come from semif-layer.css's tokens when the panel mounts (#20); the values here are
+  // the same palette, for node. End-to-end has a chart to itself; the three stages share the
+  // other. Each set validated on --sol-viz-surface #10232f (dataviz validate_palette.js, dark,
+  // --pairs all).
   const SERIES = [
-    { key: "e2e_loop_ms", label: "End-to-end", color: "#3987e5", chart: "e2e" },
-    { key: "classifier_ms", label: "Classifier", color: "#d95926", chart: "stages" },
-    { key: "vision_encode_ms", label: "Vision encode", color: "#199e70", chart: "stages" },
-    { key: "grab_frame_ms", label: "Frame grab", color: "#9085e9", chart: "stages" },
+    { key: "e2e_loop_ms", label: "End-to-end", color: "#4392d2", token: "--sol-viz-1", chart: "e2e" },
+    { key: "classifier_ms", label: "Classifier", color: "#d9653a", token: "--sol-viz-2", chart: "stages" },
+    { key: "vision_encode_ms", label: "Vision encode", color: "#1fa383", token: "--sol-viz-3", chart: "stages" },
+    { key: "grab_frame_ms", label: "Frame grab", color: "#957cdb", token: "--sol-viz-4", chart: "stages" },
   ];
   const RANGES = [
     { key: "1m", ms: 60 * 1000, step: 15 * 1000 },
@@ -113,9 +115,40 @@
 
   // ---- In the page ---------------------------------------------------------------------------
 
-  const INK = "#f4f4f5";
-  const INK_2 = "#9aa3b2";
-  const GRID = "rgba(255, 255, 255, 0.08)";
+  const INK_COLOURS = {
+    INK: ["--sol-viz-ink", "#f8efe2"],
+    INK_2: ["--sol-viz-ink-2", "#bcae99"],
+    GRID: ["--sol-viz-grid", "rgba(248, 239, 226, 0.08)"],
+    CROSS: ["--sol-viz-cross", "rgba(248, 239, 226, 0.55)"],
+    CROSS_2: ["--sol-viz-cross-2", "rgba(248, 239, 226, 0.35)"],
+    SURFACE: ["--sol-viz-surface", "#10232f"],
+  };
+  let INK = INK_COLOURS.INK[1];
+  let INK_2 = INK_COLOURS.INK_2[1];
+  let GRID = INK_COLOURS.GRID[1];
+  let CROSS = INK_COLOURS.CROSS[1];
+  let CROSS_2 = INK_COLOURS.CROSS_2[1];
+  let SURFACE = INK_COLOURS.SURFACE[1];
+
+  // The token's value from the page's style sheet, or the built-in value.
+  function token(name, fallback) {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch (_err) {
+      return fallback;
+    }
+  }
+
+  function readTokens() {
+    for (const s of SERIES) s.color = token(s.token, s.color);
+    INK = token(...INK_COLOURS.INK);
+    INK_2 = token(...INK_COLOURS.INK_2);
+    GRID = token(...INK_COLOURS.GRID);
+    CROSS = token(...INK_COLOURS.CROSS);
+    CROSS_2 = token(...INK_COLOURS.CROSS_2);
+    SURFACE = token(...INK_COLOURS.SURFACE);
+  }
   const PAD = { left: 40, right: 54, top: 10, bottom: 22 };
 
   function seriesOf(chart) {
@@ -184,7 +217,8 @@
     model.series.forEach((s, k) => {
       const buckets = model.buckets[k];
       if (model.band) {
-        g.fillStyle = s.color + "2e";
+        g.fillStyle = s.color;
+        g.globalAlpha = 0.18;
         let start = -1;
         const flush = (end) => {
           if (start < 0) return;
@@ -200,6 +234,7 @@
           if (!b) flush(i);
         });
         flush(buckets.length);
+        g.globalAlpha = 1;
       }
       g.strokeStyle = s.color;
       g.lineWidth = 2;
@@ -216,7 +251,7 @@
     for (const ref of model.refs) {
       if (ref.value == null) continue;
       const py = Math.round(y(ref.value)) + 0.5;
-      g.strokeStyle = "rgba(244, 244, 245, 0.55)";
+      g.strokeStyle = CROSS;
       g.beginPath();
       g.moveTo(PAD.left, py);
       g.lineTo(PAD.left + plotW, py);
@@ -229,7 +264,7 @@
     g.setLineDash([]);
     if (hover != null && hover >= 0 && hover < n) {
       const px = x(hover);
-      g.strokeStyle = "rgba(244, 244, 245, 0.35)";
+      g.strokeStyle = CROSS_2;
       g.beginPath();
       g.moveTo(px, PAD.top);
       g.lineTo(px, PAD.top + plotH);
@@ -238,7 +273,7 @@
         const b = model.buckets[k][hover];
         if (!b) return;
         g.fillStyle = s.color;
-        g.strokeStyle = "#141922";
+        g.strokeStyle = SURFACE;
         g.lineWidth = 2;
         g.beginPath();
         g.arc(px, y(b.mean), 4, 0, Math.PI * 2);
@@ -282,7 +317,7 @@
     <figure class="fsd-chart" data-chart="stages">
       <figcaption><strong>Pipeline stages</strong><span>ms</span>
         <span class="fsd-chart-legend">${seriesOf("stages")
-          .map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`)
+          .map((s) => `<span><i style="background:var(${s.token}, ${s.color})"></i>${s.label}</span>`)
           .join("")}</span>
       </figcaption>
       <div class="fsd-chart-box"><canvas></canvas><div class="fsd-chart-tip" hidden></div></div>
@@ -290,13 +325,14 @@
     <table class="fsd-stats-table">
       <thead><tr><th scope="col">Series</th><th>Last</th><th>P50</th><th>P95</th><th>Max</th><th>Samples</th></tr></thead>
       <tbody>${SERIES.map(
-        (s) => `<tr data-key="${s.key}"><th scope="row"><i style="background:${s.color}"></i>${s.label}</th><td></td><td></td><td></td><td></td><td></td></tr>`
+        (s) => `<tr data-key="${s.key}"><th scope="row"><i style="background:var(${s.token}, ${s.color})"></i>${s.label}</th><td></td><td></td><td></td><td></td><td></td></tr>`
       ).join("")}</tbody>
     </table>
     <footer class="fsd-stats-foot"></footer>
   `;
 
   function mountStats(opts) {
+    readTokens();
     const telemetry = opts.telemetry;
     const now = opts.now || (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
     const chip = opts.chip;
@@ -397,7 +433,7 @@
       const rows = c.model.series
         .map((s, k) => {
           const b = c.model.buckets[k][c.hover];
-          return b ? `<div><i style="background:${s.color}"></i>${s.label}<b>${fmtMs(b.mean)} ms</b></div>` : "";
+          return b ? `<div><i style="background:var(${s.token}, ${s.color})"></i>${s.label}<b>${fmtMs(b.mean)} ms</b></div>` : "";
         })
         .join("");
       if (!rows) {
