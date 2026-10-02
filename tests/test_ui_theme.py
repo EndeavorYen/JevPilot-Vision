@@ -110,10 +110,16 @@ def test_review_h1_the_route_map_keeps_a_fixed_width_when_dragged_out():
     assert "%" not in width and "px" in width, width
 
 
-def test_review_m2_the_latency_panel_stays_usable_on_small_desktop_windows():
-    desktop = CSS[CSS.index("@media (min-width: 901px) {"):]
-    width = re.search(r"#fsd-stats \{[^}]*?width: ([^;]+);", desktop).group(1)
-    assert width == "min(620px, calc(100vw - 408px))", width  # 493 px at 901 px wide
+def test_review_m2_the_latency_panel_opens_beside_the_column_only_where_both_columns_stay_clear():
+    """Beside the command column it needs room between the column (392 px) and the navigation
+    stack (306 px): from 1318 px wide it gets at least 600 px; narrower windows keep the original
+    placement over the command column, never over the map."""
+    beside = CSS[CSS.index("@media (min-width: 1318px) {"):]
+    rule = beside[:beside.index("}")]
+    assert "#fsd-stats" in rule and "left: 392px" in rule
+    assert re.search(r"width: min\(620px, calc\(100vw - 714px\)\)", rule), rule
+    desktop = CSS[CSS.index("@media (min-width: 901px) {"):CSS.index("@media (min-width: 1318px) {")]
+    assert "#fsd-stats" not in desktop
 
 
 def test_review_m3_legend_swatches_and_bands_follow_the_tokens():

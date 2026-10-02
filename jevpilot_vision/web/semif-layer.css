@@ -36,6 +36,7 @@
   --sol-danger: #ff5a5f;
   --sol-danger-soft: rgba(255, 90, 95, 0.16);
   --sol-danger-glow: rgba(255, 90, 95, 0.45);
+  --sol-danger-deep: #7a1d24;
   --sol-off: #6f7b84;
 
   --sol-sign: #ffffff;
@@ -1347,19 +1348,23 @@ body.fsd-theme .drive-header-row {
     bottom: 20px;
   }
 
-  /* The latency panel opens beside the command column, not over it. */
-  #fsd-stats {
-    top: 16px;
-    left: 392px;
-    width: min(620px, calc(100vw - 408px));
-    max-height: calc(100vh - 140px);
-  }
 
   body.fsd-theme .driver-dock {
     height: 84px;
     padding: 12px 18px;
     gap: 14px;
     border-radius: var(--sol-radius-pill);
+  }
+}
+
+/* The latency panel opens beside the command column where it also clears the navigation stack
+   (392 px on the left, 306 px on the right); narrower windows keep it over the command column. */
+@media (min-width: 1318px) {
+  #fsd-stats {
+    top: 16px;
+    left: 392px;
+    width: min(620px, calc(100vw - 714px));
+    max-height: calc(100vh - 140px);
   }
 }
 
@@ -1519,7 +1524,7 @@ body.fsd-theme .minimap-toolbar button {
 
 #scene-loader[data-state="error"] .sol-progress-label {
   color: var(--sol-ink-strong);
-  background: var(--sol-danger-glow);
+  background: var(--sol-danger-deep);
 }
 
 #loading-retry {
