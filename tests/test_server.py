@@ -698,7 +698,8 @@ def test_six_column_request_fails_when_drive_package_is_missing(mock_engine, mon
     server_module.engine = mock_engine
     try:
         response = TestClient(app).post("/v1/classifier", json=payload)
-        assert response.status_code == 500, response.text
+        # A broken install is unavailable service (503), not the model failing (#28).
+        assert response.status_code == 503, response.text
         assert "answers" not in response.json()
     finally:
         server_module.engine = previous
@@ -1030,3 +1031,23 @@ def test_v1_vision_refuses_unknown_camera_names_and_classifier_refuses_any_frame
         listed = client.post("/v1/classifier", json={"state": {"frames": [jpeg]}})
     assert "error" in extra.json()
     assert listed.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "error, status",
+    [
+        (httpx.ConnectError("SemArbiter is not running"), 502),
+        (httpx.HTTPStatusError("upstream 503", request=httpx.Request("POST", "http://a"), response=httpx.Response(503)), 502),
+        (httpx.ReadTimeout("SemArbiter hung"), 504),
+    ],
+)
+def test_an_unreachable_model_server_is_a_gateway_error_not_a_500(monkeypatch, mock_engine, error, status):
+    """#28: the closed-loop evaluation tells an outage (502/503/504) from the system under test
+    failing (500). The model server behind this one being down or hung is an outage."""
+    def boom(payload):
+        raise error
+
+    monkeypatch.setattr(mock_engine, "classify_jev", boom)
+    client = TestClient(app)
+    resp = client.post("/v1/classifier", json={"mode": "flat", "state": {}, "questions": {}})
+    assert resp.status_code == status
