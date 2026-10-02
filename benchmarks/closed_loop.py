@@ -165,8 +165,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         return {"runs": 0, "attempts": 0, "retried": 0, "failed_runs": 0, "failures": {}, "never_driven": [],
                 "distance_km": 0.0, "runs_with_red_light": 0, "red_light_events": 0, "runs_with_collision": 0,
                 "collision_events": 0, "pedestrian_casualties": 0, "crashes": 0, "runs_disengaged": 0,
-                "runs_stalled": 0, "runs_broke": 0, "runs_arrived": 0, "drove": 0, "drove_with_red_light": 0,
-                "drove_with_collision": 0}
+                "runs_stalled": 0, "runs_broke": 0, "runs_unreadable": 0, "tab_check_failed": 0, "decision_failures": 0,
+                "drove": 0, "drove_with_red_light": 0, "drove_with_collision": 0}
 
     # Every attempt is visible: a run that needed retries says so.
     failed_keys = set()
@@ -198,10 +198,13 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
         s["runs_disengaged"] += 1 if row.get("disengaged") else 0
         s["runs_stalled"] += 1 if row.get("stalled") else 0
         s["runs_broke"] += 1 if row.get("broke") else 0
-        s["runs_arrived"] += 1 if row.get("arrived") else 0
+        s["runs_unreadable"] += 1 if row.get("unreadable") else 0
+        s["tab_check_failed"] += 1 if row.get("tab_check") == "failed" else 0
+        s["decision_failures"] += 1 if row.get("decision_failures") or row.get("server_ok") is False else 0
         # Violation rates are over runs that moved: a car that never moved commits none. A run that
-        # ran a red light and then gave up (or broke) still ran it.
-        if not row.get("stalled"):
+        # ran a red light and then gave up (or broke) still ran it. A drive whose result could not be
+        # read is unknown, not clean: it is left out and counted on its own.
+        if not row.get("stalled") and not row.get("unreadable"):
             s["drove"] += 1
             s["drove_with_red_light"] += 1 if red else 0
             s["drove_with_collision"] += 1 if hits or row.get("crash") else 0
@@ -232,7 +235,14 @@ def report(summary: Dict[Group, Dict[str, Any]]) -> str:
             lines.append(f"  could not be driven {s['failed_runs']} (setup, left out of the rates): {why}; "
                          f"never driven: seeds {s['never_driven']}")
         lines.append(f"  autopilot gave up {_share(s['runs_disengaged'], n)}; car did not move {_share(s['runs_stalled'], n)}; "
-                     f"drive broke (page stopped) {_share(s['runs_broke'], n)}; arrived {s['runs_arrived']}")
+                     f"drive broke (page stopped) {_share(s['runs_broke'], n)}; result unreadable {_share(s['runs_unreadable'], n)}")
+        notes = []
+        if s["decision_failures"]:
+            notes.append(f"decision service failed during {s['decision_failures']} (kept: the car had moved)")
+        if s["tab_check_failed"]:
+            notes.append(f"tab check could not be made for {s['tab_check_failed']}")
+        if notes:
+            lines.append("  " + "; ".join(notes))
         d = s["drove"]
         moved = lambda k: _share(k, d).replace(" runs", " runs that moved", 1)
         lines.append(f"  red light {moved(s['drove_with_red_light'])} · {_share(s['runs_with_red_light'], n).replace(' runs', ' of all runs', 1)}"
@@ -268,7 +278,10 @@ _READY = (
     " else if (Date.now() - t0 > 90000) { clearInterval(t); x(new Error('the drive did not load in 90 s')); } }, 250); })"
 )
 _START = (
-    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time };"
+    "(() => { const s = window.SEMIF_SIM; window.__eval = { minGap: 99, t0: s.time, failures: 0 };"
+    " const toast = document.getElementById('toast'); if (toast) new MutationObserver(() => {"
+    " if (/failed requests/i.test(toast.textContent || '')) window.__eval.failures += 1; })"
+    ".observe(toast, { childList: true, characterData: true, subtree: true });"
     " window.__evalTimer = setInterval(() => { for (const o of [...s.traffic, ...s.pedestrians]) {"
     " const d = Math.hypot(o.x - s.player.x, o.z - s.player.z); if (d < window.__eval.minGap) window.__eval.minGap = d; } }, 250);"
     " if (!s.autopilot) document.querySelector('#autopilot').click();"
@@ -276,7 +289,7 @@ _START = (
 )
 _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
-    " return { engaged: window.__eval.engaged, complete: !!s.complete, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
+    " return { engaged: window.__eval.engaged, decision_failures: window.__eval.failures > 0, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -318,19 +331,24 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"page lag {got.get('lag_seen')} ms"
     if got.get("engaged") is False:
         return "autopilot never engaged"
-    if got.get("server_ok") is False:
-        return "decision server unreachable after the run"
+    moved = got.get("crash") or float(got.get("distance_m") or 0) >= STALL_MPS * run["seconds"]
+    if not moved:
+        # The car did not get going and the decisions were failing: an outage, not the driving.
+        if got.get("server_ok") is False:
+            return "decision server unreachable after the run"
+        if got.get("decision_failures"):
+            return "decision service failed (the bundle paused after three failed requests)"
     return None
 
 
 def outcome(run: Dict[str, Any], got: Dict[str, Any]) -> Dict[str, bool]:
     """Results that are not violations but are not good drives either: the autopilot gave up
     (three failed or expired decisions), or the car hardly moved. A crash is its own result."""
-    none = {"disengaged": False, "stalled": False, "broke": False, "arrived": False}
+    none = {"disengaged": False, "stalled": False, "broke": False, "unreadable": False}
     if got.get("crash"):
         return none
-    if got.get("complete"):
-        return dict(none, arrived=True)  # reaching the destination turns the autopilot off
+    # Free driving chains destinations (the bundle picks the next one and keeps the autopilot on);
+    # the evaluation never sets lap=1, the only mode where arriving ends a drive.
     return dict(
         none,
         disengaged=not got.get("autopilot"),
@@ -373,8 +391,8 @@ def drive(target: str, base: str, run: Dict[str, Any]) -> Dict[str, Any]:
             row["error"] = reason
         else:
             row.update(outcome(run, got))
-    except Exception as err:  # the drive started and then the page could not be read: a result
-        row.update(ok=True, disengaged=False, stalled=False, broke=True, error=f"drive broke: {str(err)[:300]}")
+    except Exception as err:  # the drive started and then the page could not be read: a result, unknown
+        row.update(ok=True, disengaged=False, stalled=False, broke=True, unreadable=True, error=f"drive broke: {str(err)[:300]}")
     return row
 
 

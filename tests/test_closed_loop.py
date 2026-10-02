@@ -38,7 +38,7 @@ def _row(mode, seed, route, **kw):
     base = {"set": "held_out", "mode": mode, "seed": seed, "route": route, "lag_ms": 0, "seconds": 150, "distance_m": 1500.0,
             "crash": False, "collisions": 0, "vehicle_collisions": 0, "pedestrian_casualties": 0, "red_light": 0,
             "violations": 0, "min_gap_m": 4.0, "events": [], "ok": True, "disengaged": False, "stalled": False,
-            "broke": False}
+            "broke": False, "unreadable": False}
     base.update(kw)
     return base
 
@@ -130,21 +130,24 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
     assert cl.validate(run, dict(good, autopilot=False)) is None, "giving up is a result too"
     for change, words in [({"hidden": True}, "hidden"), ({"mode_seen": "privileged"}, "mode"),
                           ({"world_seen": "coast:festival"}, "route"), ({"lag_seen": 0}, "lag"),
-                          ({"engaged": False}, "never engaged"), ({"server_ok": False}, "decision server")]:
+                          ({"engaged": False}, "never engaged"),
+                          ({"server_ok": False, "distance_m": 20}, "decision server"),
+                          ({"decision_failures": True, "autopilot": False, "distance_m": 20}, "decision service")]:
         reason = cl.validate(run, dict(good, **change))
         assert reason and words in reason, (change, reason)
-    none = {"disengaged": False, "stalled": False, "broke": False, "arrived": False}
+    none = {"disengaged": False, "stalled": False, "broke": False, "unreadable": False}
     assert cl.outcome(run, good) == none
     assert cl.outcome(run, dict(good, autopilot=False)) == dict(none, disengaged=True)
     assert cl.outcome(run, dict(good, distance_m=40)) == dict(none, stalled=True)
     assert cl.outcome(run, dict(good, crash=True, autopilot=False, distance_m=40)) == none
-    # Review #28 (4): reaching the destination turns the autopilot off; that is arriving, not giving up.
-    assert cl.outcome(run, dict(good, autopilot=False, complete=True)) == dict(none, arrived=True)
+    # Review #28 (5): once the car moved, an outage seen at the end does not erase the drive: it is
+    # kept as a result, flagged.
+    assert cl.validate(run, dict(good, server_ok=False)) is None
+    assert cl.validate(run, dict(good, decision_failures=True, autopilot=False)) is None
     # Review #28 (3): once the car drove, a page that stopped stepping is what the drive did.
     assert cl.validate(run, dict(good, sim_time_s=60)) is None
     assert cl.outcome(run, dict(good, sim_time_s=60))["broke"] is True
-    # An arrival that ended the drive early is not a broken page.
-    assert cl.outcome(run, dict(good, sim_time_s=60, autopilot=False, complete=True))["broke"] is False
+
 
 
 def test_review_a_held_out_seed_moved_to_debugged_no_longer_reports_as_held_out(tmp_path):
@@ -234,3 +237,18 @@ def test_review3_rows_from_before_outcomes_were_recorded_are_not_reported():
     old_ok = {"set": "held_out", "mode": "vision", "seed": 104729, "ok": True, "distance_m": 10}
     kept, dropped = cl.current_rows([old_ok], cl.load_seeds())
     assert kept == [] and dropped == [old_ok]
+
+
+def test_review5_a_drive_whose_result_could_not_be_read_is_unknown_not_clean():
+    rows = [_row("vision", 1, "festival"), _row("vision", 2, "festival", broke=True, unreadable=True, distance_m=0.0),
+            _row("vision", 3, "festival", red_light=1)]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    assert v["drove"] == 2 and v["runs_unreadable"] == 1
+    text = cl.report(cl.summarize(rows))
+    assert "result unreadable 1/3 runs" in text and "red light 1/2 runs that moved" in text
+
+
+def test_review5_a_run_whose_shared_tab_check_failed_is_counted():
+    rows = [_row("vision", 1, "festival", tab_check="failed"), _row("vision", 2, "festival", tab_check="ok")]
+    text = cl.report(cl.summarize(rows))
+    assert "tab check could not be made for 1" in text
