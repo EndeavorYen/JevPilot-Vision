@@ -43,3 +43,4 @@
 | `coast-sun` | main | 太陽位置先問 `SEMIF_SCENERY.sun(view, player)` | 日照循環：太陽方向依時間改變 |
 | `coast-present` | main | 主畫面輸出先問 `SEMIF_SCENERY.present(view)` | 後製只作用在主畫面；車載相機另外渲染，不受影響 |
 | `coast-hero` | main | 主角車先問 `SEMIF_WORLD_KIT.hero(view)`；coast 回傳程式生成的車，其他地圖回傳 undefined、照舊載入 Model Y | 新地圖的主角車由 `semif-world/vehicles.js` 產生，也省掉 glb 下載（#25） |
+| `coast-signal-lamps` | main | coast 上點亮的號誌燈改用純色的紅、黃、綠（不含其他色光的成分，陽光再強也不會變白）並自發光；舊地圖維持打包檔原本的粉彩燈色 | 車載相機經過 ACES 後要讀得出燈色：原本的粉彩燈在畫面裡只剩淡橘、淡綠，任何依像素判讀號誌的方法都讀不到（#18） |

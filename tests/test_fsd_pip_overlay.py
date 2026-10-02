@@ -522,9 +522,10 @@ if (spec.cmd === "dom") {
       outputColorSpace: "srgb",
       setRenderTarget() {},
       render() {},
-      readRenderTargetPixels(_t, _x, _y, w, h, buf) { buf.fill(8); },
+      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 4) readSizes.push([w, h]); buf.fill(8); },
     },
   };
+  const readSizes = [];
   const frames = spec.frames || 120;
   const dt = 1000 / 60;
   const ticks = [];
@@ -557,6 +558,7 @@ if (spec.cmd === "dom") {
     intervals: visionIntervals,
     fps: fps.textContent,
     renders,
+    readSizes,
   }));
 } else if (spec.cmd === "vision-order") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
@@ -835,7 +837,7 @@ def test_pip_shell_is_in_the_loaded_overlay():
     dom = _run({"cmd": "dom"})
     assert dom["hasPip"] is True
     assert dom["title"] == TITLE
-    assert dom["canvas"] == {"w": PIP_W, "h": PIP_H}
+    assert dom["canvas"] == {"w": 640, "h": 360}, "the front camera renders at 640x360 for perception (#18)"
     assert dom["fps0"] == "-- FPS"
     css = OVERLAY_CSS.read_text(encoding="utf-8")
     html = (REPO / "jevpilot_vision" / "web" / "index.html").read_text(encoding="utf-8")
@@ -864,6 +866,8 @@ def test_each_display_frame_posts_four_surround_jpegs():
     assert pumped["postTimes"] == pumped["tickTimes"]
     assert 700 not in pumped["intervals"]
     assert pumped["fps"] == "60 FPS"
+    # #18: the front camera, which perception reads, renders at 640x360; the other three at 320x180.
+    assert pumped["readSizes"] == [[640, 360], [320, 180], [320, 180], [320, 180]]
 
 
 def test_late_older_vision_does_not_replace_newer_evidence():

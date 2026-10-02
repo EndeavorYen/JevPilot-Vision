@@ -170,9 +170,15 @@
   const pipCanvas = document.getElementById("fsd-camera-canvas");
   const PIP_W = 320;
   const PIP_H = 180;
+  // The front camera is also what perception reads (#18): twice the side cameras' resolution, so
+  // a person 30 m ahead is more than a few pixels. The PIP shows it scaled down.
+  const FRONT_W = 640;
+  const FRONT_H = 360;
+  // A lit lamp 20 m away is a few pixels; at the old quality JPEG's colour blur greyed it out.
+  const FRONT_JPEG = 0.85;
   if (pipCanvas) {
-    pipCanvas.width = PIP_W;
-    pipCanvas.height = PIP_H;
+    pipCanvas.width = FRONT_W;
+    pipCanvas.height = FRONT_H;
   }
   if (pipHeader && pipRoot) {
     pipHeader.addEventListener("click", () => {
@@ -788,13 +794,13 @@
     };
   }
 
-  function paintOnboardPixels(pixels, canvas) {
+  function paintOnboardPixels(pixels, canvas, w = PIP_W, h = PIP_H) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const image = ctx.createImageData(PIP_W, PIP_H);
-    const row = PIP_W * 4;
-    for (let y = 0; y < PIP_H; y++) {
-      const src = (PIP_H - 1 - y) * row;
+    const image = ctx.createImageData(w, h);
+    const row = w * 4;
+    for (let y = 0; y < h; y++) {
+      const src = (h - 1 - y) * row;
       image.data.set(pixels.subarray(src, src + row), y * row);
     }
     ctx.putImageData(image, 0, 0);
@@ -914,10 +920,10 @@
   }
 
   function renderOnboard(world) {
-    return renderView(world, 0, pipCanvas);
+    return renderView(world, 0, pipCanvas, FRONT_W, FRONT_H);
   }
 
-  function renderView(world, yaw, canvas) {
+  function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
     const scene = world && world.scene;
@@ -927,15 +933,18 @@
     if (!world._onboardCam) world._onboardCam = world.camera.clone();
     const cam = world._onboardCam;
     cam.fov = ONBOARD_VFOV;
-    cam.aspect = PIP_W / PIP_H;
+    cam.aspect = w / h;
     cam.position.set(mount.x, mount.y, mount.z);
     cam.lookAt(mount.lookX, mount.lookY, mount.lookZ);
     if (cam.updateProjectionMatrix) cam.updateProjectionMatrix();
     if (cam.updateMatrixWorld) cam.updateMatrixWorld();
-    if (!world._onboardTarget) {
-      world._onboardTarget = new sample.constructor(PIP_W, PIP_H);
+    // One render target per size: the front camera and the side cameras differ.
+    world._onboardTargets = world._onboardTargets || {};
+    const key = `${w}x${h}`;
+    if (!world._onboardTargets[key]) {
+      world._onboardTargets[key] = new sample.constructor(w, h);
     }
-    const target = world._onboardTarget;
+    const target = world._onboardTargets[key];
     target.isXRRenderTarget = true;
     if (target.texture) {
       target.texture.colorSpace = renderer.outputColorSpace || "srgb";
@@ -954,11 +963,11 @@
     try {
       renderer.setRenderTarget(target);
       renderer.render(scene, cam);
-      const pixels = new Uint8Array(PIP_W * PIP_H * 4);
+      const pixels = new Uint8Array(w * h * 4);
       if (renderer.readRenderTargetPixels) {
-        renderer.readRenderTargetPixels(target, 0, 0, PIP_W, PIP_H, pixels);
+        renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
       }
-      paintOnboardPixels(pixels, canvas);
+      paintOnboardPixels(pixels, canvas, w, h);
     } finally {
       if (renderer.setRenderTarget) renderer.setRenderTarget(prev);
       hidden.forEach((obj) => {
@@ -1076,7 +1085,7 @@
   function grabFrame() {
     const world = window.SEMIF_WORLD;
     if (!renderOnboard(world) || !pipCanvas) return null;
-    return pipCanvas.toDataURL("image/jpeg", 0.55);
+    return pipCanvas.toDataURL("image/jpeg", FRONT_JPEG);
   }
 
   window.SEMIF_GRAB_FRAME = grabFrame;
@@ -1104,7 +1113,7 @@
     try {
       frames = grabSurround(
         alreadyPainted && pipCanvas
-          ? pipCanvas.toDataURL("image/jpeg", 0.55)
+          ? pipCanvas.toDataURL("image/jpeg", FRONT_JPEG)
           : grabFrame()
       );
     } catch (_err) {
