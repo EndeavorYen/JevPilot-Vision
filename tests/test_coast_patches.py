@@ -18,7 +18,7 @@ WEB = REPO / "jevpilot_vision" / "web"
 ASSETS = WEB / "assets"
 MAIN = "main-CvLEeHjW.js"
 WORKER = "planner.worker-DFdG3q6n.js"
-WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261003d22";'
+WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261003h1";'
 
 # three.js classes the bundle hands the renderer on top of the ones semif-scenery.js already gets,
 # as name: minified identifier. test_kit_classes_are_the_classes_they_claim_to_be checks each one.
@@ -158,9 +158,10 @@ COAST_PATCHES = [
      "t&&this.renderer.render(this.scene,this.camera)",
      "t&&(window.SEMIF_SCENERY?.present?.(this)||this.renderer.render(this.scene,this.camera))"),
     # --- vehicles and people: the coast's hero car comes from semif-world/vehicles.js (#25)
+    # The bundle's own Model Y loader goes along, so ?car=model-y and K can pick it (#47).
     ("coast-hero", MAIN,
      "d=Jm().then(e=>{",
-     "d=(window.SEMIF_WORLD_KIT?.hero?.(this)??Jm()).then(e=>{"),
+     "d=(window.SEMIF_WORLD_KIT?.hero?.(this,Jm)??Jm()).then(e=>{"),
     # --- lit signal lamps on the coast are real lights: saturated and bright, so the onboard
     # camera can read them through ACES (#18). Old maps keep the bundle's pastel lamps.
     ("coast-signal-lamps", MAIN,
@@ -221,7 +222,7 @@ COAST_PATCHES = [
     # without the patches above
     ("coast-worker-version", MAIN,
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js`",
-     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=20261003d22`"),
+     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=20261003h1`"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",
