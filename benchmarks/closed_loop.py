@@ -317,24 +317,105 @@ _READ = (
 )
 
 
-def _jevpilot_tabs() -> List[str]:
-    return [line.split()[0] for line in _cdp("list").splitlines() if "/jevpilot" in line]
+_LOCAL = {"localhost", "127.0.0.1", "::1"}
 
 
-def open_tab(base: str) -> str:
-    """A tab of our own, opened by chrome-cdp-ex (so it is not a hidden background tab). Another
-    simulation tab would share the server's vision slot and mix camera evidence, so we refuse to
-    start rather than take over someone's tab."""
-    others = _jevpilot_tabs()
+def _same_server(url: str, base: str) -> bool:
+    from urllib.parse import urlsplit
+
+    a, b = urlsplit(url), urlsplit(base)
+    host = lambda u: "localhost" if u.hostname in _LOCAL else u.hostname  # noqa: E731
+    return host(a) == host(b) and a.port == b.port
+
+
+def _jevpilot_tabs(base: str) -> List[str]:
+    """Simulation tabs on this server: only those share its vision slot (#39: another session's server
+    in the same Chrome is not ours to refuse)."""
+    tabs = []
+    for line in _cdp("list").splitlines():
+        url = next((w for w in line.split() if "/jevpilot" in w), "")
+        if url and _same_server(url, base):
+            tabs.append(line.split()[0])
+    return tabs
+
+
+# Tabs through Chrome's DevTools HTTP endpoint (#39): chrome-cdp-ex opens tabs but cannot close them,
+# and tabs left behind piled up until Chrome stalled (Page.enable timeouts) or turned hidden.
+def _devtools_port() -> int:
+    return int(os.environ.get("CDP_PORT", "9222"))
+
+
+def _devtools_pages() -> List[Dict[str, Any]]:
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", _devtools_port(), timeout=10)
+    try:
+        conn.request("GET", "/json/list")
+        return [p for p in json.loads(conn.getresponse().read()) if p.get("type", "page") == "page"]
+    finally:
+        conn.close()
+
+
+def _devtools_close(full_id: str) -> None:
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", _devtools_port(), timeout=10)
+    try:
+        conn.request("GET", f"/json/close/{full_id}")
+        conn.getresponse().read()
+    finally:
+        conn.close()
+
+
+def ensure_anchor(base: str) -> None:
+    """Closing the last page quits Chrome; keep one page that is not a simulation."""
+    if not [p for p in _devtools_pages() if "/jevpilot" not in p.get("url", "")]:
+        _cdp("open", f"{base.rstrip('/')}/openapi.json")
+
+
+def open_tab(base: str) -> Dict[str, str]:
+    """A tab of our own, opened by chrome-cdp-ex (so it is not a hidden background tab), as
+    {target: chrome-cdp-ex prefix, id: DevTools id}. Another simulation tab would share the server's
+    vision slot and mix camera evidence, so we refuse to start rather than take over someone's tab."""
+    others = _jevpilot_tabs(base)
     if others:
         raise SystemExit(f"close the open simulation tab(s) {others} first: they share the server's vision slot")
+    before = {p["id"] for p in _devtools_pages()}
     _cdp("open", f"{base.rstrip('/')}/jevpilot/?minimal=0")
     for _ in range(20):
-        tabs = _jevpilot_tabs()
-        if tabs:
-            return tabs[0]
+        new = [p for p in _devtools_pages() if p["id"] not in before
+               and "/jevpilot" in p.get("url", "") and _same_server(p["url"], base)]
+        if new:
+            full = new[0]["id"]
+            prefixes = [line.split()[0] for line in _cdp("list").splitlines() if line.strip()]
+            target = next((x for x in prefixes if full.upper().startswith(x.upper())), full[:8])
+            return {"target": target, "id": full}
         time.sleep(0.5)
     raise SystemExit("the evaluation tab did not appear")
+
+
+def close_tab(tab: Optional[Dict[str, str]], wait: bool = False) -> None:
+    """Close our tab. `wait`: until Chrome has dropped it (/json/close returns first), so a tab
+    opened next does not find it still listed and take it for someone else's."""
+    if not tab:
+        return
+    try:
+        _devtools_close(tab["id"])
+        for _ in range(20 if wait else 0):
+            if all(p["id"] != tab["id"] for p in _devtools_pages()):
+                return
+            time.sleep(0.25)
+    except Exception:
+        pass
+
+
+def replace_tab(base: str, holder: Dict[str, Any]) -> None:
+    """A fresh tab for the next run (#39). The anchor is checked again first: the user may have
+    closed it, and closing Chrome's last page quits Chrome."""
+    old, holder["tab"] = holder["tab"], None  # a Ctrl-C from here on closes whatever holder has
+    ensure_anchor(base)
+    close_tab(old, wait=True)
+    holder["tab"] = open_tab(base)
 
 
 def decision_trouble(got: Dict[str, Any]) -> Dict[str, int]:
@@ -397,16 +478,29 @@ def outcome(run: Dict[str, Any], got: Dict[str, Any]) -> Dict[str, bool]:
 
 def server_ok(base: str, tries: int = 3) -> bool:
     """The decision server answers its health check (infrastructure, independent of the drive).
-    Asked after the drive stopped, and a few times: a server busy with the detector is not down."""
-    import urllib.request
+    Asked after the drive stopped, a few times, over a kept-alive IPv4 connection: urllib's
+    'Connection: close' requests were reset by the server's Windows event loop more than half the
+    time, and 'localhost' resolves to ::1 first while the server listens on IPv4."""
+    import http.client
+    from urllib.parse import urlsplit
 
+    parts = urlsplit(base)
+    host = "127.0.0.1" if parts.hostname in ("localhost", None) else parts.hostname
+    port = parts.port or 80
     for attempt in range(tries):
+        conn = None
         try:
-            with urllib.request.urlopen(f"{base.rstrip('/')}/health", timeout=10) as res:
-                if 200 <= res.status < 300:
-                    return True
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            conn.request("GET", "/health")
+            res = conn.getresponse()
+            res.read()
+            if 200 <= res.status < 300:
+                return True
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
         if attempt + 1 < tries:
             time.sleep(5)
     return False
@@ -486,26 +580,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"{len(plan)} runs planned ({args.set}), {len(plan) - len(todo)} already in {args.out}; "
           f"about {len(todo) * (args.seconds + 25) / 60:.0f} min to go", flush=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    target = open_tab(args.base)
+    ensure_anchor(args.base)
+    tab: Dict[str, Any] = {"tab": None}
     try:
-        _drive_all(args, todo, target)
+        tab["tab"] = open_tab(args.base)
+        _drive_all(args, todo, tab)
     finally:
-        _cdp("nav", target, f"{args.base.rstrip('/')}/openapi.json")  # stop the last drive, even on Ctrl-C
+        try:
+            ensure_anchor(args.base)  # the user may have closed it; the last page closing quits Chrome
+        except Exception:
+            pass
+        close_tab(tab["tab"])  # even on Ctrl-C: no tab is left driving or piling up
     print(report(summarize(current_rows(read_rows(args.out), load_seeds())[0])))
     return 0
 
 
-def _drive_all(args: argparse.Namespace, todo: List[Dict[str, Any]], target: str) -> None:
+TAB_FAILURES = ("setup:", "tab hidden")  # failures of the tab itself, not of the run asked for
+
+
+def _drive_all(args: argparse.Namespace, todo: List[Dict[str, Any]], tab: Any) -> None:
+    holder = tab if isinstance(tab, dict) and "tab" in tab else {"tab": {"target": tab, "id": ""}}
     for i, run in enumerate(todo, 1):
+        target = holder["tab"]["target"]
         try:
-            others = [t for t in _jevpilot_tabs() if t != target]
+            others = [t for t in _jevpilot_tabs(args.base) if t != target]
         except Exception:
             others = []  # could not check; the check after the run records it
         if others:
             raise SystemExit(f"another simulation tab {others} opened during the evaluation: it shares the vision slot")
         row = drive(target, args.base, run)
         try:
-            shared = [t for t in _jevpilot_tabs() if t != target]
+            shared = [t for t in _jevpilot_tabs(args.base) if t != target]
             row["tab_check"] = "ok"
         except Exception:
             shared = []
@@ -524,6 +629,10 @@ def _drive_all(args: argparse.Namespace, todo: List[Dict[str, Any]], target: str
               + (f"{row.get('distance_m')} m, red {row.get('red_light')}, collisions {row.get('collisions')}"
                  + (", autopilot gave up" if row.get("disengaged") else "") + (", did not move" if row.get("stalled") else "")
                  if row["ok"] else f"COULD NOT DRIVE {row.get('error')}"), flush=True)
+        if not row.get("ok") and str(row.get("error", "")).startswith(TAB_FAILURES) and holder["tab"].get("id") and i < len(todo):
+            # The tab never got a drive going (a stalled load) or stopped stepping (hidden): the next
+            # run gets a fresh tab. Its row is saved first.
+            replace_tab(args.base, holder)
 
 
 if __name__ == "__main__":

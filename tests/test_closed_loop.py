@@ -213,7 +213,7 @@ def test_review3_violation_rates_are_over_runs_that_moved_with_all_runs_beside()
 def test_review4_a_finished_run_is_saved_even_if_the_tab_check_fails(monkeypatch, tmp_path):
     out = tmp_path / "runs.jsonl"
 
-    def boom():
+    def boom(base):
         raise RuntimeError("cdp list timed out")
 
     monkeypatch.setattr(cl, "_jevpilot_tabs", boom)
@@ -238,7 +238,7 @@ def test_review4_old_rows_are_driven_again_not_silently_dropped():
 def test_review3_a_run_shared_with_another_tab_is_not_kept(monkeypatch, tmp_path):
     out = tmp_path / "runs.jsonl"
     tabs = iter([[], ["OTHER"]])  # none before the run, one appeared during it
-    monkeypatch.setattr(cl, "_jevpilot_tabs", lambda: ["MINE"] + next(tabs))
+    monkeypatch.setattr(cl, "_jevpilot_tabs", lambda base: ["MINE"] + next(tabs))
     monkeypatch.setattr(cl, "drive", lambda target, base, run: dict(run, ok=True, distance_m=900, events=[]))
     import argparse
     args = argparse.Namespace(out=out, base="http://x", set="held_out")
@@ -269,34 +269,57 @@ def test_review5_a_run_whose_shared_tab_check_failed_is_counted():
     assert "tab check could not be made for 1" in text
 
 
+def _fake_http(monkeypatch, replies, seen):
+    """http.client with scripted replies: an exception to raise, or a status."""
+    import http.client
+
+    class Conn:
+        def __init__(self, host, port=None, timeout=None):
+            self.host, self.port = host, port
+
+        def request(self, method, url, headers=None):
+            seen.append({"url": url, "host": self.host, "headers": dict(headers or {})})
+            nxt = replies.pop(0) if replies else 200
+            if isinstance(nxt, Exception):
+                raise nxt
+            self.status = nxt
+
+        def getresponse(self):
+            class Res:
+                status = self.status
+
+                def read(self):
+                    return b"{}"
+            return Res()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPConnection", Conn)
+
+
 def test_review5_a_busy_server_is_not_an_outage(monkeypatch):
     """During a Vision drive the server is busy with the detector; one slow /health is not an
     outage. It is asked again after the drive stopped, a few times."""
-    import urllib.request
-
-    calls = []
-
-    class Res:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def urlopen(url, timeout):
-        calls.append(url)
-        if len(calls) < 3:
-            raise TimeoutError("busy")
-        return Res()
-
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    seen = []
+    _fake_http(monkeypatch, [TimeoutError("busy"), TimeoutError("busy"), 200], seen)
     monkeypatch.setattr(cl.time, "sleep", lambda s: None)
-    assert cl.server_ok("http://x") is True and len(calls) == 3
-    calls.clear()
-    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout: (_ for _ in ()).throw(TimeoutError("down")))
-    assert cl.server_ok("http://x") is False
+    assert cl.server_ok("http://localhost:8768") is True and len(seen) == 3
+    seen.clear()
+    _fake_http(monkeypatch, [TimeoutError("down")] * 3, seen)
+    assert cl.server_ok("http://localhost:8768") is False
+
+
+def test_the_health_check_keeps_the_connection_alive_and_asks_ipv4(monkeypatch):
+    """Root cause (2026-10-03): Python's urllib sends 'Connection: close', and the server's Windows
+    event loop reset 57% of such requests (23/40) while keep-alive requests all passed (40/40); so a
+    healthy server read as unreachable after 10 of 60 held-out runs. 'localhost' also resolved to
+    ::1 first while the server listens on IPv4 only."""
+    seen = []
+    _fake_http(monkeypatch, [200], seen)
+    assert cl.server_ok("http://localhost:8768") is True
+    assert seen[0]["url"] == "/health" and seen[0]["host"] == "127.0.0.1"
+    assert "close" not in {str(v).lower() for v in seen[0]["headers"].values()}
 
 
 def test_review6_a_read_result_survives_a_failed_park_and_unreadable_is_not_broke(monkeypatch):
@@ -343,6 +366,163 @@ def test_review8_the_report_names_failures_of_the_system_under_test():
     text = cl.report(cl.summarize(rows))
     assert "decision path errors (500s, timeouts, unreadable replies) during 1" in text
     assert cl.ROW_FORMAT == 7
+
+
+class _FakeChrome:
+    """Chrome as the DevTools HTTP endpoint and chrome-cdp-ex see it: pages with ids; `open` adds a
+    page, /json/close removes one; closing the last page would quit Chrome (#39)."""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.next = 1
+        self.closed = []
+        self.quit = False
+
+    def cdp(self, *args, **kw):
+        if args[0] == "open":
+            pid = f"NEW{self.next:05d}" + "X" * 24
+            self.next += 1
+            self.pages.append({"id": pid, "url": args[1]})
+            return ""
+        if args[0] == "list":
+            return "\n".join(f"{p['id'][:8]}  title  {p['url']}" for p in self.pages)
+        if args[0] == "nav":
+            for p in self.pages:
+                if p["id"].startswith(args[1]):
+                    p["url"] = args[2]
+            return ""
+        return ""
+
+    def close(self, full_id):
+        self.closed.append(full_id)
+        self.pages = [p for p in self.pages if p["id"] != full_id]
+        if not self.pages:
+            self.quit = True
+
+
+def _with_chrome(monkeypatch, chrome, rows):
+    monkeypatch.setattr(cl, "_cdp", chrome.cdp)
+    monkeypatch.setattr(cl, "_devtools_pages", lambda: list(chrome.pages))
+    monkeypatch.setattr(cl, "_devtools_close", chrome.close)
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    seen = []
+
+    def drive(target, base, run):
+        seen.append(target)
+        return dict(rows.pop(0) if rows else dict(ok=True, fmt=cl.ROW_FORMAT, stalled=False), **run)
+
+    monkeypatch.setattr(cl, "drive", drive)
+    return seen
+
+
+def test_issue39_the_evaluation_closes_its_tab_and_keeps_an_anchor(monkeypatch, tmp_path):
+    chrome = _FakeChrome([])  # a freshly launched debug Chrome with no page
+    seen = _with_chrome(monkeypatch, chrome, [])
+    cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert not chrome.quit, "Chrome kept running: an anchor page stayed"
+    assert [p["url"] for p in chrome.pages] == ["http://localhost:8768/openapi.json"], chrome.pages
+    assert len(chrome.closed) == 1 and seen and all(t == seen[0] for t in seen)
+
+
+def test_issue39_a_tab_whose_drive_never_started_is_replaced(monkeypatch, tmp_path):
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    seen = _with_chrome(monkeypatch, chrome, [dict(ok=False, fmt=cl.ROW_FORMAT, error="setup: Error: Timeout: Page.enable")])
+    cl.main(["--set", "tuning", "--seeds", "7", "31337", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert seen[0] != seen[1], "the second run drove in a fresh tab"
+    assert len(chrome.closed) == 2 and [p["id"][:6] for p in chrome.pages] == ["ANCHOR"]
+
+
+def test_issue39_a_simulation_tab_of_another_server_does_not_block(monkeypatch, tmp_path):
+    """Only a tab on the same server shares its vision slot; another session's server is not ours to refuse."""
+    chrome = _FakeChrome([{"id": "OTHERSIM" + "Z" * 24, "url": "http://localhost:8790/jevpilot/?seed=1"},
+                          {"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8790/openapi.json"}])
+    seen = _with_chrome(monkeypatch, chrome, [])
+    cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert seen and cl.read_rows(tmp_path / "runs.jsonl")[0]["ok"] is True
+    assert [p["id"][:8] for p in chrome.pages] == ["OTHERSIM", "ANCHORYY"]
+
+
+def test_issue39_a_simulation_tab_of_the_same_server_still_blocks(monkeypatch, tmp_path):
+    chrome = _FakeChrome([{"id": "OTHERSIM" + "Z" * 24, "url": "http://127.0.0.1:8768/jevpilot/?seed=1"}])
+    _with_chrome(monkeypatch, chrome, [])
+    with pytest.raises(SystemExit):
+        cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+                 "--out", str(tmp_path / "runs.jsonl")])
+
+def test_issue39_a_hidden_tab_is_replaced(monkeypatch, tmp_path):
+    """A hidden tab does not step the simulation (another window took the foreground): it is a tab
+    problem like a stalled load, so the next run gets a fresh tab."""
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    seen = _with_chrome(monkeypatch, chrome, [dict(ok=False, fmt=cl.ROW_FORMAT, error="tab hidden (the simulation does not step)")])
+    cl.main(["--set", "tuning", "--seeds", "7", "31337", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert seen[0] != seen[1], "the second run drove in a fresh tab"
+    assert len(chrome.closed) == 2
+
+
+def test_issue39_review_m1_a_tab_still_closing_is_not_mistaken_for_someone_elses(monkeypatch, tmp_path):
+    """/json/close returns before Chrome drops the target: the replacement waits for it to go, and the
+    failed run's row is saved before any of that."""
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    closing = []
+    real_close, real_cdp = chrome.close, chrome.cdp
+
+    def slow_close(full_id):
+        closing.append([p for p in chrome.pages if p["id"] == full_id][0])
+        real_close(full_id)
+
+    def cdp(*args, **kw):
+        if args[0] == "list" and closing:
+            return real_cdp(*args) + "".join(f"\n{p['id'][:8]}  title  {p['url']}" for p in closing[-1:])
+        return real_cdp(*args, **kw)
+
+    def pages():
+        out = list(chrome.pages) + list(closing)
+        closing.clear()  # gone by the next look
+        return out
+
+    seen = _with_chrome(monkeypatch, chrome, [dict(ok=False, fmt=cl.ROW_FORMAT, error="setup: Error: Timeout: Page.enable")])
+    monkeypatch.setattr(cl, "_cdp", cdp)
+    monkeypatch.setattr(cl, "_devtools_close", slow_close)
+    monkeypatch.setattr(cl, "_devtools_pages", pages)
+    cl.main(["--set", "tuning", "--seeds", "7", "31337", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    rows = cl.read_rows(tmp_path / "runs.jsonl")
+    assert [r["ok"] for r in rows] == [False, True] and seen[0] != seen[1]
+
+
+def test_issue39_review_m2_a_tab_someone_else_opens_meanwhile_is_not_claimed(monkeypatch, tmp_path):
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    real_cdp = chrome.cdp
+
+    def cdp(*args, **kw):
+        if args[0] == "open" and "/jevpilot" in args[1]:
+            chrome.pages.append({"id": "AAAFOREIGN" + "Q" * 22, "url": "https://example.com/"})  # listed first
+        return real_cdp(*args, **kw)
+
+    seen = _with_chrome(monkeypatch, chrome, [])
+    monkeypatch.setattr(cl, "_cdp", cdp)
+    cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert seen[0].startswith("NEW") and any(p["id"].startswith("AAAFOREIGN") for p in chrome.pages)
+
+
+def test_issue39_review_l2_an_anchor_closed_mid_evaluation_is_restored_before_a_replacement(monkeypatch, tmp_path):
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    seen = _with_chrome(monkeypatch, chrome, [])
+
+    def drive(target, base, run):
+        seen.append(target)
+        chrome.pages = [p for p in chrome.pages if not p["id"].startswith("ANCHOR")]  # the user closed it
+        return dict(ok=False, fmt=cl.ROW_FORMAT, error="tab hidden (the simulation does not step)", **run)
+
+    monkeypatch.setattr(cl, "drive", drive)
+    cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert not chrome.quit
 
 
 # ---- Graphics quality (docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3) ---------
