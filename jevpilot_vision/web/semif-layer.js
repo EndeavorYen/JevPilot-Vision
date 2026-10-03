@@ -295,6 +295,10 @@
   const intentEl = document.getElementById("fsd-intent");
   const latencyEl = document.getElementById("fsd-latency");
   const visionOn = params.get("vision") !== "0";
+  const visionPacer = window.SEMIF_VISION_PACE
+    ? window.SEMIF_VISION_PACE.createVisionPacer()
+    : { tryBegin: () => true, ticket: () => 0, end() {}, stats: () => null };
+  window.SEMIF_VISION_PACER = visionPacer;
   const lapOnce = params.get("lap") === "1";
   window.SEMIF_VISION = null;
   window.SEMIF_VISION_GEN = null;
@@ -1423,72 +1427,80 @@
       visionEl.textContent = "VISION off";
       return;
     }
-    const tGrab = performance.now();
-    let frames = null;
+    // One request at a time (semif-vision-pace.js): frames grabbed while the server is busy are
+    // thrown away there, after costing four renders, reads and encodes here.
+    if (!visionPacer.tryBegin()) return;
+    const ticket = visionPacer.ticket();
     try {
-      frames = grabSurround(
-        alreadyPainted && pipCanvas
-          ? pipCanvas.toDataURL("image/jpeg", FRONT_JPEG)
-          : grabFrame()
-      );
-    } catch (_err) {
-      visionEl.textContent = "VISION error";
-      return;
-    }
-    const grabMs = performance.now() - tGrab;
-    if (!frames) {
-      visionEl.textContent = "VISION waiting";
-      return;
-    }
-    try {
-      const tVis = performance.now();
-      const res = await origFetch("/v1/vision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frames: frames, t_ms: tGrab }),
-      });
-      const data = await res.json();
-      const rttMs = performance.now() - tVis;
-      if (!res.ok || data.error) {
+      const tGrab = performance.now();
+      let frames = null;
+      try {
+        frames = grabSurround(
+          alreadyPainted && pipCanvas
+            ? pipCanvas.toDataURL("image/jpeg", FRONT_JPEG)
+            : grabFrame()
+        );
+      } catch (_err) {
         visionEl.textContent = "VISION error";
         return;
       }
-      if (!data.vision || typeof data.vision !== "object") {
+      const grabMs = performance.now() - tGrab;
+      if (!frames) {
         visionEl.textContent = "VISION waiting";
         return;
       }
-      const vis = data.vision;
-      const incoming = Number(data.vision_gen);
-      const held = Number(window.SEMIF_VISION_GEN);
-      if (Number.isFinite(incoming) && Number.isFinite(held) && incoming <= held) {
-        return; // older, or the same evidence handed back while the server was busy
-      }
-      window.SEMIF_VISION = vis;
-      // Age counts from when the frames were grabbed, not from when the answer arrived.
-      window.SEMIF_VISION_AT = Number.isFinite(Number(vis.captured_ms)) ? Number(vis.captured_ms) : performance.now();
-      updateSeenSignal();
-      if (Number.isFinite(incoming)) window.SEMIF_VISION_GEN = incoming;
-      const encode = Number(data.vision_encode_ms);
-      if (telemetry && Number.isFinite(encode)) {
-        telemetry.recordVision({
-          encode_ms: encode,
-          rtt_ms: rttMs,
-          grab_ms: grabMs,
+      try {
+        const tVis = performance.now();
+        const res = await origFetch("/v1/vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frames: frames, t_ms: tGrab }),
         });
-        refreshLatencyHud();
+        const data = await res.json();
+        const rttMs = performance.now() - tVis;
+        if (!res.ok || data.error) {
+          visionEl.textContent = "VISION error";
+          return;
+        }
+        if (!data.vision || typeof data.vision !== "object") {
+          visionEl.textContent = "VISION waiting";
+          return;
+        }
+        const vis = data.vision;
+        const incoming = Number(data.vision_gen);
+        const held = Number(window.SEMIF_VISION_GEN);
+        if (Number.isFinite(incoming) && Number.isFinite(held) && incoming <= held) {
+          return; // older, or the same evidence handed back while the server was busy
+        }
+        window.SEMIF_VISION = vis;
+        // Age counts from when the frames were grabbed, not from when the answer arrived.
+        window.SEMIF_VISION_AT = Number.isFinite(Number(vis.captured_ms)) ? Number(vis.captured_ms) : performance.now();
+        updateSeenSignal();
+        if (Number.isFinite(incoming)) window.SEMIF_VISION_GEN = incoming;
+        const encode = Number(data.vision_encode_ms);
+        if (telemetry && Number.isFinite(encode)) {
+          telemetry.recordVision({
+            encode_ms: encode,
+            rtt_ms: rttMs,
+            grab_ms: grabMs,
+          });
+          refreshLatencyHud();
+        }
+        const sig = vis.signal || "unknown";
+        visionEl.textContent = vis.event
+          ? ["VISION", vis.event].join(" · ")
+          : [
+              "VISION",
+              vis.backend || "stub",
+              "sig " + sig,
+              "ped " + (vis.pedestrian != null ? Number(vis.pedestrian).toFixed(2) : "—"),
+              "veh " + (vis.vehicle != null ? Number(vis.vehicle).toFixed(2) : "—"),
+            ].join(" · ");
+      } catch (_err) {
+        visionEl.textContent = "VISION error";
       }
-      const sig = vis.signal || "unknown";
-      visionEl.textContent = vis.event
-        ? ["VISION", vis.event].join(" · ")
-        : [
-            "VISION",
-            vis.backend || "stub",
-            "sig " + sig,
-            "ped " + (vis.pedestrian != null ? Number(vis.pedestrian).toFixed(2) : "—"),
-            "veh " + (vis.vehicle != null ? Number(vis.vehicle).toFixed(2) : "—"),
-          ].join(" · ");
-    } catch (_err) {
-      visionEl.textContent = "VISION error";
+    } finally {
+      visionPacer.end(ticket);
     }
   }
 
