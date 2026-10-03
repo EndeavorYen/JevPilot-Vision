@@ -9,6 +9,11 @@ Results are JSONL, one run per line, and a rerun with the same file only drives 
 
     python benchmarks/closed_loop.py --set held_out --out D:/evals/2026-10-03/runs.jsonl
     python benchmarks/closed_loop.py --report D:/evals/2026-10-03/runs.jsonl
+
+Runs name their graphics quality (--gfx, default medium): the two qualities are different worlds,
+so their rates are never pooled. Rows written before the tiers count as medium, today's world.
+
+    python benchmarks/closed_loop.py --set held_out --gfx high --out D:/evals/2026-10-03/high.jsonl
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ ROUTES = ("festival", "harbour", "pass", "coast", "highway")  # the coast map's 
 MODES = ("privileged", "vision", "heuristic")
 DEFAULT_ROUTES = ("festival", "harbour", "pass")
 DEFAULT_MODES = ("privileged", "vision")
+GFX = ("medium", "high")  # docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3
 # The bundle drops a decision that arrives more than 1.8 s after it asked, injected lag included;
 # beyond this the stress only parks the car (semif-layer.js caps ?lag_ms= the same).
 MAX_LAG_MS = 1200
@@ -76,9 +82,10 @@ def current_rows(rows: List[Dict[str, Any]], seeds: Dict[str, Any]) -> Tuple[Lis
     return kept, dropped
 
 
-def plan_runs(seeds: Iterable[int], routes: Iterable[str], modes: Iterable[str], seconds: int, lag_ms: int) -> List[Dict[str, Any]]:
+def plan_runs(seeds: Iterable[int], routes: Iterable[str], modes: Iterable[str], seconds: int, lag_ms: int,
+              gfx: str = "medium") -> List[Dict[str, Any]]:
     return [
-        {"seed": int(seed), "route": route, "mode": mode, "seconds": int(seconds), "lag_ms": int(lag_ms)}
+        {"seed": int(seed), "route": route, "mode": mode, "seconds": int(seconds), "lag_ms": int(lag_ms), "gfx": gfx}
         for seed in seeds
         for route in routes
         for mode in modes
@@ -86,7 +93,7 @@ def plan_runs(seeds: Iterable[int], routes: Iterable[str], modes: Iterable[str],
 
 
 def _key(row: Dict[str, Any]) -> Tuple[Any, ...]:
-    return (row.get("seed"), row.get("route"), row.get("mode"), row.get("seconds"), row.get("lag_ms", 0))
+    return (row.get("seed"), row.get("route"), row.get("mode"), row.get("seconds"), row.get("lag_ms", 0), row.get("gfx", "medium"))
 
 
 def read_rows(path: Path) -> List[Dict[str, Any]]:
@@ -118,7 +125,7 @@ def page_url(base: str, run: Dict[str, Any]) -> str:
     url = f"{base.rstrip('/')}/jevpilot/?minimal=0&seed={run['seed']}&world=coast:{run['route']}&mode={run['mode']}"
     if run.get("lag_ms"):
         url += f"&lag_ms={int(run['lag_ms'])}"
-    return url
+    return url + f"&gfx={run.get('gfx', 'medium')}"
 
 
 # ---- Statistics ------------------------------------------------------------------------------------
@@ -146,7 +153,7 @@ def latest(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(chosen.values())
 
 
-Group = Tuple[Any, Any, Any, Any]  # (set, mode, seconds, lag_ms)
+Group = Tuple[Any, Any, Any, Any, Any]  # (set, mode, seconds, lag_ms, gfx)
 
 
 def _reason_kind(reason: str) -> str:
@@ -161,7 +168,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
     out: Dict[Group, Dict[str, Any]] = {}
 
     def group_of(row: Dict[str, Any]) -> Group:
-        return (row.get("set", "?"), row.get("mode", "?"), int(row.get("seconds") or 0), int(row.get("lag_ms") or 0))
+        return (row.get("set", "?"), row.get("mode", "?"), int(row.get("seconds") or 0), int(row.get("lag_ms") or 0),
+                row.get("gfx", "medium"))
 
     def new() -> Dict[str, Any]:
         return {"runs": 0, "attempts": 0, "retried": 0, "failed_runs": 0, "failures": {}, "never_driven": [],
@@ -230,11 +238,11 @@ def _share(k: int, n: int) -> str:
 def report(summary: Dict[Group, Dict[str, Any]]) -> str:
     lines = []
     for group in sorted(summary, key=lambda g: tuple(str(x) for x in g)):
-        seed_set, mode, seconds, lag = group
+        seed_set, mode, seconds, lag, gfx = group
         s = summary[group]
         n = s["runs"]
         per_km = lambda v: "n/a" if v is None else f"{v:.2f}/km"
-        lines.append(f"{seed_set} · {mode} · {seconds} s · lag {lag} ms: {n} runs, {s['distance_km']:.1f} km driven, "
+        lines.append(f"{seed_set} · {mode} · {seconds} s · lag {lag} ms · gfx {gfx}: {n} runs, {s['distance_km']:.1f} km driven, "
                      f"{s['attempts']} attempts ({s['retried']} retried after a setup failure)")
         if s["failed_runs"]:
             why = "; ".join(f"{k} ×{v}" for k, v in sorted(s["failures"].items()))
@@ -301,7 +309,7 @@ _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
     " const c = window.SEMIF_CLASSIFIER_STATS || {}, c0 = window.__eval.c0;"
     " const classifier = {}; for (const k of Object.keys(c)) classifier[k] = c[k] - (c0[k] || 0);"
-    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0,"
+    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -353,6 +361,8 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"drove route {got.get('world_seen')!r}"
     if int(got.get("lag_seen") or 0) != int(run.get("lag_ms") or 0):
         return f"page lag {got.get('lag_seen')} ms"
+    if got.get("gfx_seen") != run.get("gfx", "medium"):  # a coast page always reports its quality
+        return f"drove graphics {got.get('gfx_seen')!r}"
     if got.get("engaged") is False:
         return "autopilot never engaged"
     acted = (got.get("crash") or float(got.get("distance_m") or 0) >= STALL_MPS * run["seconds"]
@@ -447,6 +457,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--routes", nargs="+", choices=ROUTES, default=list(DEFAULT_ROUTES))
     ap.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
     ap.add_argument("--seconds", type=int, default=150)
+    ap.add_argument("--gfx", choices=GFX, default="medium", help="graphics quality; medium is the world before the tiers")
     ap.add_argument("--lag-ms", type=int, default=0, help=f"0..{MAX_LAG_MS}: the bundle drops decisions older than 1.8 s")
     ap.add_argument("--base", default="http://localhost:8768")
     ap.add_argument("--out", type=Path, help="JSONL results (absolute path); reruns resume")
@@ -470,7 +481,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     seeds = [s for s in chosen if not args.seeds or s in args.seeds]
     if args.seeds and set(args.seeds) - set(chosen):
         ap.error(f"seeds {sorted(set(args.seeds) - set(chosen))} are not in the {args.set} set")
-    plan = plan_runs(seeds, args.routes, args.modes, args.seconds, args.lag_ms)
+    plan = plan_runs(seeds, args.routes, args.modes, args.seconds, args.lag_ms, gfx=args.gfx)
     todo = pending(plan, read_rows(args.out))
     print(f"{len(plan)} runs planned ({args.set}), {len(plan) - len(todo)} already in {args.out}; "
           f"about {len(todo) * (args.seconds + 25) / 60:.0f} min to go", flush=True)
