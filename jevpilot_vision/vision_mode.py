@@ -134,6 +134,47 @@ def sweep_collision(
 
 CRAWL_MPS = 1.0  # without perception, only this slow is safe
 
+# A light read some time ago may have changed since (#38).
+# The world's rule, not a reading: every coast signal is green 8 s, amber 2 s, red 14 s (the bundle's
+# signal cycle), a prior like the map.
+GREEN_S = 8.0
+AMBER_S = 2.0
+DECISION_GAP_S = 1.5  # between decisions; measured in one background Chrome (#18, demo/server.py)
+STOP_DECEL_MPS2 = 2.5  # our stop brake; measured with DECISION_GAP_S (#18, demo/server.py)
+ACCEL_MPS2 = 5.0  # the bundle's speed-up toward a target (`w`, as in _model_path)
+
+
+def _time_to(dist: float, speed: float, target: float) -> float:
+    """Seconds to cover `dist` m speeding up from `speed` toward `target` at ACCEL_MPS2."""
+    v = max(target, speed)
+    t_full = (v - speed) / ACCEL_MPS2
+    d_full = (speed + v) / 2.0 * t_full
+    if d_full >= dist:
+        return (-speed + math.sqrt(speed * speed + 2.0 * ACCEL_MPS2 * dist)) / ACCEL_MPS2
+    return t_full + (dist - d_full) / v if v > 0 else math.inf
+
+
+def red_in(age_s: float, since_red_s: Optional[float]) -> float:
+    """The soonest a green light ahead can turn red, in seconds from now. The amber may have begun
+    when the frame was taken (`age_s` ago); but once the light was seen red `since_red_s` ago and
+    green after it, the green began after that frame and lasts GREEN_S."""
+    soonest = AMBER_S - age_s
+    if since_red_s is not None:
+        soonest = max(soonest, GREEN_S + AMBER_S - since_red_s)
+    return soonest
+
+
+def green_may_have_turned(target: float, speed: float, dist: float, age_s: float, since_red_s: Optional[float] = None) -> bool:
+    """Whether speeding up to `target` on a green seen `age_s` ago leaves the car neither able to stop
+    at the line nor over it before the soonest red (`red_in`)."""
+    reaction = age_s + DECISION_GAP_S
+    v_r = min(target, speed + ACCEL_MPS2 * reaction)  # speed when we could next act
+    t_acc = (v_r - speed) / ACCEL_MPS2
+    travel = (speed + v_r) / 2.0 * t_acc + v_r * (reaction - t_acc)
+    can_stop = travel + v_r * v_r / (2.0 * STOP_DECEL_MPS2) + 0.5 <= dist
+    clears = _time_to(dist, speed, target) <= red_in(age_s, since_red_s)
+    return not can_stop and not clears
+
 
 def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
@@ -165,9 +206,15 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
         reading = None  # an amber could have come and gone since (semif-layer.js SEEN_MEMORY_MS)
     seen = remembered if remembered in ("red", "amber", "green") else reading if reading in ("red", "amber", "green") else None
     signal, source = (seen, "perception") if seen else ("red", "assumed")
+    speed = _num(state.get("speed_mps")) or 0.0
+    age_s = max(0.0, (_num(state.get("vision_age_ms")) or 0.0) / 1000.0)
 
     inter = state.get("intersection")
     signalled = isinstance(inter, dict) and str(inter.get("control") or "").lower() in ("signal", "traffic_light")
+    dist = _num(inter.get("distance_to_line_m")) if signalled else None
+    # The page: how long ago the line ahead was seen red, once seen green since (semif-layer.js).
+    since_red_s = _num(state.get("since_red_ms")) if ok else None
+    since_red_s = since_red_s / 1000.0 if since_red_s is not None and 0 <= since_red_s <= (GREEN_S + AMBER_S) * 1000 else None
     if signalled:
         inter["signal"] = signal
         inter["signal_source"] = source
@@ -178,8 +225,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     state["perception_ok"] = ok
     state["perceived_objects"] = objects
 
-    speed = _num(state.get("speed_mps")) or 0.0
-    age_s = max(0.0, (_num(state.get("vision_age_ms")) or 0.0) / 1000.0)
+    green_line = dist if signalled and signal == "green" and dist is not None and dist > 0 else None
     paths = state.get("candidate_paths") if isinstance(state.get("candidate_paths"), dict) else {}
     candidates = state.get("candidates")
     if isinstance(candidates, dict):
@@ -193,6 +239,9 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 hit = target is None or target > CRAWL_MPS  # blind: crawl or stop
             else:
                 hit = sweep_collision(vec, objects, speed, paths.get(cid), age_s)
+                # Speeding up on a green that may have turned since its frame (holding speed is left alone).
+                if green_line is not None and target is not None and target > speed:
+                    hit = hit or green_may_have_turned(target, speed, green_line, age_s, since_red_s)
             # The bundle's own flag is computed against the map's buildings in Vision mode.
             vec[4] = bool(vec[4]) or hit
     state["drive_mode"] = "vision"

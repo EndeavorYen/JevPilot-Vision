@@ -530,7 +530,14 @@ if (spec.cmd === "cstats") {
   at("green", 700);     // a green taken 0.7 s ago
   nowMs += 200; at("unknown", 100);    // 0.9 s after it was taken: no longer trusted
   at("green", -500);    // evidence from the future (another page's clock) is not fresh
-  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen, sent }));
+  // #38: once a red line has turned green, how long ago the red was seen; another line starts over.
+  const sinceRed = [];
+  const nSeen = seen.length;
+  at("red", 100); sinceRed.push(window.SEMIF_SINCE_RED({ distance_to_line_m: 30 }));
+  nowMs += 1000; at("green", 100); sinceRed.push(window.SEMIF_SINCE_RED({ distance_to_line_m: 28 }));
+  sinceRed.push(window.SEMIF_SINCE_RED({ distance_to_line_m: 80 }));
+  at("green", 50); sinceRed.push(window.SEMIF_SINCE_RED({ distance_to_line_m: 79 }));
+  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen: seen.slice(0, nSeen), sent: sent.slice(0, nSeen), sinceRed }));
 } else if (spec.cmd === "dom") {
   process.stdout.write(JSON.stringify(out));
 } else if (spec.cmd === "project") {
@@ -1189,6 +1196,10 @@ def test_vision_mode_marks_each_decision_and_says_how_old_its_evidence_is():
     # What the server is told: a reading the cameras made, or nothing. The planner's red default is
     # not a sighting; on an open road it would order a stop (review #18).
     assert vision["sent"] == [None, "green", "green", None, "red", "red", None, None, "green", None, None]
+    # #38: red seen, then green 1 s later at the same line: the red was 1.1 s ago (from its frame).
+    # A new line ahead (80 m after 28 m) forgets it; a green there alone says nothing about its start.
+    assert vision["sinceRed"] == [None, 1100, None, None]
+    assert vision["body"]["state"]["since_red_ms"] is None
     plain = _run({"cmd": "shape", "vision": "1"})
     assert plain["mode"] == "privileged" and "drive_mode" not in plain["body"]
 

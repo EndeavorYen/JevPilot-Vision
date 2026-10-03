@@ -219,3 +219,60 @@ def test_review2_m3_a_green_reading_is_trusted_for_0_8_s_from_when_it_was_taken(
 def test_review2_l5_evidence_from_the_future_is_not_fresh():
     state = vision_mode.prepare(_payload(_perception(signal="green"), age_ms=-400))["state"]
     assert state["perception_ok"] is False
+
+
+# #38: a light seen some time ago may have changed since. Both moments were recorded on tuning seed
+# 23 (festival, Vision, 400 ms lag).
+def _at_light(signal, *, speed, line, age_ms, cands):
+    return vision_mode.prepare(_payload(_perception(signal=signal), candidates=cands, line=line, speed=speed, age_ms=age_ms))["state"]
+
+
+def test_issue38_seed23_86s_no_speeding_up_on_a_green_that_may_have_turned():
+    """86.0 s: the frame (730 ms old) showed green, the light was amber by then. Speeding up from 8.3
+    to 16.3 m/s would leave the car unable to stop and too slow to clear before red."""
+    cands = {"surge": [16.3, 0.0, 0.1, 0.0, False, False], "hold": [8.3, 0.0, 0.1, 0.0, False, False]}
+    state = _at_light("green", speed=8.3, line=30.0, age_ms=730, cands=cands)
+    assert {k: v[4] for k, v in state["candidates"].items()} == {"surge": True, "hold": False}
+
+
+def test_issue38_a_car_waiting_at_the_line_still_sets_off_on_green():
+    cands = {"go": [10.0, 0.0, 0.1, 0.0, False, False]}
+    state = _at_light("green", speed=0.0, line=4.0, age_ms=300, cands=cands)
+    assert state["candidates"]["go"][4] is False, "it is over the line well inside an amber"
+
+
+def test_issue38_far_from_the_line_a_green_lets_the_car_speed_up():
+    cands = {"go": [16.0, 0.0, 0.1, 0.0, False, False]}
+    state = _at_light("green", speed=8.0, line=120.0, age_ms=700, cands=cands)
+    assert state["candidates"]["go"][4] is False, "it can still stop if the light has turned"
+
+
+def _at_light_after_red(*, since_red_ms, speed, line, age_ms, cands):
+    payload = _payload(_perception(signal="green"), candidates=cands, line=line, speed=speed, age_ms=age_ms)
+    payload["state"]["since_red_ms"] = since_red_ms
+    return vision_mode.prepare(payload)["state"]
+
+
+def test_issue38_review_a_car_that_saw_the_light_turn_green_sets_off_even_on_old_evidence():
+    """Review: with 0.8 s old frames a car waiting 4 m short of the line could take no candidate. It
+    saw the red 1.2 s ago, so the green began after that and lasts 8 s: no red for another 8.8 s."""
+    cands = {"go": [10.0, 0.0, 0.1, 0.0, False, False], "crawl": [2.0, 0.0, 0.1, 0.0, False, False]}
+    blind = _at_light("green", speed=0.0, line=4.0, age_ms=800, cands=copy.deepcopy(cands))
+    assert {k: v[4] for k, v in blind["candidates"].items()} == {"go": True, "crawl": True}, "without the red, nothing is known"
+    seen = _at_light_after_red(since_red_ms=1200, speed=0.0, line=4.0, age_ms=800, cands=copy.deepcopy(cands))
+    assert {k: v[4] for k, v in seen["candidates"].items()} == {"go": False, "crawl": False}
+
+
+def test_issue38_review_a_red_seen_long_ago_says_nothing_about_this_green():
+    cands = {"surge": [16.3, 0.0, 0.1, 0.0, False, False]}
+    state = _at_light_after_red(since_red_ms=12000, speed=8.3, line=30.0, age_ms=730, cands=cands)
+    assert state["candidates"]["surge"][4] is True
+    state = _at_light_after_red(since_red_ms=-5, speed=8.3, line=30.0, age_ms=730, cands={"surge": [16.3, 0.0, 0.1, 0.0, False, False]})
+    assert state["candidates"]["surge"][4] is True, "a malformed value is no evidence"
+
+
+def test_issue38_review_an_amber_is_still_left_to_the_amber_rule():
+    """Seed 23 at 87.3 s was already too late to stop and to clear: turning the amber red there would
+    stop the car in the junction (review). The fix is not to speed into that (86.0 s)."""
+    state = _at_light("amber", speed=14.7, line=23.5, age_ms=700, cands=None)
+    assert state["intersection"]["signal"] == "amber" and state["intersection"]["signal_source"] == "perception"
