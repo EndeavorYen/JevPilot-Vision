@@ -348,3 +348,64 @@ def test_narrow_screens_hide_the_whole_bar_where_the_mode_switch_sits():
     css = (REPO / "jevpilot_vision" / "web" / "semif-layer.css").read_text(encoding="utf-8")
     hidden = [block for block in css.split("}") if "display: none" in block and ".semif-hud-chips" in block and "fsd-theme" in block]
     assert hidden, "on narrow screens the bar overlaps the mode switch; ?gfx= still picks the quality there"
+
+
+# ---- Density (#22): vehicles and people, in the same panel ----------------------------------------
+
+_DENSITY = (
+    _PANEL
+    + "const selects = walk(panel).filter((e) => e.className === 'semif-density-select');"
+    "const dApply = walk(panel).find((e) => e.className === 'semif-density-apply');"
+    "const kept = {}; globalThis.localStorage = { getItem: (k) => kept[k] ?? null, setItem: (k, v) => { kept[k] = String(v); } };"
+)
+
+
+def test_issue22_the_panel_offers_vehicle_and_people_density_showing_the_current_ones():
+    got = _render(
+        _DENSITY
+        + "out({ names: selects.map((s) => s.name), values: selects.map((s) => s.value),"
+        "  options: selects.map((s) => s.children.map((o) => o.value)), apply: dApply.textContent, disabled: dApply.disabled });",
+        search="?gfx=medium&traffic=high&people=low",
+    )
+    assert got["names"] == ["traffic", "people"]
+    assert got["values"] == ["high", "low"], "the levels this world was built with"
+    assert got["options"] == [["low", "med", "high"], ["low", "med", "high"]]
+    assert got["disabled"] is True
+
+
+def test_issue22_picking_a_level_never_reloads_and_apply_saves_and_rebuilds():
+    got = _render(
+        _DENSITY
+        + "selects[0].value = 'low'; selects[0].fire('change'); selects[1].value = 'high'; selects[1].fire('change');"
+        "const before = went.length; const enabled = !dApply.disabled;"
+        "dApply.fire('click');"
+        "out({ before, enabled, went, kept });",
+        search="?gfx=medium",
+    )
+    assert got["before"] == 0 and got["enabled"]
+    assert got["went"] == ["http://localhost:8768/jevpilot/?seed=7&gfx=medium&traffic=low&people=high"]
+    assert got["kept"] == {"semif.density.traffic": "low", "semif.density.people": "high"}
+
+
+def test_issue22_review_a_lap_page_shows_the_density_it_cannot_change():
+    """?lap=1 keeps today's counts: the panel says so instead of offering a choice that does nothing."""
+    got = _render(
+        _DENSITY + "out({ disabled: selects.map((s) => s.disabled), apply: dApply.disabled,"
+        "  note: walk(panel).filter((e) => e.className === 'semif-density-note').map((e) => e.textContent) });",
+        search="?gfx=medium&lap=1",
+    )
+    assert got["disabled"] == [True, True] and got["apply"] is True
+    assert got["note"] and "lap" in got["note"][0].lower()
+
+
+def test_issue22_review_either_apply_keeps_the_other_pick():
+    got = _render(
+        _DENSITY
+        + "const high = radios.find((r) => r.value === 'high'); radios.forEach((r) => { r.checked = r === high; }); high.fire('change');"
+        "selects[1].value = 'high'; selects[1].fire('change');"
+        "dApply.fire('click'); apply.fire('click');"
+        "out({ went, label: dApply.attrs['aria-label'] });",
+        search="?gfx=medium&traffic=med&people=med",
+    )
+    assert got["went"] == ["http://localhost:8768/jevpilot/?seed=7&gfx=high&traffic=med&people=high"] * 2
+    assert got["label"] == "Apply traffic density"

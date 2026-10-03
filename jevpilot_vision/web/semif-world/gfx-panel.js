@@ -61,8 +61,104 @@ function refreshApply() {
 function applyPicked() {
   const quality = picked();
   if (quality === gfx.quality) return setOpen(false);
-  saveQuality(storage(), quality);
-  globalThis.location.assign(switchUrl(globalThis.location.href, quality));
+  reloadWith(quality, densityChanged() ? densityPicked() : null);
+}
+
+// Both buttons reload the page, so each carries the other's pick too.
+function reloadWith(quality, levels) {
+  let href = globalThis.location.href;
+  if (quality !== gfx.quality) {
+    saveQuality(storage(), quality);
+    href = switchUrl(href, quality);
+  }
+  if (levels) {
+    const keys = globalThis.SEMIF_WORLDGEN?.DENSITY_KEY ?? { traffic: "semif.density.traffic", people: "semif.density.people" };
+    try {
+      for (const [kind] of DENSITY_ROWS) storage()?.setItem(keys[kind], levels[kind]);
+    } catch (_) {}
+    href = densityUrl(href, levels);
+  }
+  globalThis.location.assign(href);
+}
+
+// Density (#22): vehicles and people, each low / med / high, in this panel too. Like the quality,
+// only its own button applies, and applying saves the choice and reloads with ?traffic=&people=
+// rewritten: a fresh page builds the world with the new counts.
+const DENSITY_TEXT = { low: "Low", med: "Medium", high: "High" };
+const DENSITY_ROWS = [["traffic", "Vehicles"], ["people", "People"]];
+let densitySelects = [];
+let densityApply = null;
+
+function densityNow() {
+  return globalThis.window?.SEMIF_SIM?.world?.density ?? globalThis.SEMIF_WORLDGEN?.density?.() ?? { traffic: "med", people: "med" };
+}
+
+export function densityUrl(href, levels) {
+  const url = new URL(href);
+  for (const [kind] of DENSITY_ROWS) url.searchParams.set(kind, levels[kind]);
+  return url.toString();
+}
+
+function densityPicked() {
+  return Object.fromEntries(densitySelects.map((s) => [s.name, s.value]));
+}
+
+function densityChanged() {
+  if (!densitySelects.length) return false;
+  const now = densityNow();
+  const picked = densityPicked();
+  return DENSITY_ROWS.some(([kind]) => picked[kind] !== now[kind]);
+}
+
+// A lap (?lap=1) always drives today's counts (semif-worldgen.js density()): nothing to choose.
+function onLap() {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("lap") === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function refreshDensity() {
+  const changed = densityChanged();
+  densityApply.disabled = !changed || onLap();
+  densityApply.textContent = changed ? "Apply (reloads)" : "Using these";
+}
+
+function applyDensity() {
+  if (!densityChanged() || onLap()) return setOpen(false);
+  reloadWith(picked(), densityPicked());
+}
+
+function buildDensity() {
+  const section = el("div", "semif-density");
+  section.appendChild(el("h2", "", "Traffic"));
+  const now = densityNow();
+  densitySelects = DENSITY_ROWS.map(([kind, name]) => {
+    const row = el("label", "semif-density-row");
+    row.appendChild(el("span", "", name));
+    const select = el("select", "semif-density-select");
+    select.name = kind;
+    for (const level of ["low", "med", "high"]) {
+      const option = el("option", "", DENSITY_TEXT[level]);
+      option.value = level;
+      select.appendChild(option);
+    }
+    select.value = now[kind];
+    select.disabled = onLap();
+    select.addEventListener("change", refreshDensity);
+    row.appendChild(select);
+    section.appendChild(row);
+    return select;
+  });
+  densityApply = el("button", "semif-density-apply");
+  densityApply.type = "button";
+  densityApply.setAttribute("aria-label", "Apply traffic density");
+  densityApply.addEventListener("click", applyDensity);
+  section.appendChild(densityApply);
+  if (onLap()) section.appendChild(el("p", "semif-density-note", "A lap (?lap=1) keeps today's traffic, so its results stay comparable."));
+  refreshDensity();
+  return section;
 }
 
 function el(tag, className, text) {
@@ -117,6 +213,7 @@ function buildPanel() {
   fpsRow.appendChild(fps);
   fpsRow.appendChild(el("span", "", "Show FPS"));
   panel.appendChild(fpsRow);
+  panel.appendChild(buildDensity());
   note = el("p", "semif-gfx-note", NOTE);
   note.setAttribute("role", "status");
   panel.appendChild(note);
