@@ -18,7 +18,7 @@ WEB = REPO / "jevpilot_vision" / "web"
 ASSETS = WEB / "assets"
 MAIN = "main-CvLEeHjW.js"
 WORKER = "planner.worker-DFdG3q6n.js"
-WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261002n";'
+WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261003d22";'
 
 # three.js classes the bundle hands the renderer on top of the ones semif-scenery.js already gets,
 # as name: minified identifier. test_kit_classes_are_the_classes_they_claim_to_be checks each one.
@@ -221,7 +221,7 @@ COAST_PATCHES = [
     # without the patches above
     ("coast-worker-version", MAIN,
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js`",
-     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=20261002n`"),
+     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=20261003d22`"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",
@@ -336,8 +336,11 @@ def test_each_start_point_gets_a_route_to_its_next_destination(start):
     assert got["player"] == pytest.approx([got["first"]["x"], got["first"]["z"]])
 
 
-def test_traffic_keeps_moving_for_two_minutes_without_a_crash():
+@pytest.mark.parametrize("level,cars,people", [("low", 30, 28), ("med", 45, 42), ("high", 60, 56)])
+def test_traffic_keeps_moving_for_two_minutes_without_a_crash(level, cars, people):
+    """At every density (#22): no car is stuck, nothing crashes."""
     got = _sim(
+        f"globalThis.location = {{ search: '?traffic={level}&people={level}' }};"
         "const s = new Ae(42, 'coast:festival');"
         "Object.assign(s.player, { x: -1240, z: -790, speed: 0 });"  # parked out of the way
         "const moved = new Map(), last = new Map(s.traffic.map((c) => [c.id, { x: c.x, z: c.z }]));"
@@ -346,10 +349,10 @@ def test_traffic_keeps_moving_for_two_minutes_without_a_crash():
         "out({ n: s.traffic.length, parked: s.traffic.filter((c) => c.parked).length, slow: s.traffic.filter((c) => (moved.get(c.id) || 0) < 200).map((c) => c.id),"
         "  crash: s.crash, peds: s.pedestrians.length });"
     )
-    assert got["n"] >= 30 and got["parked"] == 0
+    assert got["n"] >= cars and got["parked"] == 0
     assert got["slow"] == [], "every car drives at least 200 m in two minutes"
     assert got["crash"] is None
-    assert got["peds"] == 28
+    assert got["peds"] == people
 
 
 def test_a_player_waiting_near_a_crosswalk_does_not_hold_the_junction():
@@ -489,3 +492,17 @@ def test_on_the_coast_a_nose_stopped_just_over_a_red_line_is_still_offered_the_s
     assert -3 < coast["ahead"] < -0.5 and coast["entered"] is False, coast
     assert "required_stop_line_within_2_5m" in coast["reasons"], coast
     assert "required_stop_line_within_2_5m" not in city["reasons"], city
+
+
+def test_issue22_at_high_density_nothing_spawns_on_top_of_anything_or_next_to_the_car():
+    got = _sim(
+        "globalThis.location = { search: '?traffic=high&people=high' };"
+        "const s = new Ae(42, 'coast:festival');"
+        "const cars = s.traffic; let close = 0;"
+        "for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) if (dist(cars[i], cars[j]) < 10) close++;"
+        "out({ n: cars.length, people: s.pedestrians.length, close, nearest: Math.min(...cars.map((c) => dist(c, s.player))) });"
+    )
+    assert got["n"] >= 60, "most of the 72 find room (the bundle skips a spawn within 10 m of another)"
+    assert got["people"] == 56
+    assert got["close"] == 0
+    assert got["nearest"] >= 15

@@ -606,7 +606,8 @@ body.fsd-theme .touch-brake.held {
   color: var(--sol-muted);
 }
 
-.semif-gfx-apply {
+.semif-gfx-apply,
+.semif-density-apply {
   width: 100%;
   margin: 6px 0 4px;
   padding: 9px 12px;
@@ -618,14 +619,54 @@ body.fsd-theme .touch-brake.held {
   cursor: pointer;
 }
 
-.semif-gfx-apply:hover:not(:disabled) {
+.semif-gfx-apply:hover:not(:disabled),
+.semif-density-apply:hover:not(:disabled) {
   background: var(--sol-accent-hover);
 }
 
-.semif-gfx-apply:disabled {
+.semif-gfx-apply:disabled,
+.semif-density-apply:disabled {
   background: var(--sol-raised);
   color: var(--sol-muted);
   cursor: default;
+}
+
+/* Density (#22): vehicles and people under the quality, same panel. */
+.semif-density {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sol-line);
+}
+
+.semif-density-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px;
+}
+
+.semif-density-row span {
+  color: var(--sol-ink-strong);
+  font-weight: 700;
+}
+
+.semif-density-note {
+  margin: 4px 6px 0;
+  color: var(--sol-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.semif-density-select {
+  min-width: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-sm);
+  background: var(--sol-raised);
+  color: var(--sol-ink);
+  font: 600 13px var(--sol-font);
+  accent-color: var(--sol-accent);
 }
 
 .semif-gfx-note {

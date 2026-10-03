@@ -210,6 +210,7 @@ def test_roads_stay_on_land_at_least_25_m_from_the_sea(world):
 
 def test_pedestrians_use_the_bundle_format_on_straight_pavements_and_signal_crosswalks():
     out = _js(
+        "globalThis.location = { search: '?people=low' };"  # today's count (#22)
         "const w = G.generate(42, 'coast:festival'); let a = 5; const r = () => ((a = (a * 16807) % 2147483647) / 2147483647);"
         "const peds = w.pedestrians(r);"
         "process.stdout.write(JSON.stringify({ peds, nodes: w.nodes.map((n) => ({ id: n.id, control: n.control, legs: n.legs })) }));"
@@ -277,3 +278,52 @@ def test_the_picker_lists_start_points_on_the_coast_and_the_old_maps_elsewhere()
     assert "Horizon" not in out["coast"] and "Solmare Festival" in out["coast"], "no Forza trademark in the UI"
     assert out["city"].count("<option") == 3 and 'value="city"' in out["city"]
     assert out["labels"] == ["Start from", "Change map"]
+
+
+# ---- Density (#22) ---------------------------------------------------------------------------------
+
+def _density(search: str = "", stored: dict | None = None) -> dict:
+    """Vehicles and pedestrians a coast world asks for, with this address bar and browser storage."""
+    return _js(
+        f"globalThis.location = {{ search: {json.dumps(search)} }};"
+        f"const kept = {json.dumps(stored or {})};"
+        "globalThis.localStorage = { getItem: (k) => (k in kept ? kept[k] : null), setItem() {} };"
+        "const w = G.generate(42, 'coast:festival'); let a = 5; const r = () => ((a = (a * 16807) % 2147483647) / 2147483647);"
+        "process.stdout.write(JSON.stringify({ traffic: w.theme.traffic, people: w.pedestrians(r).length, density: w.density }));"
+    )
+
+
+def test_issue22_vehicles_and_pedestrians_scale_separately_with_three_levels():
+    low = _density("?traffic=low&people=low")
+    assert (low["traffic"], low["people"]) == (36, 28), "low is today's coast"
+    mixed = _density("?traffic=high&people=low")
+    assert (mixed["traffic"], mixed["people"]) == (72, 28)
+    mixed = _density("?traffic=low&people=high")
+    assert (mixed["traffic"], mixed["people"]) == (36, 56)
+    med = _density("?traffic=med&people=med")
+    assert (med["traffic"], med["people"]) == (54, 42)
+    assert med["density"] == {"traffic": "med", "people": "med"}
+
+
+def test_issue22_medium_is_the_default_and_denser_than_today():
+    d = _density()
+    assert (d["traffic"], d["people"]) == (54, 42)
+    assert _density("?traffic=lots&people=")["traffic"] == 54, "an unknown level is the default"
+    assert G_THEME_TRAFFIC == 36, "the shared theme keeps today's count"
+
+
+G_THEME_TRAFFIC = 36
+
+
+def test_issue22_the_browser_remembers_and_the_address_bar_wins():
+    kept = {"semif.density.traffic": "high", "semif.density.people": "low"}
+    d = _density("", kept)
+    assert (d["traffic"], d["people"]) == (72, 28)
+    d = _density("?traffic=low", kept)
+    assert (d["traffic"], d["people"]) == (36, 28)
+
+
+def test_issue22_a_lap_keeps_todays_counts():
+    d = _density("?lap=1&traffic=high&people=high", {"semif.density.traffic": "high"})
+    assert (d["traffic"], d["people"]) == (36, 28)
+    assert _js("process.stdout.write(JSON.stringify(G.THEME.traffic));") == G_THEME_TRAFFIC

@@ -55,3 +55,19 @@ def test_main_drives_the_tab_open_tab_hands_back_and_closes_it(tmp_path, monkeyp
 def test_issue19_review_the_perf_baseline_never_draws_the_candidate_fan():
     """A fan remembered in the measuring Chrome profile would add its lines and worker load."""
     assert "candidates=selected" in pb.page_url("http://localhost:8768", "medium")
+
+
+def test_issue22_the_perf_baseline_measures_todays_density():
+    assert "traffic=low&people=low" in pb.page_url("http://localhost:8768", "medium")
+
+
+def test_issue22_review_a_page_on_another_density_is_refused(monkeypatch):
+    page = {"snapshot": {"frames": 10}, "canvas": [1, 1], "dpr": 1, "gpu": "RTX", "quality": "medium",
+            "density": {"traffic": "med", "people": "med"}}
+    monkeypatch.setattr(pb, "_cdp", lambda *a, **k: "")
+    monkeypatch.setattr(pb, "_js", lambda target, code, timeout=120: page if "snapshot" in code else 1)
+    monkeypatch.setattr(pb.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="density"):
+        pb.measure("T", "http://localhost:8768", "medium", seconds=60)
+    page["density"] = {"traffic": "low", "people": "low"}
+    assert pb.measure("T", "http://localhost:8768", "medium", seconds=60)["density_seen"] == page["density"]

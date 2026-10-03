@@ -26,7 +26,8 @@ WARMUP_S = 10  # shaders compile and textures upload in the first seconds
 
 def page_url(base: str, gfx: str) -> str:
     # candidates=selected: a fan remembered in this Chrome profile would add lines and worker load (#19).
-    return (f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&seed={SEED}&world=coast:festival&mode=privileged"
+    # traffic/people=low: the coast the baseline was first measured on (#22).
+    return (f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed={SEED}&world=coast:festival&mode=privileged"
             f"&gfx={gfx}&time=16:30&daycycle=0")
 
 
@@ -35,7 +36,8 @@ _READ = (
     "JSON.stringify((() => { const c = document.querySelector('canvas'); const gl = c && (c.getContext('webgl2') || c.getContext('webgl'));"
     " const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');"
     " return { snapshot: window.SEMIF_PERF.snapshot(), canvas: c ? [c.width, c.height] : null, dpr: devicePixelRatio,"
-    " gpu: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null, quality: window.SEMIF_GFX && window.SEMIF_GFX.quality }; })())"
+    " gpu: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null, quality: window.SEMIF_GFX && window.SEMIF_GFX.quality,"
+    " density: (window.SEMIF_SIM && window.SEMIF_SIM.world && window.SEMIF_SIM.world.density) || null }; })())"
 )
 
 
@@ -52,8 +54,10 @@ def measure(target: str, base: str, gfx: str, seconds: int) -> Dict[str, Any]:
         got = json.loads(got)
     if got.get("quality") != gfx:
         raise RuntimeError(f"asked for {gfx}, the page drew {got.get('quality')}")
+    if got.get("density") is not None and got["density"] != {"traffic": "low", "people": "low"}:  # None: before #22
+        raise RuntimeError(f"asked for low density, the page drew {got['density']}")
     return {**got["snapshot"], "canvas": got["canvas"], "dpr": got["dpr"], "gpu": got["gpu"],
-            "quality_seen": got["quality"], "url": url, "seconds": seconds}
+            "quality_seen": got["quality"], "density_seen": got.get("density"), "url": url, "seconds": seconds}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
