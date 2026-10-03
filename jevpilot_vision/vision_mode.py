@@ -150,9 +150,10 @@ def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
 _EVENT_NAMES = (("pedestrian", "pedestrian"), ("car", "vehicle"), ("motorcycle", "motorcycle"))
 
 
-def perception_event(signal: str, objects: List[Dict[str, Any]]) -> str:
+def perception_event(signal: str, objects: List[Dict[str, Any]], ok: bool = True) -> str:
     """The event line from the light Vision mode settled on and the detector's objects ahead.
-    One frame has no onset, so nothing here says "appeared"."""
+    One frame has no onset, so nothing here says "appeared". Kept under the prompt's 96 characters
+    (trajectory_sampler.compact_jev_state)."""
     clauses: List[str] = []
     if signal == "red":
         clauses.append("RED signal ahead, mandatory stop")
@@ -163,7 +164,9 @@ def perception_event(signal: str, objects: List[Dict[str, Any]]) -> str:
     for kind, name in _EVENT_NAMES:
         ahead = [o["ahead_m"] for o in objects if o.get("kind") == kind and o["ahead_m"] > 0]
         if ahead:
-            clauses.append(f"{name} visible ahead ({min(ahead):.0f} m)")
+            clauses.append(f"{name} at {min(ahead):.0f} m")
+    if not ok:
+        clauses.append("camera evidence unavailable")
     return "; ".join(clauses) if clauses else "road clear ahead, maintain lane"
 
 
@@ -197,7 +200,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
         vision["signal"] = signal if signalled else (seen or "unknown")
         # The encoder's event text comes from colour masks (vision.py blobs_from_frame) and SigLIP
         # scores; in Vision mode the prompt and the directive read only this perception (#65).
-        vision["event"] = perception_event(vision["signal"], objects)
+        vision["event"] = perception_event(vision["signal"], objects, ok)
     state["perception_ok"] = ok
     state["perceived_objects"] = objects
 

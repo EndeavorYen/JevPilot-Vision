@@ -270,3 +270,15 @@ def test_issue65_the_event_names_what_the_detector_saw():
     assert state["candidates"]["fast"][4] is True, "the sweep still flags the perceived person"
     unseen = vision_mode.prepare(_payload(_perception(signal="unknown"), line=40.0))["state"]["vision"]["event"]
     assert unseen.startswith("RED signal ahead"), "an unseen light at a signalled line is the assumed red"
+
+
+def test_issue65_review_blind_is_not_a_clear_road_and_the_line_fits_the_prompt():
+    blind = vision_mode.prepare(_payload(_perception(signal="green", backend="none"), line=200.0))["state"]
+    assert "clear" not in blind["vision"]["event"] and "unavailable" in blind["vision"]["event"]
+    crowd = [
+        {"kind": "pedestrian", "ahead_m": 9.0, "right_m": 0.3, "closing_mps": 0.0},
+        {"kind": "car", "ahead_m": 22.0, "right_m": 0.0, "closing_mps": 0.0},
+        {"kind": "motorcycle", "ahead_m": 31.0, "right_m": 2.0, "closing_mps": 0.0},
+    ]
+    event = vision_mode.prepare(_payload(_perception(crowd, signal="unknown"), line=40.0))["state"]["vision"]["event"]
+    assert len(event) <= 96 and "motorcycle" in event, event
