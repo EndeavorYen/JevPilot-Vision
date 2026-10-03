@@ -2,6 +2,8 @@
 // (docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.4). window.SEMIF_PERF.
 // GPU time needs EXT_disjoint_timer_query_webgl2; without it the GPU fields stay null.
 const VIEWS = ["main", "onboard"];
+// A gap longer than this is a hidden tab or a trip to an old map, not a frame.
+const MAX_FRAME_MS = 1000;
 
 export function percentile(values, p) {
   if (!values.length) return null;
@@ -49,13 +51,15 @@ export function createPerf({ now = () => performance.now(), keep = 600, maxPendi
 
   function frame() {
     const t = now();
-    if (last !== null) push(frames, t - last);
+    if (last !== null && t - last <= MAX_FRAME_MS) push(frames, t - last);
     last = t;
     poll();
   }
 
   function span(view, renderer, fn) {
     // WebGL2 allows one TIME_ELAPSED query at a time: a span inside a span runs unmeasured.
+    // Draw calls are summed over every render() inside the span (scene and post passes), so
+    // autoReset is off for its length and put back after.
     if (active) {
       nested++;
       return fn();

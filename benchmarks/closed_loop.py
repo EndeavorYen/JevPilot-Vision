@@ -361,7 +361,7 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"drove route {got.get('world_seen')!r}"
     if int(got.get("lag_seen") or 0) != int(run.get("lag_ms") or 0):
         return f"page lag {got.get('lag_seen')} ms"
-    if got.get("gfx_seen") not in (None, run.get("gfx", "medium")):
+    if got.get("gfx_seen") != run.get("gfx", "medium"):  # a coast page always reports its quality
         return f"drove graphics {got.get('gfx_seen')!r}"
     if got.get("engaged") is False:
         return "autopilot never engaged"

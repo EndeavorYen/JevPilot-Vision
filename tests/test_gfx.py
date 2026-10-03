@@ -31,8 +31,9 @@ def test_integrated_gpus_start_on_medium_and_the_rest_on_high():
         "'ANGLE (NVIDIA, NVIDIA GeForce RTX 5080 Direct3D11 vs_5_0 ps_5_0, D3D11)',"
         "'ANGLE (AMD, AMD Radeon RX 7800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)',"
         "'ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)',"
+        "'ANGLE (Intel, Intel(R) Arc(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)',"
         "].map(M.classifyGpu));")
-    assert got == ["medium"] * 7 + ["high"] * 3
+    assert got == ["medium"] * 7 + ["high"] * 3 + ["medium"], "Meteor Lake's integrated GPU is 'Arc(TM) Graphics'"
 
 
 def test_the_url_wins_then_the_saved_choice_then_the_gpu():
@@ -243,6 +244,7 @@ def test_the_coast_frame_is_measured_and_old_maps_are_not():
 def test_the_onboard_render_is_measured_in_the_layer():
     src = (REPO / "jevpilot_vision" / "web" / "semif-layer.js").read_text(encoding="utf-8")
     assert 'SEMIF_PERF.span("onboard", renderer, () => renderer.render(scene, cam))' in src
+    assert 'onCoastMap(world) && window.SEMIF_PERF' in src, "old maps render exactly as before"
 
 
 # ---- The graphics button (gfx-panel.js) ---------------------------------------------------------
@@ -266,7 +268,7 @@ def test_the_button_sits_in_the_chip_bar_on_the_coast_only():
         "out({ coast, city: bar.children[0].style.display });"
     )
     assert got["coast"]["bar"] == "semif-hud-chips"
-    assert got["coast"]["kids"] == ["semif-gfx", "semif-clock"], "the graphics button sits left of the clock"
+    assert got["coast"]["kids"] == ["semif-gfx", "semif-clock", "semif-gfx-panel"], "the button sits left of the clock; its panel opens under the bar"
     assert "Medium" in got["coast"]["label"] and got["coast"]["shown"] == ""
     assert got["city"] == "none"
 
@@ -280,3 +282,63 @@ def test_the_chip_bar_carries_the_clock_position_in_every_layout():
     assert "body.fsd-theme .semif-hud-chips {" in css, "the desktop layout moves the bar"
     minimal = css.split("body.semif-minimal :is(", 1)[1].split(")", 1)[0]
     assert ".semif-hud-chips" in minimal and ".semif-gfx-panel" in minimal
+
+
+_PANEL = (
+    "const walk = (o) => [o, ...(o.children || []).flatMap(walk)];"
+    "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} }, render() {},"
+    "  renderer: { getContext: () => null },"
+    "  sun: { position: { set() { return this; } }, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() } };"
+    "const went = []; globalThis.location.href = 'http://localhost:8768/jevpilot/?seed=7&gfx=medium'; globalThis.location.assign = (u) => went.push(u);"
+    "api.built(view);"
+    "const button = globalThis.__clock.parent.children[0]; const panel = globalThis.__panel;"
+    "const radios = walk(panel).filter((e) => e.type === 'radio'); const apply = walk(panel).find((e) => e.className === 'semif-gfx-apply');"
+)
+
+
+def test_moving_between_options_never_reloads_only_apply_does():
+    got = _render(
+        _PANEL
+        + "button.fire('click'); const open = !panel.hidden;"
+        "const high = radios.find((r) => r.value === 'high'); radios.forEach((r) => { r.checked = r === high; });"
+        "high.fire('click'); high.fire('change'); high.fire('keydown', { key: 'ArrowDown' });"
+        "const before = went.length; const enabledAfterPick = !apply.disabled;"
+        "apply.fire('click');"
+        "out({ open, before, enabledAfterPick, went, values: radios.map((r) => r.value) });",
+        search="?gfx=medium",
+    )
+    assert got["open"] and got["values"] == ["medium", "high"]
+    assert got["before"] == 0, "arrow keys fire click on radios: picking must not reload"
+    assert got["enabledAfterPick"]
+    assert got["went"] == ["http://localhost:8768/jevpilot/?seed=7&gfx=high"]
+
+
+def test_apply_on_the_current_quality_just_closes():
+    got = _render(
+        _PANEL + "button.fire('click'); const before = apply.disabled; apply.fire('click'); out({ before, went, hidden: panel.hidden });",
+        search="?gfx=medium",
+    )
+    assert got == {"before": True, "went": [], "hidden": True}
+
+
+def test_old_maps_detach_the_meter():
+    got = _render(
+        "const gl = { getExtension: (n) => n === 'EXT_disjoint_timer_query_webgl2' ? { TIME_ELAPSED_EXT: 1, GPU_DISJOINT_EXT: 2 } : null, getParameter: () => '' };"
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} }, render() {},"
+        "  renderer: { getContext: () => gl },"
+        "  sun: { position: { set() { return this; } }, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() } };"
+        "api.built(view); const coast = window.SEMIF_PERF.snapshot().gpu_timer;"
+        "window.SEMIF_SIM = { world: { type: 'city' } }; api.built({ scene: new Obj() });"
+        "out({ coast, city: window.SEMIF_PERF.snapshot().gpu_timer });"
+    )
+    assert got == {"coast": True, "city": False}
+
+
+def test_a_long_pause_is_not_a_frame():
+    got = _node("perf.js", """
+let t = 0; const perf = M.createPerf({ now: () => t });
+for (let i = 0; i < 5; i++) { t += 16; perf.frame(); }
+t += 90000; perf.frame();   // a hidden tab, or a trip to an old map and back
+t += 16; perf.frame();
+out(perf.snapshot());""")
+    assert got["frames"] == 5 and got["fps_p5"] > 60

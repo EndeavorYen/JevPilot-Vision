@@ -46,9 +46,9 @@ const kit = { Group: Obj, Mesh, BufferGeometry: Geo, Float32BufferAttribute: fun
 globalThis.location = { search: process.argv[3] || "" };
 const ctx2d = () => new Proxy({}, { get(t, k) { if (k in t) return t[k]; return () => ({ addColorStop() {} }); }, set(t, k, v) { t[k] = v; return true; } });
 // Elements nest (the clock sits in a chip bar); __clock is always the clock itself.
-const track = (c) => { if (c.className === "semif-clock") globalThis.__clock = c; return c; };
+const track = (c) => { if (c.className === "semif-clock") globalThis.__clock = c; if (c.className === "semif-gfx-panel") globalThis.__panel = c; return c; };
 const element = () => ({ style: {}, width: 0, height: 0, children: [], parent: null, className: "", attrs: {}, getContext: () => ctx2d(),
-  set textContent(v) { this.text = v; }, get textContent() { return this.text; }, addEventListener() {}, setAttribute(k, v) { this.attrs[k] = v; },
+  set textContent(v) { this.text = v; }, get textContent() { return this.text; }, on: {}, addEventListener(t, f) { (this.on[t] ||= []).push(f); }, fire(t, e = {}) { (this.on[t] || []).forEach((f) => f({ target: this, ...e })); }, setAttribute(k, v) { this.attrs[k] = v; },
   appendChild(c) { c.parent = this; this.children.push(c); return track(c); },
   insertBefore(c, ref) { c.parent = this; const i = this.children.indexOf(ref); this.children.splice(i < 0 ? this.children.length : i, 0, c); return track(c); },
   get firstChild() { return this.children[0] ?? null; }, querySelector: () => element(), querySelectorAll: () => [], contains: () => false, focus() {} });

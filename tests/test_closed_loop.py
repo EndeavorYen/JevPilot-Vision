@@ -123,7 +123,7 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
     """The tab was hidden (the sim does not step), the sim ran too little, or the page drove another
     mode, route or lag than asked: a setup failure, not a result."""
     run = {"seed": 7, "route": "harbour", "mode": "vision", "seconds": 150, "lag_ms": 400}
-    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 400, "autopilot": True, "crash": False,
+    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 400, "gfx_seen": "medium", "autopilot": True, "crash": False,
             "sim_time_s": 150, "hidden": False, "distance_m": 1800}
     assert cl.validate(run, good) is None
     assert cl.validate(run, dict(good, crash=True, autopilot=False, sim_time_s=80)) is None, "a crash is a result"
@@ -301,7 +301,7 @@ def test_review5_a_busy_server_is_not_an_outage(monkeypatch):
 
 def test_review6_a_read_result_survives_a_failed_park_and_unreadable_is_not_broke(monkeypatch):
     run = {"seed": 7, "route": "harbour", "mode": "vision", "seconds": 150, "lag_ms": 0}
-    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 0, "autopilot": True, "crash": False,
+    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 0, "gfx_seen": "medium", "autopilot": True, "crash": False,
             "sim_time_s": 150, "hidden": False, "distance_m": 1800, "red_light": 1, "events": [], "engaged": True}
     calls = []
 
@@ -370,3 +370,4 @@ def test_a_page_on_the_wrong_quality_is_a_setup_failure():
     got = {"mode_seen": "vision", "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500}
     assert cl.validate(run, dict(got, gfx_seen="medium")) == "drove graphics 'medium'"
     assert cl.validate(run, dict(got, gfx_seen="high")) is None
+    assert cl.validate(run, got) == "drove graphics None", "a coast page always reports its quality"

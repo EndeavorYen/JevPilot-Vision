@@ -220,6 +220,7 @@ window.SEMIF_SCENERY = {
       setFar(view, BUNDLE_FAR);
       showClock(false);
       showGfx(false);
+      window.SEMIF_PERF?.attach(null); // old maps render exactly as before: no timer queries
       return legacy.built?.(view);
     }
     try {

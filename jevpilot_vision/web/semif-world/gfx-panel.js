@@ -42,42 +42,84 @@ function setOpen(open) {
   button.setAttribute("aria-expanded", String(open));
 }
 
-function choose(quality) {
+let note = null;
+let apply = null;
+let radios = [];
+
+function picked() {
+  return radios.find((r) => r.checked)?.value || gfx.quality;
+}
+
+function refreshApply() {
+  const q = picked();
+  apply.disabled = q === gfx.quality;
+  apply.textContent = q === gfx.quality ? `Using ${TEXT[q][0]}` : `Switch to ${TEXT[q][0]}`;
+}
+
+// Only the Apply button switches: browsers fire click on a radio when an arrow key moves the
+// selection, so switching on the radio would reload the page while a keyboard user reads options.
+function applyPicked() {
+  const quality = picked();
   if (quality === gfx.quality) return setOpen(false);
   saveQuality(storage(), quality);
   globalThis.location.assign(switchUrl(globalThis.location.href, quality));
 }
 
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text) node.textContent = text;
+  return node;
+}
+
 function buildPanel() {
-  panel = document.createElement("div");
-  panel.className = "semif-gfx-panel";
+  panel = el("div", "semif-gfx-panel");
   panel.id = "semif-gfx-panel";
   panel.hidden = true;
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-label", "Graphics");
-  const options = QUALITIES.map(
-    (q) => `<label class="semif-gfx-option"><input type="radio" name="semif-gfx" value="${q}"${q === gfx.quality ? " checked" : ""}>` +
-      `<span><b>${TEXT[q][0]}</b><small>${TEXT[q][1]}</small></span></label>`,
-  ).join("");
-  panel.innerHTML =
-    `<h2>Graphics</h2><div role="radiogroup" aria-label="Quality">${options}</div>` +
-    `<label class="semif-gfx-fps"><input type="checkbox"${showFps ? " checked" : ""}> Show FPS</label>` +
-    `<p class="semif-gfx-note" role="status">${NOTE}</p>`;
-  // Arrow keys move between the options without switching (no change event fires for a
-  // checked radio); a click, Space or Enter on an option switches.
-  panel.querySelectorAll('input[type="radio"]').forEach((input) => {
-    input.addEventListener("click", () => choose(input.value));
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") choose(input.value);
-    });
+  panel.appendChild(el("h2", "", "Graphics"));
+  const group = el("div", "semif-gfx-options");
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-label", "Quality");
+  radios = QUALITIES.map((q) => {
+    const row = el("label", "semif-gfx-option");
+    const input = el("input");
+    input.type = "radio";
+    input.name = "semif-gfx";
+    input.value = q;
+    input.checked = q === gfx.quality;
+    input.addEventListener("change", refreshApply);
+    const words = el("span");
+    words.appendChild(el("b", "", TEXT[q][0]));
+    words.appendChild(el("small", "", TEXT[q][1]));
+    row.appendChild(input);
+    row.appendChild(words);
+    group.appendChild(row);
+    return input;
   });
-  panel.querySelector(".semif-gfx-fps input").addEventListener("change", (e) => {
+  panel.appendChild(group);
+  apply = el("button", "semif-gfx-apply");
+  apply.type = "button";
+  apply.addEventListener("click", applyPicked);
+  panel.appendChild(apply);
+  const fpsRow = el("label", "semif-gfx-fps");
+  const fps = el("input");
+  fps.type = "checkbox";
+  fps.checked = showFps;
+  fps.addEventListener("change", (e) => {
     showFps = e.target.checked;
     try {
       storage()?.setItem(FPS_KEY, showFps ? "1" : "0");
     } catch (_) {}
     label();
   });
+  fpsRow.appendChild(fps);
+  fpsRow.appendChild(el("span", "", "Show FPS"));
+  panel.appendChild(fpsRow);
+  note = el("p", "semif-gfx-note", NOTE);
+  note.setAttribute("role", "status");
+  panel.appendChild(note);
   panel.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       setOpen(false);
@@ -87,7 +129,8 @@ function buildPanel() {
   document.addEventListener("pointerdown", (e) => {
     if (!panel.hidden && !panel.contains(e.target) && e.target !== button) setOpen(false);
   });
-  document.body.appendChild(panel);
+  refreshApply();
+  chipBar().appendChild(panel); // opens under its button, wherever the layout puts the bar
 }
 
 export function mountGfx() {
@@ -108,7 +151,7 @@ export function mountGfx() {
   button.addEventListener("click", () => {
     const open = panel.hidden;
     setOpen(open);
-    if (open) panel.querySelector("input:checked")?.focus();
+    if (open) (radios.find((r) => r.checked) || radios[0])?.focus();
   });
   label();
 }
@@ -131,7 +174,7 @@ export function gfxTick(dt) {
   readout = `${Math.round(fps)} fps${gpu != null ? ` · ${gpu.toFixed(1)} ms` : ""}`;
   label();
   if (gfx.quality === "high" && slow.push(fps, elapsed)) {
-    panel.querySelector(".semif-gfx-note").textContent = SLOW;
+    note.textContent = SLOW;
     setOpen(true);
   }
 }

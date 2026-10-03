@@ -5,7 +5,8 @@ export const QUALITIES = ["medium", "high"];
 const KEY = "semif-gfx";
 
 // Integrated and mobile GPUs start on medium; so does a browser that hides the GPU's name.
-const DISCRETE_INTEL = /intel.*\barc\b/i;
+// Intel's Arc cards carry a model (A770, B580); Meteor Lake's integrated GPU is plain "Arc(TM) Graphics".
+const DISCRETE_INTEL = /intel.*\barc(\(tm\))?\s+[a-z]\d/i;
 const INTEGRATED = /intel|radeon(\(tm\))? graphics|radeon vega|adreno|mali|powervr|apple (gpu|m\d)|swiftshader|llvmpipe|basic render/i;
 
 export function classifyGpu(name) {

@@ -545,9 +545,9 @@ body.fsd-theme .touch-brake.held {
 /* ---- Graphics quality (semif-world/gfx-panel.js) ----------------------------------------------- */
 
 .semif-gfx-panel {
-  position: fixed;
-  top: 56px;
-  right: 64px;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
   z-index: 30;
   width: min(320px, calc(100vw - 32px));
   padding: 14px 16px;
@@ -604,6 +604,28 @@ body.fsd-theme .touch-brake.held {
 .semif-gfx-option small,
 .semif-gfx-note {
   color: var(--sol-muted);
+}
+
+.semif-gfx-apply {
+  width: 100%;
+  margin: 6px 0 4px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--sol-radius-sm);
+  background: var(--sol-accent);
+  color: var(--sol-accent-ink);
+  font: 700 13px var(--sol-font);
+  cursor: pointer;
+}
+
+.semif-gfx-apply:hover:not(:disabled) {
+  background: var(--sol-accent-hover);
+}
+
+.semif-gfx-apply:disabled {
+  background: var(--sol-raised);
+  color: var(--sol-muted);
+  cursor: default;
 }
 
 .semif-gfx-note {
