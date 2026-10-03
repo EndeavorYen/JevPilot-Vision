@@ -76,9 +76,11 @@ frameHooks.push((view, dt) => {
 
 // --- vehicles and people (#25) -----------------------------------------------------------------
 
-// The hero car: the one picked with K in this page, else ?car=gt|roadster|rally, else the last one
-// picked with K, else the GT.
+// The hero car, a Tesla (#47): the one picked with K in this page, else ?car=cybercab|model-y,
+// else the last one picked with K, else the Cybercab-style car. A name from the old line-up (gt,
+// roadster, rally) falls back to the default.
 let picked = null;
+let loadModelY = null; // the bundle's own Model Y loader, handed over by the coast-hero patch
 function heroModel() {
   if (picked) return picked;
   const asked = new URLSearchParams(globalThis.location?.search || "").get("car");
@@ -90,14 +92,21 @@ function heroModel() {
   return HERO_MODELS[0];
 }
 
-// The bundle asks for its hero car here first (BUNDLE_PATCHES.md `coast-hero`); off the coast
-// it gets undefined and loads its own Model Y.
+// The Model Y is the bundle's glb (one geometry per call); without its loader, the default car.
+function heroFor(model) {
+  if (model === "model-y" && loadModelY) return loadModelY();
+  return Promise.resolve(buildHero(model));
+}
+
+// The bundle asks for its hero car here first (BUNDLE_PATCHES.md `coast-hero`), handing over its
+// Model Y loader; off the coast it gets undefined and loads its own Model Y.
 window.SEMIF_WORLD_KIT = {
-  hero(view) {
+  hero(view, bundleModelY) {
     if (view?.sim?.world?.type !== "coast") return undefined;
+    if (bundleModelY) loadModelY = bundleModelY;
     // It runs inside the bundle's build(): a failure must reach its .catch, not abort the build.
     try {
-      return Promise.resolve(buildHero(heroModel()));
+      return heroFor(heroModel());
     } catch (err) {
       return Promise.reject(err);
     }
@@ -105,6 +114,7 @@ window.SEMIF_WORLD_KIT = {
 };
 
 let heroSwap = false;
+let swapSeq = 0; // the latest K press; a car loaded for an earlier one is dropped (#47)
 globalThis.document?.addEventListener?.("keydown", (e) => {
   if (e.code !== "KeyK" || e.repeat || e.ctrlKey || e.metaKey || e.altKey || !onCoast()) return;
   if (/input|select|textarea/i.test(e.target?.tagName || "")) return;
@@ -149,13 +159,24 @@ function dressAgents(view) {
   }
   if (heroSwap && view.player && view.heroCar && !view.sim.crash) {
     heroSwap = false;
-    const hero = buildHero(heroModel());
-    for (const child of view.player.children || []) dispose(child);
-    view.player.clear();
-    view.player.add(hero);
-    view.heroCar = hero;
-    view.player.userData.eyeHeight = hero.userData.eyeHeight;
-    view.player.userData.eyeForward = hero.userData.eyeForward;
+    const player = view.player;
+    const seq = ++swapSeq;
+    heroFor(heroModel())
+      .then((hero) => {
+        // A later K press, a new map or a crash while the glb loaded: this car is no longer wanted.
+        if (seq !== swapSeq || view.player !== player) return dispose(hero);
+        if (view.sim.crash) {
+          heroSwap = true; // swap once the crash is over, as asked
+          return dispose(hero);
+        }
+        for (const child of player.children || []) dispose(child);
+        player.clear();
+        player.add(hero);
+        view.heroCar = hero;
+        player.userData.eyeHeight = hero.userData.eyeHeight;
+        player.userData.eyeForward = hero.userData.eyeForward;
+      })
+      .catch((err) => console.warn("semif-world: hero", err));
   }
 }
 

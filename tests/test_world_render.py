@@ -53,7 +53,8 @@ const element = () => ({ style: {}, width: 0, height: 0, children: [], parent: n
   insertBefore(c, ref) { c.parent = this; const i = this.children.indexOf(ref); this.children.splice(i < 0 ? this.children.length : i, 0, c); return track(c); },
   get firstChild() { return this.children[0] ?? null; }, querySelector: () => element(), querySelectorAll: () => [], contains: () => false, focus() {} });
 globalThis.document = { createElement: element,
-  head: { appendChild() {} }, body: { appendChild: track }, addEventListener() {} };
+  head: { appendChild() {} }, body: { appendChild: track }, on: {}, addEventListener(t, f) { (this.on[t] ||= []).push(f); },
+  fire(t, e) { (this.on[t] || []).forEach((f) => f(e)); } };
 const calls = [];
 globalThis.window = { SEMIF_SCENERY: {
   palette: { legacy: true },
@@ -488,5 +489,63 @@ def test_traffic_and_pedestrians_are_dressed_once_and_the_hero_comes_from_the_ki
     assert "semif-traffic-motorcycle" in got["moto"]
     assert got["dressed"] == [True, True, True]
     assert got["limbs"] == [2, 2, False], "the bundle swings our legs and arms"
-    assert got["hero"] == 4 and got["heroName"].startswith("semif-hero-")
+    assert got["hero"] == 4 and got["heroName"] == "semif-hero-cybercab", "the default hero is the Cybercab-style car (#47)"
     assert got["legacy"], "other maps keep the bundle's Model Y"
+
+
+def test_the_model_y_hero_is_the_bundles_own_glb_and_old_names_fall_back():
+    """#47: ?car=model-y hands back the bundle's Model Y loader (coast-hero passes it in); a stale
+    name from the old line-up (gt, roadster, rally) builds the Cybercab-style car."""
+    got = _render(
+        "const view = { sim: { world }, scene: new Obj(), render() {} };"
+        "const bundleModelY = () => Promise.resolve({ name: 'tesla-model-y' });"
+        "const y = await window.SEMIF_WORLD_KIT.hero(view, bundleModelY);"
+        "out({ y: y.name });",
+        "?car=model-y",
+    )
+    assert got["y"] == "tesla-model-y"
+    old = _render(
+        "const view = { sim: { world }, scene: new Obj(), render() {} };"
+        "const h = await window.SEMIF_WORLD_KIT.hero(view, () => Promise.resolve({ name: 'tesla-model-y' }));"
+        "out({ name: h.name });",
+        "?car=gt",
+    )
+    assert old["name"] == "semif-hero-cybercab"
+
+
+def test_k_swaps_the_cybercab_for_the_bundles_model_y_and_remembers_it():
+    """#47: K goes through the two Teslas; the Model Y comes from the bundle's own loader."""
+    got = _render(
+        "const saved = {}; globalThis.localStorage = { getItem: (k) => saved[k] ?? null, setItem: (k, v) => { saved[k] = v; } };"
+        "const view = { sim: { world, traffic: [], pedestrians: [] }, scene: new Obj(), render() {}, vehicles: new Map(), people: new Map(), player: new Obj(), heroCar: null };"
+        "view.player.clear = function () { this.children = []; };"
+        "api.built(view);"
+        "const first = await window.SEMIF_WORLD_KIT.hero(view, () => Promise.resolve(Object.assign(new Obj(), { name: 'tesla-model-y', userData: { eyeHeight: 1.28, eyeForward: 0.45 } })));"
+        "view.player.add(first); view.heroCar = first;"
+        "document.fire('keydown', { code: 'KeyK', target: { tagName: 'CANVAS' } });"
+        "view.render(0.016); await new Promise((r) => setTimeout(r, 0));"
+        "out({ first: first.name, now: view.player.children.map((c) => c.name), eye: view.player.userData.eyeHeight, saved: saved['semif-car'] });"
+    )
+    assert got["first"] == "semif-hero-cybercab"
+    assert got["now"] == ["tesla-model-y"] and got["eye"] == 1.28
+    assert got["saved"] == "model-y"
+
+
+def test_a_slow_model_y_does_not_replace_the_car_picked_after_it():
+    """#47 review: K twice quickly (cybercab -> model-y -> cybercab); the glb resolves last and must
+    not replace the Cybercab the driver picked afterwards."""
+    got = _render(
+        "const saved = {}; globalThis.localStorage = { getItem: (k) => saved[k] ?? null, setItem: (k, v) => { saved[k] = v; } };"
+        "const view = { sim: { world, traffic: [], pedestrians: [] }, scene: new Obj(), render() {}, vehicles: new Map(), people: new Map(), player: new Obj(), heroCar: null };"
+        "view.player.clear = function () { this.children = []; };"
+        "api.built(view);"
+        "let release; const slow = () => new Promise((r) => { release = () => r(Object.assign(new Obj(), { name: 'tesla-model-y', userData: {} })); });"
+        "const first = await window.SEMIF_WORLD_KIT.hero(view, slow); view.player.add(first); view.heroCar = first;"
+        "const k = () => document.fire('keydown', { code: 'KeyK', target: { tagName: 'CANVAS' } });"
+        "k(); view.render(0.016);"
+        "k(); view.render(0.016); await new Promise((r) => setTimeout(r, 0));"
+        "release(); await new Promise((r) => setTimeout(r, 0));"
+        "out({ now: view.player.children.map((c) => c.name), saved: saved['semif-car'] });"
+    )
+    assert got["saved"] == "cybercab"
+    assert got["now"] == ["semif-hero-cybercab"], "the car on screen is the one picked last"

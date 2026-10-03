@@ -128,7 +128,7 @@ python benchmarks/perf_baseline.py --gfx medium high --base http://localhost:800
 
 ## 細節
 
-- **地圖：** 由 `jevpilot_vision/web/semif-worldgen.js` 生成（道路固定，seed 只改變號誌相位、建築、交通與行人），畫面由 `jevpilot_vision/web/semif-world/` 繪製。港口有粉彩鎮屋、碼頭與燈塔，山坡上有白牆別墅，路旁與山谷有絲柏、傘松、橄欖、棕櫚和葡萄園，節慶據點有拱門、舞台、帳篷與摩天輪。主角車三款（GT 跑車、60 年代敞篷跑車、拉力車），按 `K` 或用 `?car=gt|roadster|rally` 切換；交通車七款，車色避開相機遮罩。舊的 Skyline City、Small town、Interstate 08 只在 `lap=1` 或 `?world=city|town|highway` 時出現。截圖在 [`docs/visual/solmare-coast/`](docs/visual/solmare-coast/)。
+- **地圖：** 由 `jevpilot_vision/web/semif-worldgen.js` 生成（道路固定，seed 只改變號誌相位、建築、交通與行人），畫面由 `jevpilot_vision/web/semif-world/` 繪製。港口有粉彩鎮屋、碼頭與燈塔，山坡上有白牆別墅，路旁與山谷有絲柏、傘松、橄欖、棕櫚和葡萄園，節慶據點有拱門、舞台、帳篷與摩天輪。主角車是 Tesla：預設是程式生成的 Cybercab 風格車（兩門、淚滴形快背、沒有後窗、前後全寬燈條、香檳色），也可以換成 Model Y（打包檔原本的模型），按 `K` 或用 `?car=cybercab|model-y` 切換；車上沒有 Tesla 標誌，本專案與 Tesla 無關。交通車七款，車色避開相機遮罩。舊的 Skyline City、Small town、Interstate 08 只在 `lap=1` 或 `?world=city|town|highway` 時出現。截圖在 [`docs/visual/solmare-coast/`](docs/visual/solmare-coast/)。
 - **車輛與行人密度：** ⚙ 面板的 Traffic 區塊，或 `?traffic=low|med|high&people=low|med|high`。low 是原本的數量（36 輛、28 人），預設 medium（54、42），high（72、56）；選擇會記在瀏覽器裡，`lap=1` 一律用 low。
 - **日照循環：** 新地圖從 16:30 開始，15 分鐘走完 06:15 到 19:45（沒有夜晚）。時間鈕或 `T` 鍵跳到下一個時段；`?time=17:45` 固定時間，`?daycycle=0` 停住時鐘。黃昏的暗、暖與高對比只作用在主畫面的後製（`?post=0` 關閉）；車載相機經過與螢幕相同的 ACES 色調映射、曝光固定 0.95，亮度靠光源補償，維持在正午水準，由 `tests/test_daylight.py` 逐時段檢查。
 - **畫質：** Medium 是加入分級之前的世界，由 `tests/fixtures/coast_medium_snapshot.json` 的結構快照鎖住；High 是之後逐步加上的優化版。⚙ 按鈕切換（會重新載入、自駕會停）；`?gfx=` 優先，其次是上次的選擇，第一次開啟時依 GPU 初選。「Show FPS」在按鈕上顯示主畫面的 fps 與 GPU 毫秒。Vision 的數字一律標明畫質。設計見 [`docs/superpowers/specs/2026-10-03-visual-quality-design.md`](docs/superpowers/specs/2026-10-03-visual-quality-design.md)。

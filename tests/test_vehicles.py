@@ -30,7 +30,7 @@ def heroes() -> dict:
     return _render(
         _BOX
         + "const out2 = {};"
-        "for (const model of V.HERO_MODELS) { const a = V.buildHero(model), b = V.buildHero(model);"
+        "for (const model of V.PROCEDURAL_HEROES) { const a = V.buildHero(model), b = V.buildHero(model);"
         "  const wheels = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'].map((name) => all(a).find((n) => n.name === name));"
         "  const geoA = new Set(all(a).filter((n) => n.geometry).map((n) => n.geometry));"
         "  out2[model] = { box: box(a), wheels: wheels.map((w) => w && { x: w.position.x, z: w.position.z, front: w.userData.front, radius: w.userData.radius, rotor: !!(w.children[0] && all(w.children[0]).some((n) => n.geometry)) }),"
@@ -40,7 +40,7 @@ def heroes() -> dict:
     )
 
 
-@pytest.mark.parametrize("model", ["gt", "roadster", "rally"])
+@pytest.mark.parametrize("model", ["cybercab"])
 def test_hero_cars_fill_the_bundles_footprint_and_stand_on_the_ground(heroes, model):
     box = heroes[model]["box"]
     assert abs(box["length"] - 4.75) < 0.03, box
@@ -50,7 +50,7 @@ def test_hero_cars_fill_the_bundles_footprint_and_stand_on_the_ground(heroes, mo
     assert heroes[model]["meshes"] >= 12, "a real car: body, glass, lights, four wheels of several parts"
 
 
-@pytest.mark.parametrize("model", ["gt", "roadster", "rally"])
+@pytest.mark.parametrize("model", ["cybercab"])
 def test_hero_cars_keep_the_bundles_wheel_and_camera_contract(heroes, model):
     hero = heroes[model]
     wheels = dict(zip(["fl", "fr", "rl", "rr"], hero["wheels"]))
@@ -115,3 +115,34 @@ def test_a_failing_hero_build_rejects_instead_of_throwing_into_the_bundle():
         "out({ threw, rejected });"
     )
     assert got == {"threw": False, "rejected": True}
+
+
+# ---- #47: the hero is a Tesla ------------------------------------------------------------------
+
+def test_the_heroes_are_a_cybercab_style_car_and_the_model_y():
+    got = _render(_BOX + "out({ heroes: V.HERO_MODELS, procedural: V.PROCEDURAL_HEROES, fallback: V.buildHero('gt').name });")
+    assert got["heroes"] == ["cybercab", "model-y"]
+    assert got["procedural"] == ["cybercab"], "the Model Y is the bundle's own glb"
+    assert got["fallback"] == "semif-hero-cybercab", "an old name builds the default"
+
+
+def test_the_cybercab_has_no_rear_window_full_width_light_bars_and_champagne_paint():
+    # Classified lofts share one vertex array per piece: measure only the vertices the index uses.
+    # The nose and tail are rounded (about 1.4 m across at the very ends): a bar of 1.3 m or more spans them.
+    got = _render(
+        _BOX
+        + "const K = await mod('kit.js'); const car = V.buildHero('cybercab');"
+        "const pieces = all(car).filter((n) => n.geometry && n.geometry.attributes.position);"
+        "const span = (n) => { const p = n.geometry.attributes.position.array; const idx = n.geometry.index; const ids = idx ? Array.from(idx.array || idx) : null;"
+        "  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; const use = (v) => { x0 = Math.min(x0, p[3 * v]); x1 = Math.max(x1, p[3 * v]); z0 = Math.min(z0, p[3 * v + 2]); z1 = Math.max(z1, p[3 * v + 2]); };"
+        "  if (ids) ids.forEach(use); else for (let v = 0; v < p.length / 3; v++) use(v); return { w: x1 - x0, z0, z1 }; };"
+        "const colour = (n) => { const c = n.material && n.material.color; return typeof c === 'string' ? c : c && c.hex; };"
+        "const glass = pieces.filter((n) => n.material.name === 'Glass').map(span);"
+        "const bars = (hex) => pieces.filter((n) => colour(n) === hex).map(span).filter((s) => s.w >= 1.3);"
+        "out({ glassRear: Math.max(...glass.map((g) => g.z1)), front: bars(K.PALETTE.car.lens).map((s) => s.z0), rear: bars(K.PALETTE.car.taillight).map((s) => s.z1),"
+        "  paint: pieces.filter((n) => n.material.clearcoat === 1 && n.material.name !== 'Glass').map(colour), champagne: K.PALETTE.paint[2] });"
+    )
+    assert got["glassRear"] < 1.0, "no rear window: the fastback behind the roof is painted"
+    assert got["front"] and min(got["front"]) < -2.3, "a full-width light bar across the nose"
+    assert got["rear"] and max(got["rear"]) > 2.3, "and across the tail"
+    assert set(got["paint"]) == {got["champagne"]}

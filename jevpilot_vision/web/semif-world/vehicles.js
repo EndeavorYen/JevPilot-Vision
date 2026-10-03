@@ -11,7 +11,10 @@
 import { PALETTE, T, material, physical } from "./kit.js";
 import { curve, loft, lathe, box, rotateX, move, Parts } from "./shapes.js";
 
-export const HERO_MODELS = ["gt", "roadster", "rally"];
+// The hero is a Tesla (#47): a Cybercab-style car built here, and the bundle's own Model Y glb
+// (coast-hero hands its loader to index.js). No Tesla emblems or lettering.
+export const HERO_MODELS = ["cybercab", "model-y"];
+export const PROCEDURAL_HEROES = ["cybercab"];
 export const TRAFFIC_KINDS = ["hatch", "sedan", "wagon", "suv", "van", "pickup"];
 export const HERO_LENGTH = 4.75;
 export const TRAFFIC_LENGTH = 4.2;
@@ -46,7 +49,7 @@ function hash(text) {
 // --- wheels ----------------------------------------------------------------------------------
 
 // A wheel pivot at (x, r, z): tyre, rim and spokes spin in children[0]; disc and caliper do not.
-function wheel(name, { x, z, r, w, spokes, front, chrome }, m) {
+function wheel(name, { x, z, r, w, spokes, front, chrome, aero }, m) {
   const pivot = new T.Group();
   pivot.name = name;
   pivot.position.set(x, r, z);
@@ -62,9 +65,15 @@ function wheel(name, { x, z, r, w, spokes, front, chrome }, m) {
   spin.add(rim, lathe([[r * 0.64, -w / 2 + 0.015], [r * 0.64, w / 2 - 0.015]], { segments: 30 }));
   spin.add(rim, lathe([[r * 0.58, face - out * 0.035], [r * 0.66, face]], { segments: 30 }));
   spin.add(rim, lathe([[0.001, face], [0.075, face], [0.085, face - out * 0.025]], { segments: 14 }));
-  for (let k = 0; k < spokes; k++) {
-    const spoke = box(0.03, r * 0.52, spokes > 10 ? 0.018 : 0.055, face - out * 0.018, r * 0.33, 0);
-    spin.add(rim, rotateX(spoke, (k / spokes) * Math.PI * 2));
+  if (aero) {
+    // A flat aero cover over the whole rim, slightly dished, with a ring of shallow vents.
+    spin.add(rim, lathe([[0.001, face - out * 0.012], [r * 0.6, face - out * 0.004], [r * 0.64, face - out * 0.03]], { segments: 30 }));
+    for (let k = 0; k < 8; k++) spin.add(m.trim, rotateX(box(0.006, r * 0.1, 0.05, face + out * 0.0005, r * 0.42, 0), (k / 8) * Math.PI * 2));
+  } else {
+    for (let k = 0; k < spokes; k++) {
+      const spoke = box(0.03, r * 0.52, spokes > 10 ? 0.018 : 0.055, face - out * 0.018, r * 0.33, 0);
+      spin.add(rim, rotateX(spoke, (k / spokes) * Math.PI * 2));
+    }
   }
   rotor.add(...spin.meshes());
   pivot.add(rotor);
@@ -81,7 +90,10 @@ function wheel(name, { x, z, r, w, spokes, front, chrome }, m) {
 // --- bodies ----------------------------------------------------------------------------------
 
 // spec: L, r (wheel radius), w (tyre width), front/rear (axle z), sill, half/top keys, n (body
-// squareness), house {z0, z1, belt, roof keys, half keys, b (B-pillar z), glass (all glass)}.
+// squareness), lightBars (full-width lamps instead of the corner pairs), noGrille, noPlates,
+// aeroWheels (flat covers), house {z0, z1, belt, roof keys, half keys, b (B-pillar z), glass (all
+// glass), rearGlass: false (a painted fastback, no rear window), roofGlass (a glass canopy), side
+// ([from, to] z of the side windows)}.
 function carBody(spec, paintColour) {
   const m = mats();
   const paint = paintOf(paintColour);
@@ -125,14 +137,18 @@ function carBody(spec, paintColour) {
       const roofY = Math.max(...house.roof.map((k) => k[1]));
       const flat = house.roof.filter((k) => k[1] >= roofY - 0.02).map((k) => k[0]);
       const roofFront = Math.min(...flat), roofRear = Math.max(...flat);
-      const sideFrom = roofFront - 0.2, sideTo = roofRear + 0.1;
+      const [sideFrom, sideTo] = house.side || [roofFront - 0.2, roofRear + 0.1];
       const bp = house.b;
       const stops = [roofFront, roofRear, sideFrom, sideTo, ...(bp === undefined ? [] : [bp - 0.06, bp + 0.06])];
       const classify = (z, a) => {
         const c = Math.cos(a), s = Math.sin(a);
         if (s < -0.2) return "paint"; // the waist, below the windows (and the hidden underside)
-        if (Math.abs(c) < 0.5) return z >= roofFront && z <= roofRear ? "paint" : "glass"; // roof, or windscreen / rear window
-        if (s > 0.86) return "paint"; // the roof rail
+        if (Math.abs(c) < 0.5) {
+          if (z > roofRear && house.rearGlass === false) return "paint"; // a fastback with no rear window
+          if (z >= roofFront && z <= roofRear) return house.roofGlass ? "glass" : "paint"; // the roof
+          return "glass"; // windscreen / rear window
+        }
+        if (s > 0.86) return house.roofGlass && z >= roofFront - 0.3 && z <= roofRear + 0.3 ? "glass" : "paint"; // the roof rail
         if (z < sideFrom || z > sideTo) return "paint"; // A and C pillars
         if (bp !== undefined && Math.abs(z - bp) < 0.06) return "paint"; // B pillar
         return "glass";
@@ -146,15 +162,22 @@ function carBody(spec, paintColour) {
   // Lights, grille, bumpers and number plates on the two end faces.
   const front = -L / 2 + 0.01, rear = L / 2 - 0.01; // the lamps' faces are the car's ends
   const hf = half(z0), hr = half(z1), tf = top(z0), tr = top(z1);
-  for (const side of [-1, 1]) {
-    parts.add(m.lens, box(Math.min(0.36, hf * 0.42), 0.085, 0.02, side * hf * 0.62, tf - 0.07, front));
-    parts.add(m.tail, box(Math.min(0.34, hr * 0.4), 0.075, 0.02, side * hr * 0.64, tr - 0.07, rear));
+  if (spec.lightBars) {
+    parts.add(m.lens, box(hf * 1.92, 0.045, 0.02, 0, tf - 0.06, front));
+    parts.add(m.tail, box(hr * 1.92, 0.05, 0.02, 0, tr - 0.06, rear));
+  } else {
+    for (const side of [-1, 1]) {
+      parts.add(m.lens, box(Math.min(0.36, hf * 0.42), 0.085, 0.02, side * hf * 0.62, tf - 0.07, front));
+      parts.add(m.tail, box(Math.min(0.34, hr * 0.4), 0.075, 0.02, side * hr * 0.64, tr - 0.07, rear));
+    }
   }
-  parts.add(m.trim, box(hf * 0.7, 0.1, 0.02, 0, tf - 0.2, front));
+  if (!spec.noGrille) parts.add(m.trim, box(hf * 0.7, 0.1, 0.02, 0, tf - 0.2, front));
   parts.add(m.trim, box(hf * 1.6, 0.09, 0.02, 0, spec.sill + 0.1, front));
   parts.add(m.trim, box(hr * 1.6, 0.09, 0.02, 0, spec.sill + 0.1, rear));
-  parts.add(m.plate, box(0.42, 0.1, 0.022, 0, spec.sill + 0.2, front));
-  parts.add(m.plate, box(0.42, 0.1, 0.022, 0, spec.sill + 0.24, rear));
+  if (!spec.noPlates) {
+    parts.add(m.plate, box(0.42, 0.1, 0.022, 0, spec.sill + 0.2, front));
+    parts.add(m.plate, box(0.42, 0.1, 0.022, 0, spec.sill + 0.24, rear));
+  }
   // Door mirrors on short arms from the doors; they also set the car's full width (1.9 m).
   if (house) {
     const mz = house.z0 + 0.18, my = Math.max(top(mz), house.belt) + 0.07;
@@ -172,7 +195,7 @@ function carBody(spec, paintColour) {
   const track = (az) => half(az) - spec.w / 2 - 0.03;
   for (const [name, az, front] of [["wheel_fl", spec.front, true], ["wheel_fr", spec.front, true], ["wheel_rl", spec.rear, false], ["wheel_rr", spec.rear, false]]) {
     const x = (name.endsWith("l") ? -1 : 1) * track(az);
-    group.add(wheel(name, { x, z: az, r: spec.r, w: spec.w, spokes: spec.spokes || 5, front, chrome: spec.chromeWheels }, m));
+    group.add(wheel(name, { x, z: az, r: spec.r, w: spec.w, spokes: spec.spokes || 5, front, chrome: spec.chromeWheels, aero: spec.aeroWheels }, m));
   }
   group.userData.wheelbase = Math.abs(spec.front - spec.rear);
   return { group, parts: new Parts(), m, paint, half, top };
@@ -191,73 +214,34 @@ function addParts(group, build) {
 // --- heroes ----------------------------------------------------------------------------------
 
 const HERO = {
-  gt: {
-    paint: PALETTE.paint[5],
-    eye: [1.05, 0.25],
-    spec: {
-      L: HERO_LENGTH, r: 0.345, w: 0.26, front: -1.45, rear: 1.36, sill: 0.2, spokes: 10, n: 5,
-      half: [[-2.37, 0.78], [-2.15, 0.9], [-1.45, 0.935], [0, 0.9], [1.36, 0.945], [2.1, 0.9], [2.37, 0.8]],
-      top: [[-2.37, 0.52], [-2.2, 0.64], [-1.5, 0.74], [-0.9, 0.82], [-0.2, 0.86], [1.0, 0.9], [1.7, 0.92], [2.2, 0.9], [2.37, 0.74]],
-      house: { z0: -0.95, z1: 1.85, belt: 0.86, roof: [[-0.95, 0.84], [-0.25, 1.19], [0.45, 1.21], [1.85, 0.9]], half: [[-0.95, 0.76], [0, 0.74], [1.0, 0.72], [1.85, 0.66]] },
-    },
-    details(p, k) {
-      p.add(k.paint, box(1.5, 0.045, 0.28, 0, 1.0, 2.16));
-      for (const side of [-1, 1]) p.add(k.m.trim, box(0.04, 0.1, 0.12, side * 0.55, 0.94, 2.16));
-      for (const side of [-1, 1]) p.add(k.m.chrome, box(0.11, 0.07, 0.04, side * 0.35, 0.3, 2.34));
-      for (const side of [-1, 1]) p.add(k.m.trim, box(0.36, 0.02, 0.42, side * 0.3, k.top(-1.15) + 0.005, -1.15)); // bonnet vents
-    },
-  },
-  roadster: {
+  // Two doors, a low nose, a teardrop roof that runs into a short cut-off tail with no rear window,
+  // light bars across both ends, covered turbine wheels, champagne paint. The door-mirror pieces
+  // stand in for its side camera pods and keep the bundle's 1.9 m width.
+  cybercab: {
     paint: PALETTE.paint[2],
-    eye: [1.0, 0.1],
+    eye: [1.08, 0.2],
     spec: {
-      L: HERO_LENGTH, r: 0.32, w: 0.2, front: -1.5, rear: 1.25, sill: 0.25, spokes: 18, n: 4, chromeWheels: true,
-      half: [[-2.37, 0.62], [-2.1, 0.8], [-1.5, 0.9], [-0.9, 0.84], [0, 0.86], [1.25, 0.93], [2.0, 0.86], [2.37, 0.68]],
-      top: [[-2.37, 0.55], [-2.0, 0.66], [-1.5, 0.76], [-0.8, 0.8], [-0.35, 0.84], [0.2, 0.82], [1.25, 0.86], [2.0, 0.8], [2.37, 0.62]],
-      // A raked windscreen only: the house is a thin wedge of glass.
-      house: { z0: -0.44, z1: -0.3, belt: 0.84, roof: [[-0.44, 0.84], [-0.3, 1.12]], half: [[-0.44, 0.66], [-0.3, 0.64]], n: 6, glass: true },
+      L: HERO_LENGTH, r: 0.35, w: 0.24, front: -1.42, rear: 1.4, sill: 0.22, n: 4.2,
+      lightBars: true, noGrille: true, noPlates: true, aeroWheels: true,
+      half: [[-2.37, 0.78], [-2.1, 0.9], [-1.42, 0.94], [0, 0.95], [1.4, 0.94], [2.0, 0.88], [2.25, 0.8], [2.37, 0.7]],
+      top: [[-2.37, 0.56], [-2.15, 0.65], [-1.75, 0.73], [-1.3, 0.75], [0, 0.75], [1.6, 0.76], [2.15, 0.74], [2.37, 0.62]],
+      // One arc from the base of the windscreen to the tail: a glass canopy over the cabin, big
+      // side windows, and a painted fastback behind them (no rear window).
+      house: {
+        z0: -1.75, z1: 2.35, belt: 0.74, rearGlass: false, roofGlass: true, side: [-1.75, 0.8],
+        roof: [[-1.75, 0.75], [-0.8, 1.2], [0, 1.36], [0.35, 1.37], [1.3, 1.2], [2.35, 0.8]],
+        half: [[-1.75, 0.82], [-0.6, 0.9], [0.5, 0.91], [1.5, 0.88], [2.35, 0.74]],
+      },
     },
     details(p, k) {
-      p.add(k.m.interior, box(1.24, 0.05, 1.05, 0, 0.84, 0.22)); // the open cockpit
-      for (const side of [-1, 1]) {
-        p.add(k.m.leather, box(0.44, 0.1, 0.5, side * 0.32, 0.86, 0.32));
-        p.add(k.m.leather, box(0.44, 0.36, 0.09, side * 0.32, 1.0, 0.6));
-      }
-      // The steering wheel, in front of the left seat.
-      p.add(k.m.trim, move(lathe([[0.17, -0.015], [0.19, -0.015], [0.19, 0.015], [0.17, 0.015]], { axis: "z", segments: 22 }), -0.32, 1.04, -0.05));
-      for (const z of [-2.35, 2.35]) p.add(k.m.chrome, box(1.5, 0.07, 0.05, 0, 0.36, z));
-    },
-  },
-  rally: {
-    paint: PALETTE.paint[0],
-    eye: [1.38, 0.3],
-    spec: {
-      L: HERO_LENGTH, r: 0.37, w: 0.27, front: -1.4, rear: 1.35, sill: 0.46, spokes: 6, n: 4.5,
-      half: [[-2.37, 0.82], [-2.1, 0.9], [-1.4, 0.94], [0, 0.92], [1.35, 0.945], [2.1, 0.9], [2.37, 0.84]],
-      top: [[-2.37, 0.82], [-2.2, 0.95], [-1.6, 1.02], [-0.8, 1.08], [0.6, 1.12], [2.0, 1.12], [2.37, 1.0]],
-      house: { z0: -0.8, z1: 1.95, belt: 1.1, b: 0.62, roof: [[-0.8, 1.08], [-0.15, 1.53], [1.6, 1.54], [1.95, 1.2]], half: [[-0.8, 0.8], [0, 0.78], [1.95, 0.74]] },
-    },
-    details(p, k) {
-      for (const side of [-1, 1]) {
-        p.add(k.m.trim, box(0.05, 0.05, 1.5, side * 0.6, 1.6, 0.7)); // roof rack rails
-        for (const z of [0.05, 1.35]) p.add(k.m.trim, box(0.05, 0.08, 0.05, side * 0.6, 1.56, z));
-        p.add(k.m.trim, box(0.03, 0.34, 0.3, side * 0.78, 0.32, 1.35 + 0.48)); // mud flaps
-        p.add(k.m.trim, box(0.03, 0.34, 0.3, side * 0.78, 0.32, -1.4 + 0.48));
-        // Livery: two stripes along each flank, in the palette's teal and navy.
-        p.add(paintOf(PALETTE.paint[3]), box(0.012, 0.09, 2.6, side * 0.938, 0.92, 0.0));
-        p.add(paintOf(PALETTE.paint[4]), box(0.012, 0.05, 2.6, side * 0.938, 0.83, 0.0));
-      }
-      for (const z of [0.3, 1.1]) p.add(k.m.trim, box(1.3, 0.04, 0.05, 0, 1.62, z));
-      // A light pod on a bar across the grille, and a bonnet scoop sitting on the bonnet.
-      for (let i = 0; i < 4; i++) p.add(k.m.lens, box(0.15, 0.15, 0.02, -0.39 + i * 0.26, k.top(-2.36) - 0.02, -2.365));
-      p.add(k.m.trim, box(1.2, 0.04, 0.04, 0, k.top(-2.36) - 0.1, -2.355));
-      p.add(paintOf(PALETTE.paint[4]), box(0.5, 0.07, 0.34, 0, k.top(-1.15) + 0.03, -1.15));
+      p.add(k.m.trim, box(1.1, 0.07, 0.02, 0, 0.38, -2.36)); // the dark lower intake
     },
   },
 };
 
-export function buildHero(model = "gt") {
-  const def = HERO[model] || HERO.gt;
+export function buildHero(model = "cybercab") {
+  if (!HERO[model]) model = "cybercab"; // a name from the old line-up, or the glb-only Model Y
+  const def = HERO[model];
   const k = carBody(def.spec, def.paint);
   addParts(k.group, (p) => def.details(p, k));
   k.group.name = `semif-hero-${model}`;
