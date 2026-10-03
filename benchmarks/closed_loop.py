@@ -387,16 +387,29 @@ def outcome(run: Dict[str, Any], got: Dict[str, Any]) -> Dict[str, bool]:
 
 def server_ok(base: str, tries: int = 3) -> bool:
     """The decision server answers its health check (infrastructure, independent of the drive).
-    Asked after the drive stopped, and a few times: a server busy with the detector is not down."""
-    import urllib.request
+    Asked after the drive stopped, a few times, over a kept-alive IPv4 connection: urllib's
+    'Connection: close' requests were reset by the server's Windows event loop more than half the
+    time, and 'localhost' resolves to ::1 first while the server listens on IPv4."""
+    import http.client
+    from urllib.parse import urlsplit
 
+    parts = urlsplit(base)
+    host = "127.0.0.1" if parts.hostname in ("localhost", None) else parts.hostname
+    port = parts.port or 80
     for attempt in range(tries):
+        conn = None
         try:
-            with urllib.request.urlopen(f"{base.rstrip('/')}/health", timeout=10) as res:
-                if 200 <= res.status < 300:
-                    return True
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            conn.request("GET", "/health")
+            res = conn.getresponse()
+            res.read()
+            if 200 <= res.status < 300:
+                return True
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
         if attempt + 1 < tries:
             time.sleep(5)
     return False
