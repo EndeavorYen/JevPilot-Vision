@@ -375,7 +375,8 @@ def open_tab(base: str) -> Dict[str, str]:
     before = {p["id"] for p in _devtools_pages()}
     _cdp("open", f"{base.rstrip('/')}/jevpilot/?minimal=0")
     for _ in range(20):
-        new = [p for p in _devtools_pages() if p["id"] not in before]
+        new = [p for p in _devtools_pages() if p["id"] not in before
+               and "/jevpilot" in p.get("url", "") and _same_server(p["url"], base)]
         if new:
             full = new[0]["id"]
             prefixes = [line.split()[0] for line in _cdp("list").splitlines() if line.strip()]
@@ -385,12 +386,28 @@ def open_tab(base: str) -> Dict[str, str]:
     raise SystemExit("the evaluation tab did not appear")
 
 
-def close_tab(tab: Optional[Dict[str, str]]) -> None:
-    if tab:
-        try:
-            _devtools_close(tab["id"])
-        except Exception:
-            pass
+def close_tab(tab: Optional[Dict[str, str]], wait: bool = False) -> None:
+    """Close our tab. `wait`: until Chrome has dropped it (/json/close returns first), so a tab
+    opened next does not find it still listed and take it for someone else's."""
+    if not tab:
+        return
+    try:
+        _devtools_close(tab["id"])
+        for _ in range(20 if wait else 0):
+            if all(p["id"] != tab["id"] for p in _devtools_pages()):
+                return
+            time.sleep(0.25)
+    except Exception:
+        pass
+
+
+def replace_tab(base: str, holder: Dict[str, Any]) -> None:
+    """A fresh tab for the next run (#39). The anchor is checked again first: the user may have
+    closed it, and closing Chrome's last page quits Chrome."""
+    old, holder["tab"] = holder["tab"], None  # a Ctrl-C from here on closes whatever holder has
+    ensure_anchor(base)
+    close_tab(old, wait=True)
+    holder["tab"] = open_tab(base)
 
 
 def decision_trouble(got: Dict[str, Any]) -> Dict[str, int]:
@@ -553,10 +570,15 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"about {len(todo) * (args.seconds + 25) / 60:.0f} min to go", flush=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     ensure_anchor(args.base)
-    tab = {"tab": open_tab(args.base)}
+    tab: Dict[str, Any] = {"tab": None}
     try:
+        tab["tab"] = open_tab(args.base)
         _drive_all(args, todo, tab)
     finally:
+        try:
+            ensure_anchor(args.base)  # the user may have closed it; the last page closing quits Chrome
+        except Exception:
+            pass
         close_tab(tab["tab"])  # even on Ctrl-C: no tab is left driving or piling up
     print(report(summarize(current_rows(read_rows(args.out), load_seeds())[0])))
     return 0
@@ -576,13 +598,8 @@ def _drive_all(args: argparse.Namespace, todo: List[Dict[str, Any]], tab: Any) -
         if others:
             raise SystemExit(f"another simulation tab {others} opened during the evaluation: it shares the vision slot")
         row = drive(target, args.base, run)
-        if not row.get("ok") and str(row.get("error", "")).startswith(TAB_FAILURES) and holder["tab"].get("id"):
-            # The tab never got a drive going (a stalled load) or stopped stepping (hidden): the next
-            # run gets a fresh tab.
-            close_tab(holder["tab"])
-            holder["tab"] = open_tab(args.base)
         try:
-            shared = [t for t in _jevpilot_tabs(args.base) if t not in (target, holder["tab"]["target"])]
+            shared = [t for t in _jevpilot_tabs(args.base) if t != target]
             row["tab_check"] = "ok"
         except Exception:
             shared = []
@@ -601,6 +618,10 @@ def _drive_all(args: argparse.Namespace, todo: List[Dict[str, Any]], tab: Any) -
               + (f"{row.get('distance_m')} m, red {row.get('red_light')}, collisions {row.get('collisions')}"
                  + (", autopilot gave up" if row.get("disengaged") else "") + (", did not move" if row.get("stalled") else "")
                  if row["ok"] else f"COULD NOT DRIVE {row.get('error')}"), flush=True)
+        if not row.get("ok") and str(row.get("error", "")).startswith(TAB_FAILURES) and holder["tab"].get("id") and i < len(todo):
+            # The tab never got a drive going (a stalled load) or stopped stepping (hidden): the next
+            # run gets a fresh tab. Its row is saved first.
+            replace_tab(args.base, holder)
 
 
 if __name__ == "__main__":

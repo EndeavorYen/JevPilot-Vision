@@ -461,3 +461,65 @@ def test_issue39_a_hidden_tab_is_replaced(monkeypatch, tmp_path):
              "--out", str(tmp_path / "runs.jsonl")])
     assert seen[0] != seen[1], "the second run drove in a fresh tab"
     assert len(chrome.closed) == 2
+
+
+def test_issue39_review_m1_a_tab_still_closing_is_not_mistaken_for_someone_elses(monkeypatch, tmp_path):
+    """/json/close returns before Chrome drops the target: the replacement waits for it to go, and the
+    failed run's row is saved before any of that."""
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    closing = []
+    real_close, real_cdp = chrome.close, chrome.cdp
+
+    def slow_close(full_id):
+        closing.append([p for p in chrome.pages if p["id"] == full_id][0])
+        real_close(full_id)
+
+    def cdp(*args, **kw):
+        if args[0] == "list" and closing:
+            return real_cdp(*args) + "".join(f"\n{p['id'][:8]}  title  {p['url']}" for p in closing[-1:])
+        return real_cdp(*args, **kw)
+
+    def pages():
+        out = list(chrome.pages) + list(closing)
+        closing.clear()  # gone by the next look
+        return out
+
+    seen = _with_chrome(monkeypatch, chrome, [dict(ok=False, fmt=cl.ROW_FORMAT, error="setup: Error: Timeout: Page.enable")])
+    monkeypatch.setattr(cl, "_cdp", cdp)
+    monkeypatch.setattr(cl, "_devtools_close", slow_close)
+    monkeypatch.setattr(cl, "_devtools_pages", pages)
+    cl.main(["--set", "tuning", "--seeds", "7", "31337", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    rows = cl.read_rows(tmp_path / "runs.jsonl")
+    assert [r["ok"] for r in rows] == [False, True] and seen[0] != seen[1]
+
+
+def test_issue39_review_m2_a_tab_someone_else_opens_meanwhile_is_not_claimed(monkeypatch, tmp_path):
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    real_cdp = chrome.cdp
+
+    def cdp(*args, **kw):
+        if args[0] == "open" and "/jevpilot" in args[1]:
+            chrome.pages.append({"id": "AAAFOREIGN" + "Q" * 22, "url": "https://example.com/"})  # listed first
+        return real_cdp(*args, **kw)
+
+    seen = _with_chrome(monkeypatch, chrome, [])
+    monkeypatch.setattr(cl, "_cdp", cdp)
+    cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert seen[0].startswith("NEW") and any(p["id"].startswith("AAAFOREIGN") for p in chrome.pages)
+
+
+def test_issue39_review_l2_an_anchor_closed_mid_evaluation_is_restored_before_a_replacement(monkeypatch, tmp_path):
+    chrome = _FakeChrome([{"id": "ANCHOR" + "Y" * 26, "url": "http://localhost:8768/openapi.json"}])
+    seen = _with_chrome(monkeypatch, chrome, [])
+
+    def drive(target, base, run):
+        seen.append(target)
+        chrome.pages = [p for p in chrome.pages if not p["id"].startswith("ANCHOR")]  # the user closed it
+        return dict(ok=False, fmt=cl.ROW_FORMAT, error="tab hidden (the simulation does not step)", **run)
+
+    monkeypatch.setattr(cl, "drive", drive)
+    cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
+             "--out", str(tmp_path / "runs.jsonl")])
+    assert not chrome.quit
