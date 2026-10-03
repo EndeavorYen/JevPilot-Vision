@@ -999,6 +999,25 @@ def test_readme_points_at_the_semarbiter_repo():
 
 
 
+def test_readme_local_links_and_images_resolve():
+    """#23: the product page links screenshots, specs and docs in this repo; none may dangle."""
+    import re
+
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    targets = [t.split("#", 1)[0] for t in re.findall(r"\]\(([^)\s]+)\)", text) if not re.match(r"[a-z]+:|#", t)]
+    assert targets, "the README links its screenshots and docs"
+    missing = [t for t in targets if not (REPO_ROOT / t).exists()]
+    assert missing == []
+
+
+def test_readme_states_the_limits_of_vision_mode():
+    """#23 / #29: the product page must not read as 'Vision is more correct'; it states its limits."""
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    for claim in ("地圖仍是特權", "共用同一個失效來源", "感知方法不可轉移", "mock 裁決器 + 這套感知", "驗收 seed", "來自 upstream（SemArbiter）", "瀏覽器端", "需要 CUDA"):
+        assert claim in text, claim
+    assert "```mermaid" in text
+
+
 def test_v1_vision_takes_four_surround_frames_in_one_infer(mock_engine, monkeypatch):
     """frames: {front, right, rear, left} goes to one surround infer, not four posts."""
     reset_vision_slot()
