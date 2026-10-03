@@ -19,6 +19,7 @@ def test_the_shared_encoder_is_built_on_the_picked_device(monkeypatch):
     class Encoder:
         def __init__(self, device="cpu"):
             built.append(device)
+            self._model = object()
 
     monkeypatch.delenv("SEMIF_VISION_DEVICE", raising=False)
     monkeypatch.setattr(vision, "VisionEncoder", Encoder)
@@ -35,12 +36,14 @@ def test_the_vision_reply_says_where_each_model_ran(monkeypatch):
 
     class Encoder:
         device = "cuda"
+        _model = object()
 
         def infer_surround_b64(self, frames):
             return {"backend": "stub", "signal": "unknown", "event": ""}
 
     class Detector:
         device = "cuda"
+        _model = object()
 
     class Fake:
         detector = Detector()
@@ -52,3 +55,25 @@ def test_the_vision_reply_says_where_each_model_ran(monkeypatch):
     monkeypatch.setattr(perception, "get_perception", lambda: Fake())
     frames = {"front": _jpeg(640, 360), "right": _jpeg(320, 180), "rear": _jpeg(320, 180), "left": _jpeg(320, 180)}
     assert http._infer_latest_jpeg(frames)["device"] == {"siglip": "cuda", "detector": "cuda"}
+    Encoder._model = None  # SigLIP fell back to the stub
+    assert http._infer_latest_jpeg(frames)["device"]["siglip"] is None, "the stub runs nowhere"
+
+
+def test_review_a_cuda_we_picked_that_fails_falls_back_to_the_cpu(monkeypatch):
+    built = []
+
+    class Encoder:
+        def __init__(self, device="cpu"):
+            built.append(device)
+            self.device = device
+            self._model = object() if device == "cpu" else None
+
+    monkeypatch.delenv("SEMIF_VISION_DEVICE", raising=False)
+    monkeypatch.setattr(vision, "VisionEncoder", Encoder)
+    monkeypatch.setattr(vision, "_encoder", None)
+    monkeypatch.setattr(vision, "vision_device", lambda cuda=None: "cuda")
+    assert vision.get_vision_encoder().device == "cpu" and built == ["cuda", "cpu"]
+    monkeypatch.setattr(vision, "_encoder", None)
+    monkeypatch.setenv("SEMIF_VISION_DEVICE", "cuda")
+    built.clear()
+    assert vision.get_vision_encoder().device == "cuda" and built == ["cuda"], "an asked-for device is kept"

@@ -102,8 +102,15 @@ def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
     taken_s = captured / 1000.0 if isinstance(captured, (int, float)) else None
     evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow, taken_s)
     # Where each model ran (#57): SigLIP and the detector pick their devices separately.
-    detector = getattr(perception.get_perception(), "detector", None)
-    evidence["device"] = {"siglip": getattr(encoder, "device", None), "detector": getattr(detector, "device", None)}
+    # A model that did not load runs nowhere: report None, not the device it was asked for.
+    try:
+        detector = getattr(perception.get_perception(), "detector", None)
+    except Exception:
+        detector = None
+    evidence["device"] = {
+        "siglip": getattr(encoder, "device", None) if getattr(encoder, "_model", None) is not None else None,
+        "detector": getattr(detector, "device", None) if getattr(detector, "_model", None) is not None else None,
+    }
     if captured is not None:
         # The page's clock when these frames were grabbed: how old the evidence really is (#18).
         evidence["captured_ms"] = captured

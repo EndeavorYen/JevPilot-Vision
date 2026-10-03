@@ -356,6 +356,7 @@ class VisionEncoder:
                     self._load_clip()
             logger.info("vision: %s on %s", self.model_id, self.device)
         except Exception:
+            logger.warning("vision: %s did not load on %s; scores are synthetic", self.model_id, self.device, exc_info=True)
             self.backend = "stub"
             self._model = None
             self._processor = None
@@ -579,4 +580,7 @@ def get_vision_encoder() -> VisionEncoder:
     if _encoder is None:
         device = vision_device()
         _encoder = VisionEncoder(device=device)
+        if getattr(_encoder, "_model", None) is None and device != "cpu" and not os.environ.get("SEMIF_VISION_DEVICE"):
+            # A CUDA we picked ourselves failed (VRAM taken by the detector, a driver): the CPU still runs it.
+            _encoder = VisionEncoder(device="cpu")
     return _encoder
