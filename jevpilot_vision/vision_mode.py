@@ -94,6 +94,29 @@ def _model_path(target: float, steer: float, speed: float) -> Iterable[tuple[flo
         yield t, ahead, right, heading
 
 
+def _track(vec: List[Any], path: Optional[List[List[float]]], speed: float) -> List[tuple[float, float, float, float]]:
+    """The candidate's [t, ahead, right, heading]: the planner's own path when sent, else the
+    constant-steer model. Empty when the candidate has no usable speed and steer."""
+    target, steer = _num(vec[0] if len(vec) > 0 else None), _num(vec[1] if len(vec) > 1 else None)
+    if target is None or steer is None:
+        return []
+    points = [p for p in (path or []) if isinstance(p, (list, tuple)) and len(p) >= 4 and all(_num(v) is not None for v in p[:4])]
+    return [(float(p[0]), float(p[1]), float(p[2]), float(p[3])) for p in points] or list(_model_path(target, steer, speed))
+
+
+def _lateral_at(track: List[tuple[float, float, float, float]], ahead: float) -> float:
+    """Where the track is across the road when it is `ahead` metres on (extended along its last
+    heading past its end)."""
+    prev = (0.0, 0.0, 0.0, 0.0)
+    for point in track:
+        if point[1] >= ahead:
+            span = point[1] - prev[1]
+            k = (ahead - prev[1]) / span if span > 1e-9 else 1.0
+            return prev[2] + k * (point[2] - prev[2])
+        prev = point
+    return prev[2] + math.tan(prev[3]) * (ahead - prev[1])
+
+
 def sweep_collision(
     vec: List[Any],
     objects: List[Dict[str, Any]],
@@ -109,11 +132,7 @@ def sweep_collision(
     straight ahead at our speed minus their closing speed; people, and anything whose speed is not
     known, stand still.
     """
-    target, steer = _num(vec[0] if len(vec) > 0 else None), _num(vec[1] if len(vec) > 1 else None)
-    if target is None or steer is None:
-        return False
-    points = [p for p in (path or []) if isinstance(p, (list, tuple)) and len(p) >= 4 and all(_num(v) is not None for v in p[:4])]
-    track = [(float(p[0]), float(p[1]), float(p[2]), float(p[3])) for p in points] or list(_model_path(target, steer, speed))
+    track = _track(vec, path, speed)
     for t, ahead, right, heading in track:
         c, s = math.cos(heading), math.sin(heading)
         for obj in objects:
@@ -133,6 +152,43 @@ def sweep_collision(
 
 
 CRAWL_MPS = 1.0  # without perception, only this slow is safe
+
+# Following distance (#37). The 3 s sweep assumes the car ahead keeps its speed; a following rule must
+# leave room for it to brake, counted from when we could next change our mind.
+DECISION_GAP_S = 1.5  # between decisions; measured in one background Chrome (#18, demo/server.py)
+STOP_DECEL_MPS2 = 2.5  # our stop brake; measured with DECISION_GAP_S (#18, demo/server.py)
+LEAD_DECEL_MPS2 = 6.0  # assumed: the car ahead brakes hard, short of an emergency stop
+FOLLOW_MARGIN_M = 2.0  # left between bumpers once both have stopped
+
+
+def following_limit(
+    objects: List[Dict[str, Any]], speed: float, age_s: float, track: Optional[List[tuple[float, float, float, float]]] = None
+) -> Optional[float]:
+    """The fastest speed at which we can still stop behind the nearest car in the lane this candidate
+    drives (`track`; straight ahead without one) if it began braking when the frame was taken:
+    `age_s` ago, and acted on again at most DECISION_GAP_S later. None: no car ahead in that lane.
+
+    From the frame on, at speed v we cover v * reaction and v^2 / (2 * STOP_DECEL_MPS2) braking; the
+    car ahead covers its own braking distance; MARGIN is left. The gap is as seen, so the age counts
+    once, in the reaction. The limit is the v where that just fits."""
+    def in_lane(o: Dict[str, Any]) -> bool:
+        return abs(o["right_m"] - (_lateral_at(track, o["ahead_m"]) if track else 0.0)) <= LANE_HALF_M
+
+    leads = [o for o in objects if o.get("kind") in ("car", "motorcycle") and o["ahead_m"] > 0 and in_lane(o)]
+    if not leads:
+        return None
+    lead = min(leads, key=lambda o: o["ahead_m"])
+    closing = lead.get("closing_mps")
+    closing = speed if closing is None else min(closing, speed)  # unknown: standing; never reversing at us
+    lead_v = max(0.0, speed - closing)
+    gap = lead["ahead_m"] + CAMERA_AHEAD_M - (EGO_HALF[0] + OBJECT_HALF[lead["kind"]][0])
+    room = gap - FOLLOW_MARGIN_M + lead_v * lead_v / (2.0 * LEAD_DECEL_MPS2)
+    if room <= 0:
+        return 0.0
+    reaction = age_s + DECISION_GAP_S
+    b = STOP_DECEL_MPS2
+    # v^2 / (2b) + reaction * v - room = 0
+    return -b * reaction + math.sqrt((b * reaction) ** 2 + 2.0 * b * room)
 
 
 def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -193,6 +249,10 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 hit = target is None or target > CRAWL_MPS  # blind: crawl or stop
             else:
                 hit = sweep_collision(vec, objects, speed, paths.get(cid), age_s)
+                # A candidate that heads for a speed we could not stop from behind the car ahead in
+                # the lane it drives (a swerve round a parked car is not held behind it).
+                limit = following_limit(objects, speed, age_s, _track(vec, paths.get(cid), speed))
+                hit = hit or (limit is not None and target is not None and target > limit)
             # The bundle's own flag is computed against the map's buildings in Vision mode.
             vec[4] = bool(vec[4]) or hit
     state["drive_mode"] = "vision"
