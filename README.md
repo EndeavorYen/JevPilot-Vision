@@ -92,6 +92,8 @@ Vision 不是「比 upstream 更正確」的版本，它問的是另一個問題
 ## 限制（請先讀這段）
 
 - **地圖仍是特權。** Vision 關掉的是動態物件與號誌的真值，不是整個世界：路網、車道幾何、路線與建築都不是相機看出來的。
+- **自車定位是完美的。** 決策請求裡的車道橫向偏移（`lateral_offset_m`）、到停止線的距離、路線誤差與 `on_road`，都來自模擬器裡車子的真實位置，等於一套沒有誤差的定位。真實車輛要靠 GNSS、IMU 與地圖匹配估計這些值，誤差可達公尺級；Vision 沒有承擔這部分的難度。
+- **coast 的車道比真實寬。** 一般道路一條車道 6 m，約為真實道路（3–3.75 m）的兩倍；快速道路 4 m。橫向空間大得多，閉環因此比真實容易。改成接近真實的寬度記在 [#66](https://github.com/EndeavorYen/JevPilot-Vision/issues/66)。
 - **Vision 的本地否決和感知共用同一個失效來源。** Privileged 的否決用真值碰撞，和決策互相獨立；Vision 的否決用感知到的物體，偵測器漏掉一台車，否決也會一起漏掉。fail-closed 只涵蓋「知道自己看不到」（證據過期、backend 失效、沒看到燈就當紅燈），不涵蓋「看錯了」。
 - **感知方法不可轉移。** RT-DETR、已知相機高度、平地針孔測距、色相讀燈，只在這個渲染器裡成立，不能當成可以搬到真實世界的證據。
 - **世界曾為了感知被改過。** 為了讓相機讀得到燈，號誌燈曾改成純色自發光、平面燈片與路口對側燈頭。這是把世界擬合到感測器上；撤回的工作在 [#30](https://github.com/EndeavorYen/JevPilot-Vision/issues/30)，在它合併之前，Vision 的讀燈結果要打這個折扣。黃昏時車載相機看到的亮度也是靠調光源補償回正午水準，Vision 在暗處的表現因此沒有被測到。
@@ -133,6 +135,7 @@ python benchmarks/perf_baseline.py --gfx medium high --base http://localhost:800
 - **日照循環：** 新地圖從 16:30 開始，15 分鐘走完 06:15 到 19:45（沒有夜晚）。時間鈕或 `T` 鍵跳到下一個時段；`?time=17:45` 固定時間，`?daycycle=0` 停住時鐘。黃昏的暗、暖與高對比只作用在主畫面的後製（`?post=0` 關閉）；車載相機經過與螢幕相同的 ACES 色調映射、曝光固定 0.95，亮度靠光源補償，維持在正午水準，由 `tests/test_daylight.py` 逐時段檢查。
 - **畫質：** Medium 是加入分級之前的世界，由 `tests/fixtures/coast_medium_snapshot.json` 的結構快照鎖住；High 是之後逐步加上的優化版。⚙ 按鈕切換（會重新載入、自駕會停）；`?gfx=` 優先，其次是上次的選擇，第一次開啟時依 GPU 初選。「Show FPS」在按鈕上顯示主畫面的 fps 與 GPU 毫秒。Vision 的數字一律標明畫質。設計見 [`docs/superpowers/specs/2026-10-03-visual-quality-design.md`](docs/superpowers/specs/2026-10-03-visual-quality-design.md)。
 - **Vision 模式：** RT-DETR 偵測加地面測距；另有一顆 40° 窄角前鏡頭讀遠處號誌。看不到綠燈就當紅燈。碰撞由伺服器拿感知到的物體推演每條候選軌跡；感知失效或過舊時一律減速停車。模式切換在畫面上方，選擇會記在瀏覽器裡。
+- **第三方模型：** Model Y 是 [763468712](https://sketchfab.com/763468712) 的 [Tesla Model Y 2021](https://sketchfab.com/3d-models/tesla-model-y-2021-c0a86cac582d4b33aba0fb1b1912d970)，以 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授權，本專案做了減面、壓縮與材質調整（[`ATTRIBUTION.md`](jevpilot_vision/web/models/model-y/ATTRIBUTION.md)）。Ferrari 458 Italia 是 vicent091036 的作品，經 three.js 範例散布（[`ATTRIBUTION.md`](jevpilot_vision/web/models/ferrari/ATTRIBUTION.md)）。
 - **候選軌跡：** 預設只畫選中的那一條藍色路徑；底部的分岔箭頭按鈕顯示全部候選（含機率），選擇會記住，`?candidates=all|selected` 優先。車載相機看不到兩者。
 - **延遲圖表：** 狀態列的延遲小圖點開或按 `L`：最近 1／5／15 分鐘的 end-to-end 折線圖（含 min–max 帶與 P50／P95 參考線）、三個階段的折線圖、各序列的 Last／P50／P95／Max 表，以及 JSON 匯出。
 - **極簡模式：** 右上角按鈕或 `H` 鍵；選擇記在瀏覽器裡，`?minimal=1|0` 直接指定。

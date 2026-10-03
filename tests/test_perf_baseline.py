@@ -71,3 +71,20 @@ def test_issue22_review_a_page_on_another_density_is_refused(monkeypatch):
         pb.measure("T", "http://localhost:8768", "medium", seconds=60)
     page["density"] = {"traffic": "low", "people": "low"}
     assert pb.measure("T", "http://localhost:8768", "medium", seconds=60)["density_seen"] == page["density"]
+
+
+def test_issue53_a_perf_run_on_a_chrome_with_no_other_page_leaves_chrome_running(tmp_path, monkeypatch):
+    """perf_baseline never set an anchor: its close_tab used to close Chrome's last page."""
+    import closed_loop as cl
+    from test_closed_loop import _FakeChrome
+
+    chrome = _FakeChrome([])
+    monkeypatch.setattr(cl, "_cdp", chrome.cdp)
+    monkeypatch.setattr(cl, "_devtools_pages", lambda: list(chrome.pages))
+    monkeypatch.setattr(cl, "_devtools_close", chrome.close)
+    monkeypatch.setattr(cl, "_devtools_new_blank", chrome.new_blank, raising=False)
+    monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pb, "measure", lambda target, base, gfx, seconds: {"fps_p50": 1})
+    assert pb.main(["--gfx", "medium", "--out", str(tmp_path / "perf.json")]) == 0
+    assert not chrome.quit
+    assert not [p for p in chrome.pages if "/jevpilot" in p["url"]]

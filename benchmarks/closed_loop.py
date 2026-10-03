@@ -372,6 +372,21 @@ def _devtools_close(full_id: str) -> None:
         conn.close()
 
 
+def _devtools_new_blank() -> None:
+    """A blank page through DevTools HTTP (chrome-cdp-ex `nav` takes only http/https URLs)."""
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", _devtools_port(), timeout=10)
+    try:
+        conn.request("PUT", "/json/new?about:blank")
+        resp = conn.getresponse()
+        resp.read()
+        if resp.status != 200:
+            raise RuntimeError(f"/json/new answered {resp.status}")
+    finally:
+        conn.close()
+
+
 def ensure_anchor(base: str) -> None:
     """Closing the last page quits Chrome; keep one page that is not a simulation."""
     if not [p for p in _devtools_pages() if "/jevpilot" not in p.get("url", "")]:
@@ -405,6 +420,10 @@ def close_tab(tab: Optional[Dict[str, str]], wait: bool = False) -> None:
     if not tab:
         return
     try:
+        # Closing Chrome's last page quits Chrome (#53): every caller, perf_baseline and Ctrl-C
+        # included, leaves a blank page behind first.
+        if not [p for p in _devtools_pages() if p["id"] != tab["id"]]:
+            _devtools_new_blank()
         _devtools_close(tab["id"])
         for _ in range(20 if wait else 0):
             if all(p["id"] != tab["id"] for p in _devtools_pages()):

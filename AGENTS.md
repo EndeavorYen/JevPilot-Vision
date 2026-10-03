@@ -15,6 +15,7 @@
 - Privileged 與 Heuristic 保留作為參考，用來學習與調校 Vision。
 - 講 Vision 時要說清楚邊界：
   - 地圖（路網、車道、路線、建築）仍是特權資訊。
+  - 自車定位（車道橫向偏移、到停止線的距離、路線誤差）是模擬器的完美定位，不是估計值。
   - Vision 的本地否決和感知共用同一個失效來源（偵測器漏掉的車，否決也會漏掉）。
   - 感知方法（RT-DETR、已知相機高度、平地測距、色相讀燈）只在這個渲染器成立，不能當成可轉移的證據。
   - mock 裁決器的結果是「mock + 這套感知」，不是任何決策模型的成績。
@@ -23,6 +24,7 @@
 ## 不能動的東西
 
 - 舊地圖（Skyline City、Small town、Interstate 08）與 `lap=1` 的行為和已發布的分數要維持可比；新行為只放在 coast 地圖或明確的模式之下。
+  - 如果修正無法避免改變舊地圖的結果（例如 #55 拿掉吃規劃器亂數的死碼），要先經擁有者同意。合併後重跑 seed 42 的兩趟官方分數（`benchmarks/web_city_vision.py`），新舊並列，並寫明差異的原因。
 - 打包檔（`jevpilot_vision/web/assets/`）只能用精確、只出現一次的字串替換來改。每個補丁都要登記在 `tests/test_coast_patches.py` 的 `COAST_PATCHES`，並寫進 `jevpilot_vision/web/BUNDLE_PATCHES.md`；改了資產就要同步調整 `?v=` 版本號。
 - `tests/test_trajectory_sampler.py` 的研究契約：號誌不進入候選路徑產生器，`VECTOR_INSTRUCTIONS` 裡不教模型停車。
 

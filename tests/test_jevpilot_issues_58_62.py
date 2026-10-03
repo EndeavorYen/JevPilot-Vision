@@ -94,7 +94,7 @@ def test_fsd_overlay_assets_present():
     assert "simple-jev-api-badge" in css and "display: none" in css
     assert "fsd-status" in css
     assert "fsd-pill" not in css and "fsd-drawer" not in css
-    assert "injectFrustumEvents" in js
+    assert "injectFrustumEvents" not in js and "planRandom" not in js, "#55"
     assert "sim.pedestrians.push" not in js
     assert "sim.traffic.push" not in js
     assert "fsd-status" in js
