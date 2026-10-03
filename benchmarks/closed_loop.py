@@ -121,9 +121,13 @@ def pending(plan: List[Dict[str, Any]], done: List[Dict[str, Any]]) -> List[Dict
     return [run for run in plan if _key(run) not in seen]
 
 
+DENSITY = {"traffic": "low", "people": "low"}  # #22: today's coast
+
+
 def page_url(base: str, run: Dict[str, Any]) -> str:
     # candidates=selected: a fan remembered in this Chrome profile would load the planner worker (#19).
-    url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&seed={run['seed']}&world=coast:{run['route']}&mode={run['mode']}"
+    # traffic/people=low: the coast every earlier result drove; the default is denser (#22).
+    url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed={run['seed']}&world=coast:{run['route']}&mode={run['mode']}"
     if run.get("lag_ms"):
         url += f"&lag_ms={int(run['lag_ms'])}"
     return url + f"&gfx={run.get('gfx', 'medium')}"
@@ -310,7 +314,7 @@ _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
     " const c = window.SEMIF_CLASSIFIER_STATS || {}, c0 = window.__eval.c0;"
     " const classifier = {}; for (const k of Object.keys(c)) classifier[k] = c[k] - (c0[k] || 0);"
-    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null,"
+    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -445,6 +449,8 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"page lag {got.get('lag_seen')} ms"
     if got.get("gfx_seen") != run.get("gfx", "medium"):  # a coast page always reports its quality
         return f"drove graphics {got.get('gfx_seen')!r}"
+    if got.get("density_seen") is not None and got["density_seen"] != DENSITY:  # None: a page from before #22
+        return f"drove density {got['density_seen']!r}"
     if got.get("engaged") is False:
         return "autopilot never engaged"
     acted = (got.get("crash") or float(got.get("distance_m") or 0) >= STALL_MPS * run["seconds"]

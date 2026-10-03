@@ -244,6 +244,35 @@
     return out;
   }
 
+  // Density (#22): vehicles and pedestrians each low / med / high. Low is the coast as it was, so
+  // earlier results stay comparable; medium, the default, is half as busy again. The address bar
+  // (?traffic=&people=) wins over the browser's last choice; a lap (?lap=1) keeps today's counts.
+  // The planner worker has neither and takes the default: it drives the page's own agents.
+  const DENSITY_LEVELS = ["low", "med", "high"];
+  const DENSITY = { traffic: { low: 36, med: 54, high: 72 }, people: { low: 28, med: 42, high: 56 } };
+  const DENSITY_KEY = { traffic: "semif.density.traffic", people: "semif.density.people" };
+
+  function density() {
+    let params = null;
+    try {
+      params = new URLSearchParams(root.location?.search || "");
+    } catch (_) {}
+    const out = {};
+    for (const kind of ["traffic", "people"]) {
+      if (params?.get("lap") === "1") {
+        out[kind] = "low";
+        continue;
+      }
+      let saved = null;
+      try {
+        saved = root.localStorage?.getItem(DENSITY_KEY[kind]) ?? null;
+      } catch (_) {}
+      const asked = params?.get(kind);
+      out[kind] = DENSITY_LEVELS.includes(asked) ? asked : DENSITY_LEVELS.includes(saved) ? saved : "med";
+    }
+    return out;
+  }
+
   // Pedestrians in the bundle's own format. Walkers pace a straight pavement 7.05 m off a street's
   // centre line; crossers use the bundle's crosswalk over the north leg of a signal junction. No one
   // jaywalks: a jaywalker re-crosses whenever the player is 8-35 m away, so a player queued at the
@@ -252,7 +281,7 @@
     const streets = world.edges.filter((e) => e.kind === "harbour" || e.kind === "festival");
     const crossable = world.nodes.filter((n) => n.control === "signal" && n.legs.includes("north") && (n.id.startsWith("harbour") || n.id.startsWith("festival") || n.id === "coast-junction"));
     const out = [];
-    for (let i = 0; i < 28; i++) {
+    for (let i = 0; i < DENSITY.people[world.density.people]; i++) {
       const e = pick(r, streets);
       const reverse = r() < 0.5;
       const from = world.byId[reverse ? e.b : e.a], to = world.byId[reverse ? e.a : e.b];
@@ -294,8 +323,10 @@
     }
     const [startNode, nextNode] = STARTS[start];
     let destinationIndex = (DESTINATIONS.indexOf(startNode) + 1) % DESTINATIONS.length;
+    const levels = density();
     const world = {
-      seed, type: "coast", start, selectValue: `coast:${start}`, theme: THEME,
+      seed, type: "coast", start, selectValue: `coast:${start}`, theme: { ...THEME, traffic: DENSITY.traffic[levels.traffic] },
+      density: levels,
       nodes, byId, edges, connectorRoads,
       objects: [...controls(nodes, edges), ...harbourBuildings(r)],
       xs: [BOUNDS.minX, BOUNDS.maxX], zs: [BOUNDS.minZ, BOUNDS.maxZ], bounds: { ...BOUNDS },
@@ -336,5 +367,5 @@
 
   const pickerLabel = (type) => (String(type).startsWith("coast") ? "Start from" : "Change map");
 
-  root.SEMIF_WORLDGEN = { THEME, KINDS, CROSSING_KINDS, STARTS, DESTINATIONS, JUNCTION_STRAIGHT, MAX_LATERAL, MIN_RADIUS, generate, navigation, options, pickerLabel };
+  root.SEMIF_WORLDGEN = { THEME, DENSITY, DENSITY_LEVELS, DENSITY_KEY, density, KINDS, CROSSING_KINDS, STARTS, DESTINATIONS, JUNCTION_STRAIGHT, MAX_LATERAL, MIN_RADIUS, generate, navigation, options, pickerLabel };
 })(globalThis);

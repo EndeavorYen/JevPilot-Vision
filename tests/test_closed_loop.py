@@ -101,7 +101,7 @@ def test_a_results_file_is_resumed_not_rerun(tmp_path):
 
 def test_the_page_url_carries_seed_route_mode_and_lag():
     url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision", "lag_ms": 300})
-    assert url == "http://localhost:8768/jevpilot/?minimal=0&candidates=selected&seed=7&world=coast:harbour&mode=vision&lag_ms=300&gfx=medium"
+    assert url == "http://localhost:8768/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed=7&world=coast:harbour&mode=vision&lag_ms=300&gfx=medium"
     assert "lag_ms" not in cl.page_url("http://localhost:8768", {"seed": 7, "route": "pass", "mode": "privileged", "lag_ms": 0})
 
 
@@ -557,3 +557,14 @@ def test_issue19_review_the_evaluation_never_draws_the_candidate_fan():
     """A fan remembered in the evaluation's Chrome profile would keep the planner worker busy before
     the drive and draw a dozen extra lines: the page always shows the chosen path only."""
     assert "candidates=selected" in cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision"})
+
+
+def test_issue22_evaluations_drive_todays_density_and_a_page_on_another_is_a_setup_failure():
+    """Low is the coast every earlier result drove; the default (medium) would make them incomparable."""
+    url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision"})
+    assert "traffic=low&people=low" in url
+    run = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0)[0]
+    got = {"mode_seen": "vision", "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500, "gfx_seen": "medium"}
+    assert cl.validate(run, dict(got, density_seen={"traffic": "med", "people": "low"})) == "drove density {'traffic': 'med', 'people': 'low'}"
+    assert cl.validate(run, dict(got, density_seen={"traffic": "low", "people": "low"})) is None
+    assert cl.validate(run, got) is None, "a page from before #22 drove today's counts"
