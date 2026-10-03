@@ -128,6 +128,7 @@ def test_the_heroes_are_a_cybercab_style_car_and_the_model_y():
 
 def test_the_cybercab_has_no_rear_window_full_width_light_bars_and_champagne_paint():
     # Classified lofts share one vertex array per piece: measure only the vertices the index uses.
+    # The nose and tail are rounded (about 1.4 m across at the very ends): a bar of 1.3 m or more spans them.
     got = _render(
         _BOX
         + "const K = await mod('kit.js'); const car = V.buildHero('cybercab');"
@@ -137,7 +138,7 @@ def test_the_cybercab_has_no_rear_window_full_width_light_bars_and_champagne_pai
         "  if (ids) ids.forEach(use); else for (let v = 0; v < p.length / 3; v++) use(v); return { w: x1 - x0, z0, z1 }; };"
         "const colour = (n) => { const c = n.material && n.material.color; return typeof c === 'string' ? c : c && c.hex; };"
         "const glass = pieces.filter((n) => n.material.name === 'Glass').map(span);"
-        "const bars = (hex) => pieces.filter((n) => colour(n) === hex).map(span).filter((s) => s.w >= 1.4);"
+        "const bars = (hex) => pieces.filter((n) => colour(n) === hex).map(span).filter((s) => s.w >= 1.3);"
         "out({ glassRear: Math.max(...glass.map((g) => g.z1)), front: bars(K.PALETTE.car.lens).map((s) => s.z0), rear: bars(K.PALETTE.car.taillight).map((s) => s.z1),"
         "  paint: pieces.filter((n) => n.material.clearcoat === 1 && n.material.name !== 'Glass').map(colour), champagne: K.PALETTE.paint[2] });"
     )

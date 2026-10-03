@@ -2,12 +2,12 @@
  "cars": [
   {
    "attrs": {
-    "position": 21486
+    "position": 23406
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 39576,
+   "index": 37728,
    "mats": [
     {
      "clearcoat": 1,
@@ -39,12 +39,12 @@
   },
   {
    "attrs": {
-    "position": 10920
+    "position": 12840
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 2592,
+   "index": 8280,
    "mats": [
     {
      "clearcoat": 1,
@@ -95,23 +95,6 @@
   },
   {
    "attrs": {
-    "position": 144
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 72,
-   "mats": [
-    {
-     "color": "#e7e4dc",
-     "metalness": 0,
-     "roughness": 0.6
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[0]/body[5]/Mesh"
-  },
-  {
-   "attrs": {
     "position": 540
    },
    "colours": null,
@@ -130,12 +113,12 @@
   },
   {
    "attrs": {
-    "position": 2214
+    "position": 756
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 1392,
+   "index": 888,
    "mats": [
     {
      "color": "#a9adb2",
@@ -145,6 +128,23 @@
     }
    ],
    "path": "car0/semif-hero-cybercab[1]/wheel_fl[0]/wheel_fl_spin[1]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 576
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 288,
+   "mats": [
+    {
+     "color": "#55595e",
+     "metalness": 0.2,
+     "roughness": 0.55
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[1]/wheel_fl[0]/wheel_fl_spin[2]/Mesh"
   },
   {
    "attrs": {
@@ -201,12 +201,12 @@
   },
   {
    "attrs": {
-    "position": 2214
+    "position": 756
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 1392,
+   "index": 888,
    "mats": [
     {
      "color": "#a9adb2",
@@ -216,6 +216,23 @@
     }
    ],
    "path": "car0/semif-hero-cybercab[2]/wheel_fr[0]/wheel_fr_spin[1]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 576
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 288,
+   "mats": [
+    {
+     "color": "#55595e",
+     "metalness": 0.2,
+     "roughness": 0.55
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[2]/wheel_fr[0]/wheel_fr_spin[2]/Mesh"
   },
   {
    "attrs": {
@@ -272,12 +289,12 @@
   },
   {
    "attrs": {
-    "position": 2214
+    "position": 756
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 1392,
+   "index": 888,
    "mats": [
     {
      "color": "#a9adb2",
@@ -287,6 +304,23 @@
     }
    ],
    "path": "car0/semif-hero-cybercab[3]/wheel_rl[0]/wheel_rl_spin[1]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 576
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 288,
+   "mats": [
+    {
+     "color": "#55595e",
+     "metalness": 0.2,
+     "roughness": 0.55
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[3]/wheel_rl[0]/wheel_rl_spin[2]/Mesh"
   },
   {
    "attrs": {
@@ -343,12 +377,12 @@
   },
   {
    "attrs": {
-    "position": 2214
+    "position": 756
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 1392,
+   "index": 888,
    "mats": [
     {
      "color": "#a9adb2",
@@ -358,6 +392,23 @@
     }
    ],
    "path": "car0/semif-hero-cybercab[4]/wheel_rr[0]/wheel_rr_spin[1]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 576
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 288,
+   "mats": [
+    {
+     "color": "#55595e",
+     "metalness": 0.2,
+     "roughness": 0.55
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[4]/wheel_rr[0]/wheel_rr_spin[2]/Mesh"
   },
   {
    "attrs": {
@@ -396,12 +447,12 @@
   },
   {
    "attrs": {
-    "position": 144
+    "position": 72
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 72,
+   "index": 36,
    "mats": [
     {
      "color": "#55595e",
