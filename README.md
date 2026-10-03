@@ -9,7 +9,7 @@ JevPilot-Vision 是一個在瀏覽器裡跑的 3D 駕駛應用：世界、車載
 ## 亮點
 
 - **Solmare Coast 開放世界**：約 2.4 × 1.6 km、11 km 道路。港口小鎮 Porto Solmare、海岸公路、葡萄園山谷、Passo del Falco 山口與 SS-1 快速道路；有號誌與停車再開的路口、交通車與行人。車輛與行人密度可以調（低／中／高）。
-- **日照循環**：從 06:15 到 19:45，太陽、色溫、天空、霧與海面隨時間變化；車載相機的亮度另外補償，讓相機在黃昏也看得清楚。
+- **日照循環**：從 06:15 到 19:45，太陽、色溫、天空、霧與海面隨時間變化。
 - **三種駕駛模式**，各回答一個不同的問題（見[下方](#三種模式三個問題)）：Vision、Privileged、Heuristic。
 - **延遲圖表**：端到端迴圈與各階段（分類器、視覺編碼、擷取幀）的折線圖、P50／P95 與 JSON 匯出。
 - **極簡介面**：一鍵（`H`）收起面板，只留轉向提示、速度與自駕開關。
@@ -33,7 +33,7 @@ python demo/server.py --mock --port 8000
 # 瀏覽器開 http://localhost:8000/jevpilot/ ，按 J 或「Jev」按鈕開自駕
 ```
 
-- **Vision 模式**需要感知模型：`pip install -e ".[neural]"`（torch、transformers；第一次執行會下載 RT-DETR 與 SigLIP 權重，建議有 GPU）。沒有安裝時，感知會回報 `backend: none`，Vision 模式的車會減速停下，不會假裝看得到。
+- **Vision 模式**需要感知模型，也需要 CUDA：`pip install -e ".[neural]"`（torch、transformers；第一次執行會下載 RT-DETR 與 SigLIP 權重）。沒有安裝、或沒有 CUDA 時，偵測器不啟動，感知回報 `backend: none`，Vision 模式的車會減速停下，不會假裝看得到。要在 CPU 上跑，設 `SEMIF_PERCEPTION_DEVICE=cpu`（很慢）。
 - **對接 SemArbiter**：先在另一個埠口啟動 SemArbiter，再用 `python demo/server.py --port 8000 --arbiter-url http://localhost:8001`（或設環境變數 `SEMARBITER_URL`）。
 - 常用網址參數：`?mode=vision|privileged|heuristic`、`?start=festival|harbour|coast|pass|highway`、`?time=17:45`、`?gfx=medium|high`、`?traffic=low|med|high&people=low|med|high`、`?minimal=1`。
 
@@ -68,7 +68,7 @@ flowchart LR
 
 - **Privileged**：決策讀模擬器的狀態表（車、燈、衝突的真值）。
 - **Vision**：車輛、行人與燈色只來自車載相機；連碰撞判斷都用相機看到的物體重新推演。地圖（路網、車道、路線、建築）仍來自模擬器。
-- **Heuristic**：伺服器端的規則式基準（幾何與 PID 規則），不呼叫決策模型。
+- **Heuristic**：瀏覽器端、打包檔內建的幾何規則（沿道路邊界替候選打分），不呼叫裁決器。
 
 ### 怎麼打 SemArbiter
 
@@ -85,7 +85,7 @@ flowchart LR
 | --- | --- | --- |
 | **Privileged**（預設） | 模擬器狀態表 + 地圖 | 要評**決策模型**時的消融基準：輸入是對的，選得好不好？ |
 | **Vision**（`?mode=vision`） | 車載相機 + 地圖 | 沒有物件與號誌的真值，**閉環還關得起來嗎？** |
-| **Heuristic** | 伺服器端的規則（幾何、PID） | 規則式基準：不用模型能開到哪裡？ |
+| **Heuristic** | 瀏覽器端的幾何規則（打包檔內建） | 幾何基準：不用模型能開到哪裡？ |
 
 Vision 不是「比 upstream 更正確」的版本，它問的是另一個問題。Privileged 與 Heuristic 留著當參考，用來學習與調校 Vision。
 
@@ -94,7 +94,7 @@ Vision 不是「比 upstream 更正確」的版本，它問的是另一個問題
 - **地圖仍是特權。** Vision 關掉的是動態物件與號誌的真值，不是整個世界：路網、車道幾何、路線與建築都不是相機看出來的。
 - **Vision 的本地否決和感知共用同一個失效來源。** Privileged 的否決用真值碰撞，和決策互相獨立；Vision 的否決用感知到的物體，偵測器漏掉一台車，否決也會一起漏掉。fail-closed 只涵蓋「知道自己看不到」（證據過期、backend 失效、沒看到燈就當紅燈），不涵蓋「看錯了」。
 - **感知方法不可轉移。** RT-DETR、已知相機高度、平地針孔測距、色相讀燈，只在這個渲染器裡成立，不能當成可以搬到真實世界的證據。
-- **世界曾為了感知被改過。** 為了讓相機讀得到燈，號誌燈曾改成純色自發光、平面燈片與路口對側燈頭。這是把世界擬合到感測器上；撤回的工作在 [#30](https://github.com/EndeavorYen/JevPilot-Vision/issues/30)，在它合併之前，Vision 的讀燈結果要打這個折扣。
+- **世界曾為了感知被改過。** 為了讓相機讀得到燈，號誌燈曾改成純色自發光、平面燈片與路口對側燈頭。這是把世界擬合到感測器上；撤回的工作在 [#30](https://github.com/EndeavorYen/JevPilot-Vision/issues/30)，在它合併之前，Vision 的讀燈結果要打這個折扣。黃昏時車載相機看到的亮度也是靠調光源補償回正午水準，Vision 在暗處的表現因此沒有被測到。
 - **結果是「mock 裁決器 + 這套感知」，不是任何決策模型的成績。** mock 的停車規則是手寫控制器，常數（決策間隔 1.5 s、煞車減速度 2.5 m/s² 等）量自單一機器與這張地圖。
 - **發生率來自驗收 seed，不是調參 seed。** 調參用的 seed 不拿來報數字；回報一律是「k/n」加 95% 信賴區間，不用少數幾趟說「乾淨」。
 
@@ -113,11 +113,13 @@ Vision 不是「比 upstream 更正確」的版本，它問的是另一個問題
 ## 評估
 
 ```bash
+# 評估工具預設連 http://localhost:8768；照上面的快速開始用 8000 時加 --base http://localhost:8000
+
 # 閉環：Vision，驗收集，結果寫到絕對路徑
-python benchmarks/closed_loop.py --set held_out --modes vision --out D:/evals/<日期>/vision.jsonl
+python benchmarks/closed_loop.py --set held_out --modes vision --base http://localhost:8000 --out D:/evals/<日期>/vision.jsonl
 
 # 效能基準：主畫面與車載相機的幀時間、GPU 時間、draw call
-python benchmarks/perf_baseline.py --gfx medium high --out D:/evals/<日期>/perf.json
+python benchmarks/perf_baseline.py --gfx medium high --base http://localhost:8000 --out D:/evals/<日期>/perf.json
 ```
 
 - 評估在共用的 debug Chrome（CDP 9222）裡開自己的分頁，跑完就關，並保留一個錨點頁。

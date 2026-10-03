@@ -1013,7 +1013,7 @@ def test_readme_local_links_and_images_resolve():
 def test_readme_states_the_limits_of_vision_mode():
     """#23 / #29: the product page must not read as 'Vision is more correct'; it states its limits."""
     text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    for claim in ("地圖仍是特權", "共用同一個失效來源", "感知方法不可轉移", "mock 裁決器 + 這套感知", "驗收 seed", "upstream"):
+    for claim in ("地圖仍是特權", "共用同一個失效來源", "感知方法不可轉移", "mock 裁決器 + 這套感知", "驗收 seed", "來自 upstream（SemArbiter）", "瀏覽器端", "需要 CUDA"):
         assert claim in text, claim
     assert "```mermaid" in text
 
