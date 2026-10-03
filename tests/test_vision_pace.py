@@ -68,7 +68,7 @@ out({ blocked, next: p.tryBegin() });""")
 
 def test_the_layer_asks_the_pacer_before_it_grabs_and_always_releases():
     js = LAYER_JS.read_text(encoding="utf-8")
-    body = js.split("async function visionTick(alreadyPainted) {", 1)[1]
+    body = js.split("async function visionTick() {", 1)[1]
     assert "visionPacer.tryBegin()" in body.split("grabSurround(", 1)[0], "ask before the four renders"
     assert "visionPacer.end(ticket)" in body and "finally" in body, "every path releases the slot"
 
@@ -90,4 +90,4 @@ out({ firstAborted: first.aborted, secondAborted: second.aborted, distinct: firs
 def test_the_layer_hands_the_abort_signal_to_its_vision_post():
     js = LAYER_JS.read_text(encoding="utf-8")
     post = js.split('origFetch("/v1/vision", {', 1)[1].split("});", 1)[0]
-    assert "signal: visionPacer.signal()" in post
+    assert "signal: signal" in post and "const signal = visionPacer.signal();" in js

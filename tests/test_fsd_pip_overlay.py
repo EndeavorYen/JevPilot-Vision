@@ -375,6 +375,8 @@ global.performance = window.performance;
 global.requestAnimationFrame = window.requestAnimationFrame;
 global.cancelAnimationFrame = window.cancelAnimationFrame;
 
+// The page loads semif-capture.js before the layer (index.html); so does the harness.
+window.SEMIF_CAPTURE = require(require("path").join(require("path").dirname(process.argv[1]), "semif-capture.js"));
 const code = fs.readFileSync(process.argv[1], "utf8");
 vm.runInThisContext(code, { filename: process.argv[1] });
 
@@ -692,7 +694,7 @@ if (spec.cmd === "cstats") {
       outputColorSpace: "srgb",
       setRenderTarget() {},
       render() {},
-      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 5) readSizes.push([w, h]); buf.fill(8); },
+      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 6) readSizes.push([w, h]); buf.fill(8); },
     },
   };
   const readSizes = [];
@@ -704,7 +706,7 @@ if (spec.cmd === "cstats") {
   const paint = renderer.render;
   renderer.render = function (_scene, cam) {
     renders += 1;
-    if (surroundLooks.length < 5 && cam && cam.look) {
+    if (surroundLooks.length < 6 && cam && cam.look) {
       surroundLooks.push({
         dx: cam.look.x - cam.position.x,
         dz: cam.look.z - cam.position.z,
@@ -714,10 +716,13 @@ if (spec.cmd === "cstats") {
     return paint.apply(this, arguments);
   };
   nowMs = 0;
+  // A browser runs promise callbacks between frames; the vision post waits on a few (#42 item 2).
+  (async () => {
   for (let i = 0; i < frames; i++) {
     nowMs += dt;
     ticks.push(nowMs);
     window.__raf();
+    await new Promise((r) => setImmediate(r));
   }
   process.stdout.write(JSON.stringify({
     posts: visionPosts.length,
@@ -730,6 +735,7 @@ if (spec.cmd === "cstats") {
     renders,
     readSizes,
   }));
+  })();
 } else if (spec.cmd === "vision-order") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
   function makeCam() {
@@ -764,10 +770,13 @@ if (spec.cmd === "cstats") {
       readRenderTargetPixels(_t, _x, _y, w, h, buf) { buf.fill(8); },
     },
   };
+  (async () => {
   nowMs = 16;
   window.__raf();
+  await new Promise((r) => setImmediate(r));
   nowMs = 32;
   window.__raf();
+  await new Promise((r) => setImmediate(r));
   window.__releaseVision(1, {
     vision: { signal: "red", event: "newer frame" },
     vision_gen: 2,
@@ -786,6 +795,7 @@ if (spec.cmd === "cstats") {
       }));
     });
   });
+  })();
 } else if (spec.cmd === "vision-ack") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
   function makeCam() {
@@ -822,9 +832,11 @@ if (spec.cmd === "cstats") {
   };
   const replies = spec.replies || [{}];
   nowMs = 0;
+  (async () => {
   for (let i = 0; i < replies.length; i++) {
     nowMs += 16;
     window.__raf();
+    await new Promise((r) => setImmediate(r));
   }
   setImmediate(() => {
     process.stdout.write(JSON.stringify({
@@ -833,6 +845,7 @@ if (spec.cmd === "cstats") {
       records: (window.SEMIF_TELEMETRY && window.SEMIF_TELEMETRY.records) || [],
     }));
   });
+  })();
 } else if (spec.cmd === "keys") {
   const beforeHidden = pip.classList.contains("fsd-pip-hidden");
   const beforeFold = pip.classList.contains("fsd-pip-collapsed");
@@ -1064,22 +1077,25 @@ def test_each_display_frame_posts_four_surround_jpegs():
     """Live tick posts one /v1/vision with four camera JPEGs per painted onboard frame."""
     pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
     assert pumped["posts"] == 120
-    assert pumped["renders"] == 120 * 4
+    # four cameras per capture, plus the 15 Hz PIP repaint (31 in 2 s at most; #42 item 3)
+    assert 120 * 4 + 25 <= pumped["renders"] <= 120 * 4 + 31
     body = pumped["bodies"][0]
     assert body["keys"] == ["frames", "t_ms"], "frames carry the moment they were grabbed (#18)"
     assert body["frames"] == ["front", "right", "rear", "left"]
-    assert body["front"] == "data:image/jpeg;base64,ONBOARD"
+    # the front is encoded from the captured pixels (a worker in Chrome; a canvas here), not the PIP (#42)
+    assert body["front"] == "data:image/jpeg;base64,AAAA"
     # heading pi/2 faces +x; right, rear and left turn clockwise from there
-    looks = pumped["yaws"][:4]
+    looks = pumped["yaws"][1:5]  # render 0 is the PIP repaint
     directions = [(round(look["dx"]), round(look["dz"])) for look in looks]
     assert directions == [(25, 0), (0, 25), (-25, 0), (0, -25)]
     hfov = [2 * math.degrees(math.atan(math.tan(math.radians(look["fov"] / 2)) * PIP_W / PIP_H)) for look in looks]
     assert all(abs(value - 100.0) < 0.5 for value in hfov)
     assert pumped["postTimes"] == pumped["tickTimes"]
     assert 700 not in pumped["intervals"]
-    assert pumped["fps"] == "60 FPS"
+    assert pumped["fps"] == "15 FPS", "the PIP is a 15 Hz preview (#42 item 3)"
     # #18: the front camera, which perception reads, renders at 640x360; the other three at 320x180.
-    assert pumped["readSizes"][:4] == [[640, 360], [320, 180], [320, 180], [320, 180]]
+    # read 0 is the PIP repaint; the capture reads front 640x360 then three 320x180 sides
+    assert pumped["readSizes"][:5] == [[640, 360], [640, 360], [320, 180], [320, 180], [320, 180]]
 
 
 def test_late_older_vision_does_not_replace_newer_evidence():
@@ -1138,8 +1154,8 @@ def test_pip_shows_the_fixed_onboard_camera_not_the_player_view():
     assert any(op["op"] == "putImageData" for op in grabbed["ops"])
     assert not any(op["op"] == "drawImage" for op in grabbed["ops"])
     js = OVERLAY_JS.read_text(encoding="utf-8")
-    vision = js.split("async function visionTick")[1].split("if (visionOn)")[0]
-    assert "grabFrame()" in vision
+    # The front frame comes through the async capture now, not grabFrame() (#42 review M1):
+    # tests/test_capture.py pins that.
 
 
 def test_v_and_header_toggle_without_stealing_seed_input():
@@ -1242,8 +1258,9 @@ def test_vision_mode_adds_a_narrow_forward_camera_for_far_lights():
     """#18: in Vision mode a fifth, narrow (40 degree) forward camera goes with the four, at 640x360."""
     pumped = _run({"cmd": "upload", "vision": "1", "mode": "vision", "frames": 3})
     assert pumped["bodies"][0]["frames"] == ["front", "right", "rear", "left", "narrow"]
-    assert pumped["readSizes"][4] == [640, 360]
-    narrow = pumped["yaws"][4]
+    # render 0 is the 15 Hz PIP repaint (#42 item 3); the capture is front, right, rear, left, narrow
+    assert pumped["readSizes"][5] == [640, 360]
+    narrow = pumped["yaws"][5]
     hfov = 2 * math.degrees(math.atan(math.tan(math.radians(narrow["fov"] / 2)) * PIP_W / PIP_H))
     assert abs(hfov - 40.0) < 0.5
     assert (round(narrow["dx"]), round(narrow["dz"])) == (25, 0), "it looks straight ahead"
@@ -1372,3 +1389,18 @@ def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
 def test_issue19_review_the_minimal_view_does_not_bring_back_a_fan_it_has_no_button_for():
     out = _run({"cmd": "candidates", "minimal": "1", "storage": {"semif.candidates": "1"}})
     assert out["restored"] == "false" and out["restoreClicks"] == 0
+
+
+def test_issue42_the_onboard_pip_repaints_at_15_hz_not_every_frame():
+    """#42 item 3: the PIP is a 15 Hz preview; Vision does not wait for it (see the next test)."""
+    pumped = _run({"cmd": "upload", "vision": "0", "frames": 120})
+    # 120 frames at 60 Hz are 2 s; one repaint every 66 ms is 31 at most.
+    assert 25 <= pumped["renders"] <= 31, pumped["renders"]
+    assert pumped["posts"] == 0
+
+
+def test_issue42_vision_grabs_on_any_frame_the_server_can_take_not_only_on_pip_frames():
+    """Between PIP repaints, a free vision slot still grabs at once: the front frame then comes
+    from the async capture, so the 15 Hz preview never delays the evidence."""
+    pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
+    assert pumped["posts"] == 120, "the harness's server answers at once, so every frame can grab"
