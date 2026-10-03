@@ -11,6 +11,17 @@ export const clock = {
 };
 
 let chip = null;
+let bar = null;
+
+// The clock and the graphics button share one bar at the top (semif-layer.css .semif-hud-chips).
+export function chipBar() {
+  if (!bar && globalThis.document?.body) {
+    bar = document.createElement("div");
+    bar.className = "semif-hud-chips";
+    document.body.appendChild(bar);
+  }
+  return bar;
+}
 
 function period(hours) {
   if (hours < 8) return "Dawn";
@@ -36,7 +47,7 @@ export function mountClock() {
   chip.className = "semif-clock";
   chip.title = "Time of day · T"; // styled by semif-layer.css (.semif-clock)
   chip.addEventListener("click", nextPreset);
-  document.body.appendChild(chip);
+  chipBar().appendChild(chip);
   document.addEventListener("keydown", (e) => {
     if ((e.key === "t" || e.key === "T") && !e.ctrlKey && !e.metaKey && !/input|select|textarea/i.test(e.target?.tagName || "")) nextPreset();
   });

@@ -1224,6 +1224,11 @@
     return renderView(world, 0, pipCanvas, FRONT_W, FRONT_H);
   }
 
+  // The graphics meter (semif-world/perf.js) runs on the coast only; old maps render as before.
+  function onCoastMap(view) {
+    return !!(view && view.sim && view.sim.world && view.sim.world.type === "coast");
+  }
+
   function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H, vfov = ONBOARD_VFOV) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
@@ -1263,7 +1268,8 @@
     const prev = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
     try {
       renderer.setRenderTarget(target);
-      renderer.render(scene, cam);
+      if (onCoastMap(world) && window.SEMIF_PERF) window.SEMIF_PERF.span("onboard", renderer, () => renderer.render(scene, cam));
+      else renderer.render(scene, cam);
       const pixels = new Uint8Array(w * h * 4);
       if (renderer.readRenderTargetPixels) {
         renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);

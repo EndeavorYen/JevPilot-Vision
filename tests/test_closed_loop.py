@@ -49,7 +49,7 @@ def test_the_summary_reports_counts_and_rates_per_mode_never_clean():
     rows[3].update(crash=True, collisions=1, vehicle_collisions=1, distance_m=900.0)
     rows += [_row("privileged", s, r) for s in (1, 2, 3) for r in ("festival", "harbour")]
     summary = cl.summarize(rows)
-    v = summary[("held_out", "vision", 150, 0)]
+    v = summary[("held_out", "vision", 150, 0, "medium")]
     assert v["runs"] == 6
     assert v["runs_with_red_light"] == 1 and v["red_light_events"] == 2
     assert v["runs_with_collision"] == 1
@@ -59,18 +59,18 @@ def test_the_summary_reports_counts_and_rates_per_mode_never_clean():
     assert "red light 1/6 runs" in text and "collision 1/6 runs" in text
     assert "95%" in text
     assert "clean" not in text.lower()
-    assert summary[("held_out", "privileged", 150, 0)]["runs_with_red_light"] == 0
+    assert summary[("held_out", "privileged", 150, 0, "medium")]["runs_with_red_light"] == 0
 
 
 def test_runs_that_could_not_be_driven_are_counted_apart_and_retried():
     """A setup failure (the tab, the page, the browser) says nothing about driving: it is listed,
     left out of the rates, and a later run of the same seed replaces it."""
     rows = [_row("vision", 1, "festival"), _row("vision", 2, "festival", ok=False, error="tab crashed")]
-    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0, "medium")]
     assert v["runs"] == 1 and v["failed_runs"] == 1
     assert v["failures"] == {"tab crashed": 1}
     retried = rows + [_row("vision", 2, "festival")]
-    v = cl.summarize(retried)[("held_out", "vision", 150, 0)]
+    v = cl.summarize(retried)[("held_out", "vision", 150, 0, "medium")]
     assert v["runs"] == 2 and v["failed_runs"] == 0
 
 
@@ -80,14 +80,14 @@ def test_review2_a_disengagement_or_a_stall_is_a_result_never_retried_away():
     gave_up = _row("vision", 2, "festival", disengaged=True, distance_m=300.0)
     parked = _row("vision", 3, "festival", stalled=True, distance_m=12.0)
     rows = [_row("vision", 1, "festival"), gave_up, parked]
-    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0, "medium")]
     assert v["runs"] == 3 and v["runs_disengaged"] == 1 and v["runs_stalled"] == 1
     text = cl.report(cl.summarize(rows))
     assert "autopilot gave up 1/3 runs" in text and "car did not move 1/3 runs" in text
     plan = cl.plan_runs([1, 2, 3], ["festival"], ["vision"], seconds=150, lag_ms=0)
     assert cl.pending(plan, [dict(r, set="held_out") for r in rows]) == []
     # A later lucky run of the same seed does not replace the disengagement.
-    v = cl.summarize(rows + [_row("vision", 2, "festival")])[("held_out", "vision", 150, 0)]
+    v = cl.summarize(rows + [_row("vision", 2, "festival")])[("held_out", "vision", 150, 0, "medium")]
     assert v["runs_disengaged"] == 1
 
 
@@ -101,7 +101,7 @@ def test_a_results_file_is_resumed_not_rerun(tmp_path):
 
 def test_the_page_url_carries_seed_route_mode_and_lag():
     url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision", "lag_ms": 300})
-    assert url == "http://localhost:8768/jevpilot/?minimal=0&seed=7&world=coast:harbour&mode=vision&lag_ms=300"
+    assert url == "http://localhost:8768/jevpilot/?minimal=0&seed=7&world=coast:harbour&mode=vision&lag_ms=300&gfx=medium"
     assert "lag_ms" not in cl.page_url("http://localhost:8768", {"seed": 7, "route": "pass", "mode": "privileged", "lag_ms": 0})
 
 
@@ -114,7 +114,7 @@ def test_review_runs_are_pooled_only_with_their_own_set_mode_duration_and_lag():
     rows = [_row("vision", 1, "festival"), _row("vision", 1, "festival", lag_ms=400),
             _row("vision", 895794, "festival", set="tuning")]
     summary = cl.summarize(rows)
-    assert set(summary) == {("held_out", "vision", 150, 0), ("held_out", "vision", 150, 400), ("tuning", "vision", 150, 0)}
+    assert set(summary) == {("held_out", "vision", 150, 0, "medium"), ("held_out", "vision", 150, 400, "medium"), ("tuning", "vision", 150, 0, "medium")}
     text = cl.report(summary)
     assert "held_out · vision · 150 s · lag 400 ms" in text
 
@@ -123,7 +123,7 @@ def test_review_a_drive_that_was_not_set_up_as_asked_is_not_a_run():
     """The tab was hidden (the sim does not step), the sim ran too little, or the page drove another
     mode, route or lag than asked: a setup failure, not a result."""
     run = {"seed": 7, "route": "harbour", "mode": "vision", "seconds": 150, "lag_ms": 400}
-    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 400, "autopilot": True, "crash": False,
+    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 400, "gfx_seen": "medium", "autopilot": True, "crash": False,
             "sim_time_s": 150, "hidden": False, "distance_m": 1800}
     assert cl.validate(run, good) is None
     assert cl.validate(run, dict(good, crash=True, autopilot=False, sim_time_s=80)) is None, "a crash is a result"
@@ -194,7 +194,7 @@ def test_review3_retries_are_visible_and_seeds_that_never_drove_are_named():
             _row("vision", 1, "festival"),
             _row("vision", 2, "festival", ok=False, error="sim ran 12 s of 150"),
             _row("vision", 2, "festival", ok=False, error="sim ran 30 s of 150")]
-    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0, "medium")]
     assert v["attempts"] == 4 and v["retried"] == 1 and v["never_driven"] == [2]
     text = cl.report(cl.summarize(rows))
     assert "4 attempts" in text and "1 retried after a setup failure" in text and "never driven: seeds [2]" in text
@@ -257,7 +257,7 @@ def test_review3_rows_from_before_outcomes_were_recorded_are_not_reported():
 def test_review5_a_drive_whose_result_could_not_be_read_is_unknown_not_clean():
     rows = [_row("vision", 1, "festival"), _row("vision", 2, "festival", broke=True, unreadable=True, distance_m=0.0),
             _row("vision", 3, "festival", red_light=1)]
-    v = cl.summarize(rows)[("held_out", "vision", 150, 0)]
+    v = cl.summarize(rows)[("held_out", "vision", 150, 0, "medium")]
     assert v["drove"] == 2 and v["runs_unreadable"] == 1
     text = cl.report(cl.summarize(rows))
     assert "result unreadable 1/3 runs" in text and "red light 1/2 runs that moved" in text
@@ -324,7 +324,7 @@ def test_the_health_check_keeps_the_connection_alive_and_asks_ipv4(monkeypatch):
 
 def test_review6_a_read_result_survives_a_failed_park_and_unreadable_is_not_broke(monkeypatch):
     run = {"seed": 7, "route": "harbour", "mode": "vision", "seconds": 150, "lag_ms": 0}
-    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 0, "autopilot": True, "crash": False,
+    good = {"mode_seen": "vision", "world_seen": "coast:harbour", "lag_seen": 0, "gfx_seen": "medium", "autopilot": True, "crash": False,
             "sim_time_s": 150, "hidden": False, "distance_m": 1800, "red_light": 1, "events": [], "engaged": True}
     calls = []
 
@@ -523,3 +523,31 @@ def test_issue39_review_l2_an_anchor_closed_mid_evaluation_is_restored_before_a_
     cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
              "--out", str(tmp_path / "runs.jsonl")])
     assert not chrome.quit
+
+
+# ---- Graphics quality (docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3) ---------
+
+def test_runs_carry_the_graphics_quality_and_old_rows_count_as_medium():
+    plan = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0, gfx="high")
+    assert plan[0]["gfx"] == "high"
+    assert "gfx=high" in cl.page_url("http://localhost:8768", plan[0])
+    assert cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0)[0]["gfx"] == "medium"
+    old = {"seed": 1, "route": "festival", "mode": "vision", "seconds": 150, "lag_ms": 0}
+    assert cl._key(old) == cl._key(dict(old, gfx="medium"))
+    assert cl._key(old) != cl._key(dict(old, gfx="high"))
+
+
+def test_the_report_keeps_medium_and_high_apart():
+    rows = [_row("vision", 1, "festival"), _row("vision", 1, "festival", gfx="high", red_light=1, violations=1)]
+    summary = cl.summarize(rows)
+    assert set(summary) == {("held_out", "vision", 150, 0, "medium"), ("held_out", "vision", 150, 0, "high")}
+    text = cl.report(summary)
+    assert "gfx medium" in text and "gfx high" in text
+
+
+def test_a_page_on_the_wrong_quality_is_a_setup_failure():
+    run = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0, gfx="high")[0]
+    got = {"mode_seen": "vision", "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500}
+    assert cl.validate(run, dict(got, gfx_seen="medium")) == "drove graphics 'medium'"
+    assert cl.validate(run, dict(got, gfx_seen="high")) is None
+    assert cl.validate(run, got) == "drove graphics None", "a coast page always reports its quality"
