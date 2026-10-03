@@ -720,6 +720,7 @@
       updateSeenSignal();
       body.state = body.state || {};
       body.state.seen_signal = window.SEMIF_SEEN_SENT || null;
+      body.state.since_red_ms = sinceRedMs(body.state.intersection);
       const paths = candidatePaths(body.state.candidates);
       if (paths) body.state.candidate_paths = paths;
     }
@@ -786,11 +787,26 @@
     const ok = fresh && p && p.backend && p.backend !== "none" && (p.status || "ready") === "ready";
     const state = ok && p.signal && p.signal.state;
     if (["red", "amber", "green"].includes(state) && !(lastSeen && lastSeen.at > taken)) lastSeen = { state, at: taken };
+    if ((state === "red" || state === "amber") && !(lastStop !== null && lastStop > taken)) lastStop = taken;
     const held = ok && lastSeen && now >= lastSeen.at && now - lastSeen.at <= SEEN_MEMORY_MS[lastSeen.state] ? lastSeen.state : null;
     window.SEMIF_SEEN_SENT = held;
     window.SEMIF_SEEN_SIGNAL = held || "red";
   }
   window.SEMIF_UPDATE_SEEN = updateSeenSignal;
+
+  // How long ago the line ahead was last seen red or amber, once it has been seen green since (#38):
+  // the green began after that frame, and every coast light stays green 8 s, so it cannot turn red
+  // before 10 s after it. Another line ahead (the distance to it jumps up) starts over.
+  let lastStop = null;
+  let lineAhead = null;
+  function sinceRedMs(inter) {
+    const d = inter && Number.isFinite(inter.distance_to_line_m) ? inter.distance_to_line_m : null;
+    if (d === null || (lineAhead !== null && d > lineAhead + 5)) lastStop = null;
+    lineAhead = d;
+    if (lastStop === null || !lastSeen || lastSeen.state !== "green" || lastSeen.at <= lastStop) return null;
+    return Math.round(performance.now() - lastStop);
+  }
+  window.SEMIF_SINCE_RED = sinceRedMs;
 
   const origFetch = window.fetch.bind(window);
   // How the decision path's requests went, for the closed-loop evaluation (#28): counted where the

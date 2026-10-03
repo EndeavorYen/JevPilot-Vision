@@ -247,28 +247,32 @@ def test_issue38_far_from_the_line_a_green_lets_the_car_speed_up():
     assert state["candidates"]["go"][4] is False, "it can still stop if the light has turned"
 
 
-def test_issue38_seed23_87s_an_amber_that_ends_before_the_car_arrives_counts_as_red():
-    """87.3 s: amber read in a frame about 0.7 s old, 14.7 m/s, 23.5 m to the line. The amber may
-    have begun when the frame was taken: at most 1.3 s of it is left, and the line is 1.6 s away."""
+def _at_light_after_red(*, since_red_ms, speed, line, age_ms, cands):
+    payload = _payload(_perception(signal="green"), candidates=cands, line=line, speed=speed, age_ms=age_ms)
+    payload["state"]["since_red_ms"] = since_red_ms
+    return vision_mode.prepare(payload)["state"]
+
+
+def test_issue38_review_a_car_that_saw_the_light_turn_green_sets_off_even_on_old_evidence():
+    """Review: with 0.8 s old frames a car waiting 4 m short of the line could take no candidate. It
+    saw the red 1.2 s ago, so the green began after that and lasts 8 s: no red for another 8.8 s."""
+    cands = {"go": [10.0, 0.0, 0.1, 0.0, False, False], "crawl": [2.0, 0.0, 0.1, 0.0, False, False]}
+    blind = _at_light("green", speed=0.0, line=4.0, age_ms=800, cands=copy.deepcopy(cands))
+    assert {k: v[4] for k, v in blind["candidates"].items()} == {"go": True, "crawl": True}, "without the red, nothing is known"
+    seen = _at_light_after_red(since_red_ms=1200, speed=0.0, line=4.0, age_ms=800, cands=copy.deepcopy(cands))
+    assert {k: v[4] for k, v in seen["candidates"].items()} == {"go": False, "crawl": False}
+
+
+def test_issue38_review_a_red_seen_long_ago_says_nothing_about_this_green():
+    cands = {"surge": [16.3, 0.0, 0.1, 0.0, False, False]}
+    state = _at_light_after_red(since_red_ms=12000, speed=8.3, line=30.0, age_ms=730, cands=cands)
+    assert state["candidates"]["surge"][4] is True
+    state = _at_light_after_red(since_red_ms=-5, speed=8.3, line=30.0, age_ms=730, cands={"surge": [16.3, 0.0, 0.1, 0.0, False, False]})
+    assert state["candidates"]["surge"][4] is True, "a malformed value is no evidence"
+
+
+def test_issue38_review_an_amber_is_still_left_to_the_amber_rule():
+    """Seed 23 at 87.3 s was already too late to stop and to clear: turning the amber red there would
+    stop the car in the junction (review). The fix is not to speed into that (86.0 s)."""
     state = _at_light("amber", speed=14.7, line=23.5, age_ms=700, cands=None)
-    assert state["intersection"]["signal"] == "red"
-    assert state["intersection"]["signal_source"] == "amber_expiring"
-
-
-def test_issue38_an_amber_the_car_reaches_the_line_within_is_left_to_the_amber_rule():
-    state = _at_light("amber", speed=14.7, line=10.0, age_ms=200, cands=None)
     assert state["intersection"]["signal"] == "amber" and state["intersection"]["signal_source"] == "perception"
-
-
-def test_issue38_seed23_87s_the_mock_stops_instead_of_driving_through_an_expiring_amber(engine):
-    """The mock's amber rule (`_amber_too_late`) drives on through an amber it cannot stop for with its
-    gentle brake, assuming the amber has just begun. Seen 0.7 s ago, it may not have."""
-    from jevpilot_vision.drive import score_drive_request
-
-    def motion(age_ms):
-        body = _payload(_perception(signal="amber"), line=23.5, speed=14.7, age_ms=age_ms)
-        body["questions"]["motion"] = {"type": "choice", "instructions": "Drive or stop.", "criteria": {"drive": None, "stop": None}}
-        return score_drive_request(engine, body)["answers"]["motion"]["choice"]
-
-    assert motion(700) == "stop"
-    assert motion(200) == "drive", "a fresh amber the car clears in time is still driven through"
