@@ -1512,7 +1512,8 @@ body.fsd-theme .drive-header-row {
   #sol-mode[data-health="degraded"] #sol-mode-reads {
     display: none;
   }
-  body.fsd-theme .semif-clock {
+  /* The mode switch takes the top centre; ?gfx= still picks the quality on a phone. */
+  body.fsd-theme .semif-hud-chips {
     display: none;
   }
 }

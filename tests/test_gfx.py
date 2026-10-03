@@ -342,3 +342,9 @@ t += 90000; perf.frame();   // a hidden tab, or a trip to an old map and back
 t += 16; perf.frame();
 out(perf.snapshot());""")
     assert got["frames"] == 5 and got["fps_p5"] > 60
+
+
+def test_narrow_screens_hide_the_whole_bar_where_the_mode_switch_sits():
+    css = (REPO / "jevpilot_vision" / "web" / "semif-layer.css").read_text(encoding="utf-8")
+    hidden = [block for block in css.split("}") if "display: none" in block and ".semif-hud-chips" in block and "fsd-theme" in block]
+    assert hidden, "on narrow screens the bar overlaps the mode switch; ?gfx= still picks the quality there"
