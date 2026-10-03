@@ -25,7 +25,8 @@ WARMUP_S = 10  # shaders compile and textures upload in the first seconds
 
 
 def page_url(base: str, gfx: str) -> str:
-    return (f"{base.rstrip('/')}/jevpilot/?minimal=0&seed={SEED}&world=coast:festival&mode=privileged"
+    # candidates=selected: a fan remembered in this Chrome profile would add lines and worker load (#19).
+    return (f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&seed={SEED}&world=coast:festival&mode=privileged"
             f"&gfx={gfx}&time=16:30&daycycle=0")
 
 
