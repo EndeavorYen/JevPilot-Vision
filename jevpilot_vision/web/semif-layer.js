@@ -1264,11 +1264,25 @@
   }
 
   function renderView(world, yaw, canvas, w = PIP_W, h = PIP_H, vfov = ONBOARD_VFOV) {
+    if (!canvas) return false;
+    const shot = renderToTarget(world, yaw, w, h, vfov);
+    if (!shot) return false;
+    const pixels = new Uint8Array(w * h * 4);
+    if (shot.renderer.readRenderTargetPixels) {
+      shot.renderer.readRenderTargetPixels(shot.target, 0, 0, w, h, pixels);
+    }
+    paintOnboardPixels(pixels, canvas, w, h);
+    return true;
+  }
+
+  // One onboard camera rendered into its size's render target, nothing read back yet. Targets are
+  // shared per size, so a caller reading asynchronously queues its read before the next render.
+  function renderToTarget(world, yaw, w = PIP_W, h = PIP_H, vfov = ONBOARD_VFOV) {
     const player = world && world.sim && world.sim.player;
     const renderer = world && world.renderer;
     const scene = world && world.scene;
     const sample = world && world.sun && world.sun.shadow && world.sun.shadow.map;
-    if (!player || !renderer || !scene || !sample || !world.camera || !canvas) return false;
+    if (!player || !renderer || !scene || !sample || !world.camera) return null;
     const mount = onboardMount(player, yaw);
     if (!world._onboardCam) world._onboardCam = world.camera.clone();
     const cam = world._onboardCam;
@@ -1304,18 +1318,13 @@
       renderer.setRenderTarget(target);
       if (onCoastMap(world) && window.SEMIF_PERF) window.SEMIF_PERF.span("onboard", renderer, () => renderer.render(scene, cam));
       else renderer.render(scene, cam);
-      const pixels = new Uint8Array(w * h * 4);
-      if (renderer.readRenderTargetPixels) {
-        renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
-      }
-      paintOnboardPixels(pixels, canvas, w, h);
     } finally {
       if (renderer.setRenderTarget) renderer.setRenderTarget(prev);
       hidden.forEach((obj) => {
         obj.visible = true;
       });
     }
-    return true;
+    return { renderer: renderer, target: target };
   }
 
   function routeEnd(player) {
@@ -1439,21 +1448,30 @@
 
   window.SEMIF_GRAB_FRAME = grabFrame;
 
-  // Front comes from the painted PIP; right, rear and left render off-screen.
-  function grabSurround(frontUrl) {
-    if (!frontUrl) return null;
+  // Front comes from the painted PIP; right, rear and left (and the narrow camera in Vision mode)
+  // render off-screen. Every view renders now, in one instant of the world, and queues its pixel
+  // read on the GPU at once (semif-capture.js); waiting and JPEG encoding happen after, off the
+  // main thread's critical path. `front` is a promise of the PIP's JPEG, taken before the renders.
+  async function grabSurround(front) {
+    if (!front) return null;
     const world = window.SEMIF_WORLD;
-    const frames = { front: frontUrl };
-    for (const [name, yaw] of SURROUND_SIDES) {
-      const canvas = surroundCanvas(name);
-      if (!renderView(world, yaw, canvas)) return null;
-      frames[name] = canvas.toDataURL("image/jpeg", 0.55);
+    const capture = window.SEMIF_CAPTURE;
+    const views = SURROUND_SIDES.map(([name, yaw]) => [name, yaw, PIP_W, PIP_H, ONBOARD_VFOV, 0.55]);
+    if (window.SEMIF_DRIVE_MODE === "vision") views.push(["narrow", 0, FRONT_W, FRONT_H, NARROW_VFOV, FRONT_JPEG]);
+    const reads = [];
+    for (const [name, yaw, w, h, vfov, quality] of views) {
+      const shot = renderToTarget(world, yaw, w, h, vfov);
+      if (!shot) return null;
+      reads.push({ name, w, h, quality, pixels: capture.readPixels(shot.renderer, shot.target, w, h) });
     }
-    if (window.SEMIF_DRIVE_MODE === "vision") {
-      const narrow = surroundCanvas("narrow", FRONT_W, FRONT_H);
-      if (!renderView(world, 0, narrow, FRONT_W, FRONT_H, NARROW_VFOV)) return null;
-      frames.narrow = narrow.toDataURL("image/jpeg", FRONT_JPEG);
+    const frames = { front: await front };
+    const encodes = [];
+    for (const read of reads) {
+      const canvas = surroundCanvas(read.name, read.w, read.h);
+      paintOnboardPixels(await read.pixels, canvas, read.w, read.h);
+      encodes.push(capture.encodeJpeg(canvas, read.quality).then((url) => (frames[read.name] = url)));
     }
+    await Promise.all(encodes);
     return frames;
   }
 
@@ -1470,9 +1488,9 @@
       const tGrab = performance.now();
       let frames = null;
       try {
-        frames = grabSurround(
+        frames = await grabSurround(
           alreadyPainted && pipCanvas
-            ? pipCanvas.toDataURL("image/jpeg", FRONT_JPEG)
+            ? window.SEMIF_CAPTURE.encodeJpeg(pipCanvas, FRONT_JPEG)
             : grabFrame()
         );
       } catch (_err) {

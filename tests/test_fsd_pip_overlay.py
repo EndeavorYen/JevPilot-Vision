@@ -375,6 +375,8 @@ global.performance = window.performance;
 global.requestAnimationFrame = window.requestAnimationFrame;
 global.cancelAnimationFrame = window.cancelAnimationFrame;
 
+// The page loads semif-capture.js before the layer (index.html); so does the harness.
+window.SEMIF_CAPTURE = require(require("path").join(require("path").dirname(process.argv[1]), "semif-capture.js"));
 const code = fs.readFileSync(process.argv[1], "utf8");
 vm.runInThisContext(code, { filename: process.argv[1] });
 
@@ -714,10 +716,13 @@ if (spec.cmd === "cstats") {
     return paint.apply(this, arguments);
   };
   nowMs = 0;
+  // A browser runs promise callbacks between frames; the vision post waits on a few (#42 item 2).
+  (async () => {
   for (let i = 0; i < frames; i++) {
     nowMs += dt;
     ticks.push(nowMs);
     window.__raf();
+    await new Promise((r) => setImmediate(r));
   }
   process.stdout.write(JSON.stringify({
     posts: visionPosts.length,
@@ -730,6 +735,7 @@ if (spec.cmd === "cstats") {
     renders,
     readSizes,
   }));
+  })();
 } else if (spec.cmd === "vision-order") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
   function makeCam() {
@@ -764,10 +770,13 @@ if (spec.cmd === "cstats") {
       readRenderTargetPixels(_t, _x, _y, w, h, buf) { buf.fill(8); },
     },
   };
+  (async () => {
   nowMs = 16;
   window.__raf();
+  await new Promise((r) => setImmediate(r));
   nowMs = 32;
   window.__raf();
+  await new Promise((r) => setImmediate(r));
   window.__releaseVision(1, {
     vision: { signal: "red", event: "newer frame" },
     vision_gen: 2,
@@ -786,6 +795,7 @@ if (spec.cmd === "cstats") {
       }));
     });
   });
+  })();
 } else if (spec.cmd === "vision-ack") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
   function makeCam() {
@@ -822,9 +832,11 @@ if (spec.cmd === "cstats") {
   };
   const replies = spec.replies || [{}];
   nowMs = 0;
+  (async () => {
   for (let i = 0; i < replies.length; i++) {
     nowMs += 16;
     window.__raf();
+    await new Promise((r) => setImmediate(r));
   }
   setImmediate(() => {
     process.stdout.write(JSON.stringify({
@@ -833,6 +845,7 @@ if (spec.cmd === "cstats") {
       records: (window.SEMIF_TELEMETRY && window.SEMIF_TELEMETRY.records) || [],
     }));
   });
+  })();
 } else if (spec.cmd === "keys") {
   const beforeHidden = pip.classList.contains("fsd-pip-hidden");
   const beforeFold = pip.classList.contains("fsd-pip-collapsed");
