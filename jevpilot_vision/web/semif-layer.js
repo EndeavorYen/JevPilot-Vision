@@ -235,7 +235,9 @@
     const btn = document.getElementById("candidates-toggle");
     if (!btn || typeof btn.onclick !== "function") return;
     if (fanShown === null) {
-      if (wantFan && btn.getAttribute("aria-pressed") !== "true") btn.click();
+      // The minimal view hides the button: a fan brought back there could not be turned off.
+      const minimal = document.body.classList.contains("semif-minimal");
+      if (wantFan && !minimal && btn.getAttribute("aria-pressed") !== "true") btn.click();
       fanShown = btn.getAttribute("aria-pressed") === "true";
       return;
     }

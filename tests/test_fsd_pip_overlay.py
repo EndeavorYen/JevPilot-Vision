@@ -230,6 +230,7 @@ if (specEarly.fleet) search += (search ? "&" : "?") + "fleet=" + specEarly.fleet
 if (specEarly.mode) search += (search ? "&" : "?") + "mode=" + specEarly.mode;
 if (specEarly.lag) search += (search ? "&" : "?") + "lag_ms=" + specEarly.lag;
 if (specEarly.candidates) search += (search ? "&" : "?") + "candidates=" + specEarly.candidates;
+if (specEarly.minimal) search += (search ? "&" : "?") + "minimal=" + specEarly.minimal;
 // Latency stress (#28): timers the overlay sets, and when the decision request really goes out.
 const timers = [];
 const sentAt = [];
@@ -1202,6 +1203,7 @@ def test_issue19_the_candidate_fan_choice_is_remembered_per_browser():
 def test_issue19_the_address_bar_wins_over_the_remembered_choice():
     shown = _run({"cmd": "candidates", "candidates": "all", "storage": {"semif.candidates": "0"}})
     assert shown["restored"] == "true"
+    assert shown["storedAfterRestore"] == "0", "the address bar does not overwrite the browser's choice"
     hidden = _run({"cmd": "candidates", "candidates": "selected", "storage": {"semif.candidates": "1"}})
     assert hidden["restored"] == "false" and hidden["restoreClicks"] == 0
 
@@ -1365,3 +1367,8 @@ def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
     # Review #28 (8): an outage (network failure, 502/503/504) is told apart from a failure of the
     # system under test (a 500, a 12 s timeout, a reply that is not JSON).
     assert out["stats"] == {"ok": 1, "http_errors": 1, "network_errors": 1, "bad_replies": 1, "gateway_errors": 1, "timeouts": 1}
+
+
+def test_issue19_review_the_minimal_view_does_not_bring_back_a_fan_it_has_no_button_for():
+    out = _run({"cmd": "candidates", "minimal": "1", "storage": {"semif.candidates": "1"}})
+    assert out["restored"] == "false" and out["restoreClicks"] == 0

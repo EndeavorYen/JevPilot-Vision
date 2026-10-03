@@ -39,3 +39,8 @@ def test_a_page_on_the_wrong_quality_is_refused(monkeypatch):
     monkeypatch.setattr(pb.time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError, match="medium"):
         pb.measure("T", "http://localhost:8768", "high", seconds=60)
+
+
+def test_issue19_review_the_perf_baseline_never_draws_the_candidate_fan():
+    """A fan remembered in the measuring Chrome profile would add its lines and worker load."""
+    assert "candidates=selected" in pb.page_url("http://localhost:8768", "medium")
