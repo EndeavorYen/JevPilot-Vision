@@ -1055,6 +1055,20 @@
   const SEEN_HEIGHT_M = { pedestrian: 1.7, car: 1.5, motorcycle: 1.6 }; // perception.HEIGHT_M
   const SEEN_STALE_MS = 1500; // vision_mode.STALE_MS: older evidence is no evidence
 
+  // Where the car was over the last 2 s: perception is relative to the frame grabbed at
+  // SEMIF_VISION_AT, so its objects are placed from the car's pose then, not now.
+  const poseLog = [];
+  function logPose(player) {
+    const t = performance.now();
+    poseLog.push({ t, x: player.x, z: player.z, heading: player.heading || 0 });
+    while (poseLog.length && poseLog[0].t < t - 2000) poseLog.shift();
+  }
+  function poseAt(t, player) {
+    let best = null;
+    for (const p of poseLog) if (p.t <= t && (!best || p.t > best.t)) best = p;
+    return best || player;
+  }
+
   function seenToWorld(player, ahead, right) {
     const h = player.heading || 0;
     const fwd = ahead + CAMERA_AHEAD_M;
@@ -1070,19 +1084,22 @@
     if (window.SEMIF_DRIVE_MODE === "vision") {
       const vis = window.SEMIF_VISION;
       const objects = vis && vis.perception && Array.isArray(vis.perception.objects) ? vis.perception.objects : [];
-      const age = performance.now() - Number(window.SEMIF_VISION_AT);
+      const takenAt = Number(window.SEMIF_VISION_AT);
+      const age = performance.now() - takenAt;
       if (!(age >= 0 && age <= SEEN_STALE_MS)) return [];
+      const then = poseAt(takenAt, sim.player);
       const out = [];
       for (const o of objects) {
-        const ahead = Number(o && o.ahead_m);
-        const right = Number(o && o.right_m);
-        if (!(o.kind in SEEN_HEIGHT_M) || !Number.isFinite(ahead) || !Number.isFinite(right)) continue;
-        const at = seenToWorld(sim.player, ahead, right);
+        if (!o || !Object.prototype.hasOwnProperty.call(SEEN_HEIGHT_M, o.kind)) continue;
+        const ahead = Number(o.ahead_m);
+        const right = Number(o.right_m);
+        if (!Number.isFinite(ahead) || !Number.isFinite(right)) continue;
+        const at = seenToWorld(then, ahead, right);
         out.push({
           x: at.x,
           z: at.z,
           height: SEEN_HEIGHT_M[o.kind],
-          d: Math.hypot(ahead, right),
+          d: dist2(at, sim.player), // from the car now, to where the camera saw it
           tag: o.kind === "pedestrian" ? "PED" : "VEH",
           source: "CAM",
           hazard: false,
@@ -1111,6 +1128,7 @@
     const w = world.canvas.clientWidth;
     const h = world.canvas.clientHeight;
     const camera = world.camera;
+    if (sim.player) logPose(sim.player);
     let nearest = Infinity;
     for (const obj of boxTargets(sim)) {
       const d = obj.d;

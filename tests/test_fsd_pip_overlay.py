@@ -919,13 +919,20 @@ if (spec.cmd === "cstats") {
   window.SEMIF_VISION_AT = nowMs - (spec.age == null ? 200 : spec.age);
   window.SEMIF_SIM = sim;
   window.SEMIF_WORLD = { canvas: worldCanvas, camera: camera(640, 360) };
+  if (spec.moved) {
+    // The frame was grabbed 200 ms ago with the car here; since then it drove spec.moved m ahead.
+    nowMs -= 200;
+    window.__raf();
+    nowMs += 200;
+    player.z -= spec.moved;
+  }
   window.__raf();
   const boxEls = document.getElementById("fsd-boxes").children;
   process.stdout.write(JSON.stringify({
     mode: window.SEMIF_DRIVE_MODE,
     reads,
     labels: boxEls.map((b) => (b.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1] || b.innerHTML),
-    lefts: boxEls.map((b) => parseFloat(b.style.left)),
+    centres: boxEls.map((b) => parseFloat(b.style.left) + parseFloat(b.style.width) / 2),
     halo: document.getElementById("fsd-halo").dataset.level || "",
   }));
 } else if (spec.cmd === "candidates") {
@@ -1452,3 +1459,17 @@ def test_issue54_privileged_boxes_say_they_are_the_truth():
     out = _run({"cmd": "boxes", "mode": "privileged", "objects": []})
     assert out["labels"] == ["TRUTH PED 12m"], out["labels"]
     assert out["halo"] == "watch"
+
+
+def test_issue54_review_camera_boxes_are_placed_from_where_the_car_was_when_the_frame_was_taken():
+    person = {"kind": "pedestrian", "ahead_m": 9.85, "right_m": 1.0, "width_m": 0.5, "conf": 0.9}
+    out = _run({"cmd": "boxes", "mode": "vision", "objects": [person], "moved": 3.0})
+    assert out["labels"] == ["CAM PED 7m"], "10 m when the frame was taken, 3 m driven since"
+
+
+def test_issue54_review_a_person_seen_to_the_right_is_drawn_right_of_centre_and_junk_is_skipped():
+    person = {"kind": "pedestrian", "ahead_m": 9.85, "right_m": 1.0, "width_m": 0.5, "conf": 0.9}
+    junk = [None, {"kind": "constructor", "ahead_m": 5.0, "right_m": 0.0}, {"kind": "car", "ahead_m": "near", "right_m": 0.0}]
+    out = _run({"cmd": "boxes", "mode": "vision", "objects": junk + [person]})
+    assert out["labels"] == ["CAM PED 10m"]
+    assert out["centres"][0] > 320, out["centres"]
