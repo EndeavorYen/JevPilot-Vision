@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-import jevpilot_vision.vision as vision
+import importlib
+
+
+def _mod(name):
+    """The module as code imports it now: tests/test_server.py drops jevpilot_vision from sys.modules
+    and re-imports it, so a module object taken at collection time may be stale (#86)."""
+    return importlib.import_module(name)
 
 
 def test_cuda_when_there_is_one_and_the_environment_wins(monkeypatch):
+    vision = _mod("jevpilot_vision.vision")
     monkeypatch.delenv("SEMIF_VISION_DEVICE", raising=False)
     assert vision.vision_device(cuda=True) == "cuda"
     assert vision.vision_device(cuda=False) == "cpu", "no CUDA: SigLIP still runs, on the CPU"
@@ -14,6 +21,7 @@ def test_cuda_when_there_is_one_and_the_environment_wins(monkeypatch):
 
 
 def test_the_shared_encoder_is_built_on_the_picked_device(monkeypatch):
+    vision = _mod("jevpilot_vision.vision")
     built = []
 
     class Encoder:
@@ -30,8 +38,9 @@ def test_the_shared_encoder_is_built_on_the_picked_device(monkeypatch):
 
 
 def test_the_vision_reply_says_where_each_model_ran(monkeypatch):
-    import jevpilot_vision.http as http
-    import jevpilot_vision.perception as perception
+    vision = _mod("jevpilot_vision.vision")
+    http = _mod("jevpilot_vision.http")
+    perception = _mod("jevpilot_vision.perception")
     from tests.test_perception import _jpeg
 
     class Encoder:
@@ -60,6 +69,7 @@ def test_the_vision_reply_says_where_each_model_ran(monkeypatch):
 
 
 def test_review_a_cuda_we_picked_that_fails_falls_back_to_the_cpu(monkeypatch):
+    vision = _mod("jevpilot_vision.vision")
     built = []
 
     class Encoder:
