@@ -19,6 +19,7 @@ import { sunDirection, gradeAt } from "./daylight.js";
 import { createPost } from "./post.js";
 import { clock, mountClock, showClock, tick } from "./clock.js";
 import { settleQuality } from "./quality.js";
+import "./perf.js";
 
 const legacy = window.SEMIF_SCENERY || {};
 // ?post=0 draws the main view straight to the screen, without bloom or grade.
@@ -37,16 +38,18 @@ function installFrame(view) {
   view._semifWorldFrame = true;
   const render = view.render.bind(view);
   view.render = function (dt, draw) {
-    if (onCoast()) {
-      for (const hook of frameHooks) {
-        try {
-          hook(view, dt);
-        } catch (err) {
-          console.warn("semif-world: frame", err);
-        }
+    if (!onCoast()) return render(dt, draw);
+    for (const hook of frameHooks) {
+      try {
+        hook(view, dt);
+      } catch (err) {
+        console.warn("semif-world: frame", err);
       }
     }
-    return render(dt, draw);
+    const perf = window.SEMIF_PERF;
+    if (!perf) return render(dt, draw);
+    perf.frame();
+    return perf.span("main", view.renderer, () => render(dt, draw));
   };
 }
 
@@ -159,6 +162,7 @@ frameHooks.push((view) => dressAgents(view));
 function buildCoast(view) {
   // Settled before anything is built: the builders read gfx.quality (quality.js).
   settleQuality(view.renderer?.getContext?.());
+  window.SEMIF_PERF?.attach(view.renderer?.getContext?.());
   resetCaches();
   // Stop the old layer's per-frame work and any upgrade it still has pending from an old map.
   view._sceneryBuild = {};

@@ -223,3 +223,23 @@ let caught = false; try { perf.span('main', null, () => { throw new Error('boom'
 perf.span('main', null, () => 0);
 out({ caught, errors: gl.errors, active: gl.active });""")
     assert got == {"caught": True, "errors": 0, "active": 0}
+
+
+def test_the_coast_frame_is_measured_and_old_maps_are_not():
+    got = _render(
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} },"
+        "  renderer: { getContext: () => null, info: { autoReset: true, render: { calls: 0, triangles: 0 }, reset() {} } },"
+        "  sun: { position: { set() { return this; } }, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() },"
+        "  render(dt, draw) { view.renderer.info.render.calls = 12; return 'base'; } };"
+        "api.built(view); for (let i = 0; i < 3; i++) view.render(0.016, true);"
+        "const coast = window.SEMIF_PERF.snapshot();"
+        "window.SEMIF_PERF.reset(); window.SEMIF_SIM = { world: { type: 'city' } }; view.render(0.016, true);"
+        "out({ coast, city: window.SEMIF_PERF.snapshot() });"
+    )
+    assert got["coast"]["frames"] == 2 and got["coast"]["calls_p50"]["main"] == 12
+    assert got["city"]["frames"] == 0 and got["city"]["calls_p50"]["main"] is None
+
+
+def test_the_onboard_render_is_measured_in_the_layer():
+    src = (REPO / "jevpilot_vision" / "web" / "semif-layer.js").read_text(encoding="utf-8")
+    assert 'SEMIF_PERF.span("onboard", renderer, () => renderer.render(scene, cam))' in src

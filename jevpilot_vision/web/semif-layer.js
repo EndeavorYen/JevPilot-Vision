@@ -1263,7 +1263,8 @@
     const prev = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
     try {
       renderer.setRenderTarget(target);
-      renderer.render(scene, cam);
+      if (window.SEMIF_PERF) window.SEMIF_PERF.span("onboard", renderer, () => renderer.render(scene, cam));
+      else renderer.render(scene, cam);
       const pixels = new Uint8Array(w * h * 4);
       if (renderer.readRenderTargetPixels) {
         renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
