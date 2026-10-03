@@ -96,6 +96,7 @@ function el(tag) {
     tagName: String(tag || "div").toUpperCase(),
     id: "",
     className: "",
+    dataset: {},
     children: [],
     parentElement: null,
     style: {},
@@ -902,6 +903,37 @@ if (spec.cmd === "cstats") {
     endZ: end.z,
     s: player.s,
   }));
+} else if (spec.cmd === "boxes") {
+  // #54: where the on-screen boxes and the halo come from. Truth reads are trapped.
+  const reads = [];
+  const player = { x: 0, z: 0, heading: 0, speed: 8 };
+  const sim = { player, world: { seed: 42 }, step() {} };
+  Object.defineProperty(sim, "pedestrians", { get() { reads.push("pedestrians"); return [{ type: "pedestrian", x: 1, z: -12, height: 1.7 }]; } });
+  Object.defineProperty(sim, "traffic", { get() { reads.push("traffic"); return []; } });
+  const worldCanvas = el("canvas");
+  worldCanvas.clientWidth = 640;
+  worldCanvas.clientHeight = 360;
+  nowMs = 10000;
+  window.SEMIF_VISION = { perception: { backend: "rtdetr", status: "ready", objects: spec.objects || [] } };
+  window.SEMIF_VISION_AT = nowMs - (spec.age == null ? 200 : spec.age);
+  window.SEMIF_SIM = sim;
+  window.SEMIF_WORLD = { canvas: worldCanvas, camera: camera(640, 360) };
+  if (spec.moved) {
+    // The frame was grabbed 200 ms ago with the car here; since then it drove spec.moved m ahead.
+    nowMs -= 200;
+    window.__raf();
+    nowMs += 200;
+    player.z -= spec.moved;
+  }
+  window.__raf();
+  const boxEls = document.getElementById("fsd-boxes").children;
+  process.stdout.write(JSON.stringify({
+    mode: window.SEMIF_DRIVE_MODE,
+    reads,
+    labels: boxEls.map((b) => (b.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1] || b.innerHTML),
+    centres: boxEls.map((b) => parseFloat(b.style.left) + parseFloat(b.style.width) / 2),
+    halo: document.getElementById("fsd-halo").dataset.level || "",
+  }));
 } else if (spec.cmd === "rng") {
   // #55: the page must not draw from the planner's seeded random; the bundle owns that sequence.
   let draws = 0;
@@ -1419,6 +1451,43 @@ def test_issue42_vision_grabs_on_any_frame_the_server_can_take_not_only_on_pip_f
     from the async capture, so the 15 Hz preview never delays the evidence."""
     pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
     assert pumped["posts"] == 120, "the harness's server answers at once, so every frame can grab"
+
+
+def test_issue54_vision_boxes_come_from_the_camera_and_never_read_the_simulator():
+    """#54: in Vision mode the boxes and halo are what perception reported, labelled CAM."""
+    person = {"kind": "pedestrian", "ahead_m": 9.85, "right_m": 1.0, "width_m": 0.5, "conf": 0.9}
+    car = {"kind": "car", "ahead_m": 20.0, "right_m": -2.0, "width_m": 1.8, "conf": 0.8}
+    out = _run({"cmd": "boxes", "mode": "vision", "objects": [person, car]})
+    assert out["mode"] == "vision"
+    assert out["reads"] == [], "Vision mode drew from sim.pedestrians / sim.traffic"
+    assert sorted(out["labels"]) == ["CAM PED 10m", "CAM VEH 20m"], out["labels"]
+    assert out["halo"] == "near", "the halo follows the nearest perceived object (10 m)"
+
+
+def test_issue54_stale_camera_evidence_draws_nothing():
+    person = {"kind": "pedestrian", "ahead_m": 9.85, "right_m": 1.0, "width_m": 0.5, "conf": 0.9}
+    out = _run({"cmd": "boxes", "mode": "vision", "objects": [person], "age": 2000})
+    assert out["labels"] == [] and out["halo"] == "" and out["reads"] == []
+
+
+def test_issue54_privileged_boxes_say_they_are_the_truth():
+    out = _run({"cmd": "boxes", "mode": "privileged", "objects": []})
+    assert out["labels"] == ["TRUTH PED 12m"], out["labels"]
+    assert out["halo"] == "watch"
+
+
+def test_issue54_review_camera_boxes_are_placed_from_where_the_car_was_when_the_frame_was_taken():
+    person = {"kind": "pedestrian", "ahead_m": 9.85, "right_m": 1.0, "width_m": 0.5, "conf": 0.9}
+    out = _run({"cmd": "boxes", "mode": "vision", "objects": [person], "moved": 3.0})
+    assert out["labels"] == ["CAM PED 7m"], "10 m when the frame was taken, 3 m driven since"
+
+
+def test_issue54_review_a_person_seen_to_the_right_is_drawn_right_of_centre_and_junk_is_skipped():
+    person = {"kind": "pedestrian", "ahead_m": 9.85, "right_m": 1.0, "width_m": 0.5, "conf": 0.9}
+    junk = [None, {"kind": "constructor", "ahead_m": 5.0, "right_m": 0.0}, {"kind": "car", "ahead_m": "near", "right_m": 0.0}]
+    out = _run({"cmd": "boxes", "mode": "vision", "objects": junk + [person]})
+    assert out["labels"] == ["CAM PED 10m"]
+    assert out["centres"][0] > 320, out["centres"]
 
 
 def test_issue55_the_page_never_draws_from_the_planners_seeded_random():
