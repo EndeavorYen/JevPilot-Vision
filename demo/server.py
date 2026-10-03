@@ -1062,11 +1062,15 @@ async def jevpilot_no_cache(request, call_next):
 engine: Optional[DecisionEngine] = None
 
 
+_engine_lock = threading.Lock()
+
+
 def get_engine() -> DecisionEngine:
     global engine
-    if engine is None:
-        engine = DecisionEngine(use_mock=True)
-    return engine
+    with _engine_lock:  # classifier requests reach this from worker threads (#64)
+        if engine is None:
+            engine = DecisionEngine(use_mock=True)
+        return engine
 
 
 @app.get("/health")

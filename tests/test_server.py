@@ -1084,7 +1084,7 @@ def test_issue64_a_vision_frame_is_answered_while_the_classifier_waits_upstream(
     class _Slow:
         def classify_jev(self, payload):
             upstream.set()
-            _time.sleep(1.0)  # the synchronous POST to SemArbiter
+            _time.sleep(2.0)  # the synchronous POST to SemArbiter
             return {"answers": {}}
 
     class _Encoder:
@@ -1103,7 +1103,7 @@ def test_issue64_a_vision_frame_is_answered_while_the_classifier_waits_upstream(
                 return r
 
             async def see():
-                await asyncio.to_thread(upstream.wait, 2)
+                done["started"] = await asyncio.to_thread(upstream.wait, 5)
                 r = await client.post("/v1/vision", json={"image": _tiny_jpeg_data_url()})
                 done["vision"] = _time.perf_counter()
                 return r
@@ -1113,7 +1113,8 @@ def test_issue64_a_vision_frame_is_answered_while_the_classifier_waits_upstream(
         assert "vision" in v.json()
 
     asyncio.run(_scenario())
-    assert done["vision"] < done["classifier"] - 0.5, done
+    assert done["started"] is True, "the classifier was really waiting upstream"
+    assert done["vision"] < done["classifier"] - 1.0, done
 
 
 def test_issue64_a_timed_out_model_server_is_still_a_504(monkeypatch):
