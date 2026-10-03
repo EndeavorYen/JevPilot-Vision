@@ -219,6 +219,34 @@
     if (select.value === "heuristic" && window.SEMIF_DRIVE_MODE !== "heuristic") setDriveMode("heuristic", true);
     else if (select.value && select.value !== "heuristic" && window.SEMIF_DRIVE_MODE === "heuristic") setDriveMode(lastModelMode, true);
   }
+  // The steering-candidate fan (#19). The bundle draws only the chosen path unless its candidates
+  // button is pressed, and keeps that state inside its own module (a layout rebuild resets the fan
+  // from it), so the choice is restored by pressing the button once it works. ?candidates=all or
+  // ?candidates=selected wins over the browser's last choice.
+  const CANDIDATES_KEY = "semif.candidates";
+  const candidatesParam = params.get("candidates");
+  let candidatesSaved = null;
+  try {
+    candidatesSaved = localStorage.getItem(CANDIDATES_KEY);
+  } catch (_) {}
+  const wantFan = candidatesParam === "all" ? true : candidatesParam === "selected" ? false : candidatesSaved === "1";
+  let fanShown = null; // null until restored
+  function syncCandidates() {
+    const btn = document.getElementById("candidates-toggle");
+    if (!btn || typeof btn.onclick !== "function") return;
+    if (fanShown === null) {
+      if (wantFan && btn.getAttribute("aria-pressed") !== "true") btn.click();
+      fanShown = btn.getAttribute("aria-pressed") === "true";
+      return;
+    }
+    const on = btn.getAttribute("aria-pressed") === "true";
+    if (on === fanShown) return;
+    fanShown = on;
+    try {
+      localStorage.setItem(CANDIDATES_KEY, on ? "1" : "0");
+    } catch (_) {}
+  }
+
   function wireStrategy() {
     const select = document.getElementById("strategy-select");
     if (!select) return;
@@ -1386,6 +1414,11 @@
     if (painted) visionTick(true);
     if (window.SEMIF_DRIVE_MODE === "vision") updateSeenSignal();
     wireStrategy();
+    try {
+      syncCandidates();
+    } catch (_err) {
+      /* the candidates preference must not kill the drive loop */
+    }
     if (++modeFrames % 15 === 0) renderModeHealth();
     requestAnimationFrame(tick);
   }
