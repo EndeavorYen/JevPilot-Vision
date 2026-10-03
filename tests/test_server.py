@@ -1070,3 +1070,84 @@ def test_an_unreachable_model_server_is_a_gateway_error_not_a_500(monkeypatch, m
     client = TestClient(app)
     resp = client.post("/v1/classifier", json={"mode": "flat", "state": {}, "questions": {}})
     assert resp.status_code == status
+
+
+def test_issue64_a_vision_frame_is_answered_while_the_classifier_waits_upstream(monkeypatch):
+    """#64: a classifier waiting on SemArbiter must not hold the one event loop the vision path needs."""
+    import demo.server as server_module
+    import time as _time
+
+    reset_vision_slot()
+    upstream = threading.Event()
+    done: dict[str, float] = {}
+
+    class _Slow:
+        def classify_jev(self, payload):
+            upstream.set()
+            _time.sleep(1.0)  # the synchronous POST to SemArbiter
+            return {"answers": {}}
+
+    class _Encoder:
+        def infer_b64(self, image: str):
+            return {"signal": "unknown", "event": "", "backend": "stub"}
+
+    monkeypatch.setattr(server_module, "get_engine", lambda: _Slow())
+    monkeypatch.setattr("jevpilot_vision.vision.get_vision_encoder", lambda: _Encoder())
+
+    async def _scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://jev") as client:
+            async def classify():
+                r = await client.post("/v1/classifier", json={"mode": "flat", "state": {}})
+                done["classifier"] = _time.perf_counter()
+                return r
+
+            async def see():
+                await asyncio.to_thread(upstream.wait, 2)
+                r = await client.post("/v1/vision", json={"image": _tiny_jpeg_data_url()})
+                done["vision"] = _time.perf_counter()
+                return r
+
+            c, v = await asyncio.gather(classify(), see())
+        assert c.status_code == 200 and v.status_code == 200
+        assert "vision" in v.json()
+
+    asyncio.run(_scenario())
+    assert done["vision"] < done["classifier"] - 0.5, done
+
+
+def test_issue64_a_timed_out_model_server_is_still_a_504(monkeypatch):
+    import demo.server as server_module
+
+    class _Hung:
+        def classify_jev(self, payload):
+            raise httpx.ReadTimeout("SemArbiter took too long")
+
+    monkeypatch.setattr(server_module, "get_engine", lambda: _Hung())
+    r = TestClient(app).post("/v1/classifier", json={"mode": "flat", "state": {}})
+    assert r.status_code == 504 and "timed out" in r.json()["detail"]
+
+
+def test_issue64_threads_racing_for_the_first_http_client_share_one(monkeypatch):
+    import demo.server as server_module
+    import time as _time
+
+    made = []
+
+    class _Client:
+        is_closed = False
+
+        def __init__(self, timeout=None):
+            _time.sleep(0.05)
+            made.append(self)
+
+    monkeypatch.setattr(server_module.httpx, "Client", _Client)
+    engine = DecisionEngine(use_mock=True)
+    engine._http_client = None
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(engine._get_http_client())) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(made) == 1 and all(c is made[0] for c in got)

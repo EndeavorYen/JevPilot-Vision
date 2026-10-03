@@ -8,12 +8,14 @@ and Helmholtz Free Energy OOD detection.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import copy
 import json
 import logging
 import math
 import os
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -171,6 +173,7 @@ class DecisionEngine:
             "max_latency_ms": 0.0,
         }
         self._http_client: Optional[httpx.Client] = None
+        self._http_client_lock = threading.Lock()  # /v1/classifier runs in worker threads (#64)
 
         if self.use_mock:
             logger.info("DecisionEngine initialized in MOCK mode (zero GPU required).")
@@ -178,9 +181,10 @@ class DecisionEngine:
             logger.info(f"DecisionEngine initialized in LIVE mode (SemArbiter at {self.arbiter_url}).")
 
     def _get_http_client(self) -> httpx.Client:
-        if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.Client(timeout=10.0)
-        return self._http_client
+        with self._http_client_lock:
+            if self._http_client is None or self._http_client.is_closed:
+                self._http_client = httpx.Client(timeout=10.0)
+            return self._http_client
 
     def sync_scorer_device(self) -> str:
         """Record the device SemArbiter reports. A missing door stays ``remote``."""
@@ -201,9 +205,10 @@ class DecisionEngine:
         return self.device
 
     def close(self) -> None:
-        if self._http_client is not None and not self._http_client.is_closed:
-            self._http_client.close()
-            self._http_client = None
+        with self._http_client_lock:
+            if self._http_client is not None and not self._http_client.is_closed:
+                self._http_client.close()
+                self._http_client = None
 
     def _record_stat(self, latency_ms: float) -> None:
         self.stats["total_decisions"] += 1
@@ -1115,6 +1120,12 @@ def _six_column_candidates(payload: Dict[str, Any]) -> bool:
 async def classifier_endpoint(payload: Dict[str, Any]):
     if _payload_has_pixels(payload):
         raise HTTPException(status_code=422, detail="image is not accepted")
+    # The scorer blocks on SemArbiter (a synchronous POST, up to 10 s); off the event loop, so a
+    # camera frame posted meanwhile is still taken and answered (#64).
+    return await asyncio.to_thread(_classify, payload)
+
+
+def _classify(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if _six_column_candidates(payload):
             try:
