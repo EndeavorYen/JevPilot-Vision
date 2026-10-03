@@ -18,6 +18,7 @@ import { buildSky, widenShadows, placeSun, applyLight } from "./sky.js";
 import { sunDirection, gradeAt } from "./daylight.js";
 import { createPost } from "./post.js";
 import { clock, mountClock, showClock, tick } from "./clock.js";
+import { settleQuality } from "./quality.js";
 
 const legacy = window.SEMIF_SCENERY || {};
 // ?post=0 draws the main view straight to the screen, without bloom or grade.
@@ -156,6 +157,8 @@ function dressAgents(view) {
 frameHooks.push((view) => dressAgents(view));
 
 function buildCoast(view) {
+  // Settled before anything is built: the builders read gfx.quality (quality.js).
+  settleQuality(view.renderer?.getContext?.());
   resetCaches();
   // Stop the old layer's per-frame work and any upgrade it still has pending from an old map.
   view._sceneryBuild = {};

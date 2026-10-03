@@ -86,3 +86,62 @@ for (let t = 5.5; t <= 10.5; t += 0.5) seen.push(w.push(20, t));    // 5 s slow 
 for (let t = 11; t <= 20; t += 0.5) seen.push(w.push(10, t));       // never again
 out(seen.map((s, i) => s ? i : -1).filter((i) => i >= 0));""")
     assert got == [21], "the hint comes at 10.5 s, five seconds into the second slow run"
+
+
+# ---- The medium world is the world before the tiers --------------------------------------------
+
+import os  # noqa: E402
+
+from test_world_render import _render  # noqa: E402
+
+SNAPSHOT = REPO / "tests" / "fixtures" / "coast_medium_snapshot.json"
+
+# A structural fingerprint: every mesh's path, geometry class, attribute and index lengths,
+# instance count and colours, material scalars and colours, shader sources hashed. Instance
+# matrices and canvas textures are not seen by the fake kit; pixel comparisons cover those.
+_FINGERPRINT = r"""
+const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(16); };
+const val = (v) => typeof v === 'string' && v.length > 80 ? 'fnv:' + fnv(v) : v;
+const mat = (m) => Object.fromEntries(Object.entries(m || {})
+  .filter(([, v]) => v === null || ['number', 'string', 'boolean'].includes(typeof v) || (v && typeof v.hex === 'string'))
+  .map(([k, v]) => [k, v && typeof v.hex === 'string' ? v.hex : val(v)]).sort(([a], [b]) => (a < b ? -1 : 1)));
+const len = (a) => a == null ? null : (a.array?.length ?? a.length ?? null);
+const fp = (o, path) => {
+  const here = `${path}/${o.name || o.constructor?.name || '?'}`;
+  const rows = [];
+  if (o.geometry || o.material) {
+    const g = o.geometry || {};
+    rows.push({ path: here, geo: g.constructor?.name ?? null,
+      attrs: Object.fromEntries(Object.entries(g.attributes || {}).map(([k, a]) => [k, len(a)]).sort()),
+      index: len(g.index), count: o.count ?? null, colours: o.colours?.length ? fnv(o.colours.join(',')) : null,
+      mats: [].concat(o.material || []).map(mat) });
+  }
+  (o.children || []).forEach((c, i) => rows.push(...fp(c, `${here}[${i}]`)));
+  return rows;
+};
+"""
+
+
+def _medium_fingerprint():
+    return _render(
+        _FINGERPRINT
+        + "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} }, render() {},"
+        "  renderer: { getContext: () => ({ getExtension: () => null, getParameter: () => 'Intel(R) UHD Graphics' }) },"
+        "  sun: { position: { set() { return this; } }, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() } };"
+        "api.built(view);"
+        "const V = await mod('vehicles.js'); const P = await mod('people.js');"
+        "const cars = [...V.HERO_MODELS.map((m) => V.buildHero(m)), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => V.buildTrafficFor({ id }))];"
+        "out({ quality: window.SEMIF_GFX?.quality ?? null, world: fp(view.scene.children[0], ''),"
+        "  cars: cars.flatMap((c, i) => fp(c, `car${i}`)), people: [0, 1, 2, 3, 4, 5].flatMap((i) => fp(P.buildPedestrian(i), `ped${i}`)) });",
+        search="?gfx=medium",
+    )
+
+
+def test_the_medium_world_is_the_world_before_the_tiers():
+    got = _medium_fingerprint()
+    assert got["quality"] == "medium"
+    if os.environ.get("UPDATE_COAST_SNAPSHOT") == "1":
+        SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+        SNAPSHOT.write_text(json.dumps(got, indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    want = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    assert got == want, "medium must stay the world it was; refresh the snapshot only with the owner's say-so"
