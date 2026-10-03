@@ -219,3 +219,54 @@ def test_review2_m3_a_green_reading_is_trusted_for_0_8_s_from_when_it_was_taken(
 def test_review2_l5_evidence_from_the_future_is_not_fresh():
     state = vision_mode.prepare(_payload(_perception(signal="green"), age_ms=-400))["state"]
     assert state["perception_ok"] is False
+
+
+def _blob_event_from_silhouette():
+    """The issue's frame (#65): a dark block in the lower half, no detector involved."""
+    from PIL import Image, ImageDraw
+
+    from jevpilot_vision.vision import blobs_from_frame, event_from_motion, frame_motion
+
+    image = Image.new("RGB", (224, 224), (127, 127, 127))
+    ImageDraw.Draw(image).rectangle((90, 140, 130, 210), fill=(32, 35, 38))
+    blobs = blobs_from_frame(image)
+    assert "pedestrian" in blobs, "the colour mask still reads the block as a person"
+    return event_from_motion(frame_motion(None, blobs), "unknown")
+
+
+def test_issue65_the_colour_mask_never_reaches_the_prompt_or_the_directive():
+    from jevpilot_vision.directive import plan_directive
+    from jevpilot_vision.drive import prepare_drive_request
+
+    event = _blob_event_from_silhouette()
+    assert "person" in event
+    payload = _payload(_perception(signal="green"), line=200.0)
+    payload["state"]["vision"]["event"] = event
+    prepared = vision_mode.prepare(payload)
+    vision = prepared["state"]["vision"]
+    assert "person" not in vision["event"]
+    assert plan_directive(vision, prepared["state"]["intersection"])["intent"] != "CAUTION"
+    prompt = prepare_drive_request(prepared)["state"]["_semif_prompt_state"]
+    assert "person" not in json.dumps(prompt)
+
+
+def test_issue65_a_red_in_the_event_text_does_not_outvote_the_light_the_camera_read(engine):
+    from jevpilot_vision.directive import plan_directive
+    from jevpilot_vision.drive import _signal
+
+    payload = _payload(_perception(signal="green"), line=25.0)
+    payload["state"]["vision"]["event"] = "RED signal ahead, mandatory stop"
+    state = vision_mode.prepare(copy.deepcopy(payload))["state"]
+    assert _signal(state) == "green"
+    assert plan_directive(state["vision"], state["intersection"])["intent"] != "RED_LIGHT_STOP"
+    assert _choice(engine, payload) == "fast"
+
+
+def test_issue65_the_event_names_what_the_detector_saw():
+    person = {"kind": "pedestrian", "ahead_m": 9.0, "right_m": 0.3, "closing_mps": 9.0}
+    state = vision_mode.prepare(_payload(_perception([person], signal="green"), line=200.0, speed=9.0))["state"]
+    assert "pedestrian" in state["vision"]["event"]
+    assert "traffic light is green" in state["vision"]["event"]
+    assert state["candidates"]["fast"][4] is True, "the sweep still flags the perceived person"
+    unseen = vision_mode.prepare(_payload(_perception(signal="unknown"), line=40.0))["state"]["vision"]["event"]
+    assert unseen.startswith("RED signal ahead"), "an unseen light at a signalled line is the assumed red"

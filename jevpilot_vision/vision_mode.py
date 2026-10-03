@@ -147,6 +147,26 @@ def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+_EVENT_NAMES = (("pedestrian", "pedestrian"), ("car", "vehicle"), ("motorcycle", "motorcycle"))
+
+
+def perception_event(signal: str, objects: List[Dict[str, Any]]) -> str:
+    """The event line from the light Vision mode settled on and the detector's objects ahead.
+    One frame has no onset, so nothing here says "appeared"."""
+    clauses: List[str] = []
+    if signal == "red":
+        clauses.append("RED signal ahead, mandatory stop")
+    elif signal == "amber":
+        clauses.append("AMBER signal ahead")
+    elif signal == "green":
+        clauses.append("traffic light is green")
+    for kind, name in _EVENT_NAMES:
+        ahead = [o["ahead_m"] for o in objects if o.get("kind") == kind and o["ahead_m"] > 0]
+        if ahead:
+            clauses.append(f"{name} visible ahead ({min(ahead):.0f} m)")
+    return "; ".join(clauses) if clauses else "road clear ahead, maintain lane"
+
+
 def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     """The request as Vision mode may see it. Non-Vision requests come back unchanged (same object)."""
     if not is_vision(payload) or not isinstance(payload.get("state"), dict):
@@ -175,6 +195,9 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     if vision is not None:
         # What the directive and the arbiter read: the assumed red only at a signalled line.
         vision["signal"] = signal if signalled else (seen or "unknown")
+        # The encoder's event text comes from colour masks (vision.py blobs_from_frame) and SigLIP
+        # scores; in Vision mode the prompt and the directive read only this perception (#65).
+        vision["event"] = perception_event(vision["signal"], objects)
     state["perception_ok"] = ok
     state["perceived_objects"] = objects
 
