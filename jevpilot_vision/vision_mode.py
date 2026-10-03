@@ -134,6 +134,34 @@ def sweep_collision(
 
 CRAWL_MPS = 1.0  # without perception, only this slow is safe
 
+# A light read some time ago may have changed since (#38).
+AMBER_S = 2.0  # the world's rule, not a reading: every coast signal is green 8 s, amber 2 s, red 14 s (bundle signal cycle)
+DECISION_GAP_S = 1.5  # between decisions; measured in one background Chrome (#18, demo/server.py)
+STOP_DECEL_MPS2 = 2.5  # our stop brake; measured with DECISION_GAP_S (#18, demo/server.py)
+ACCEL_MPS2 = 5.0  # the bundle's speed-up toward a target (`w`, as in _model_path)
+
+
+def _time_to(dist: float, speed: float, target: float) -> float:
+    """Seconds to cover `dist` m speeding up from `speed` toward `target` at ACCEL_MPS2."""
+    v = max(target, speed)
+    t_full = (v - speed) / ACCEL_MPS2
+    d_full = (speed + v) / 2.0 * t_full
+    if d_full >= dist:
+        return (-speed + math.sqrt(speed * speed + 2.0 * ACCEL_MPS2 * dist)) / ACCEL_MPS2
+    return t_full + (dist - d_full) / v if v > 0 else math.inf
+
+
+def green_may_have_turned(target: float, speed: float, dist: float, age_s: float) -> bool:
+    """Whether speeding up to `target` on a green seen `age_s` ago leaves the car neither able to stop
+    at the line nor over it before red, had the amber begun when the frame was taken."""
+    reaction = age_s + DECISION_GAP_S
+    v_r = min(target, speed + ACCEL_MPS2 * reaction)  # speed when we could next act
+    t_acc = (v_r - speed) / ACCEL_MPS2
+    travel = (speed + v_r) / 2.0 * t_acc + v_r * (reaction - t_acc)
+    can_stop = travel + v_r * v_r / (2.0 * STOP_DECEL_MPS2) + 0.5 <= dist
+    clears = _time_to(dist, speed, target) <= AMBER_S - age_s
+    return not can_stop and not clears
+
 
 def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
@@ -165,9 +193,18 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
         reading = None  # an amber could have come and gone since (semif-layer.js SEEN_MEMORY_MS)
     seen = remembered if remembered in ("red", "amber", "green") else reading if reading in ("red", "amber", "green") else None
     signal, source = (seen, "perception") if seen else ("red", "assumed")
+    speed = _num(state.get("speed_mps")) or 0.0
+    age_s = max(0.0, (_num(state.get("vision_age_ms")) or 0.0) / 1000.0)
 
     inter = state.get("intersection")
     signalled = isinstance(inter, dict) and str(inter.get("control") or "").lower() in ("signal", "traffic_light")
+    dist = _num(inter.get("distance_to_line_m")) if signalled else None
+    if signalled and signal == "amber" and dist is not None and dist > 0:
+        # The amber may have begun when the frame was taken: at most AMBER_S - age is left. A line
+        # the car does not reach in that time is a red one (the mock's amber rule assumes a fresh
+        # amber).
+        if dist / max(speed, 0.1) > AMBER_S - age_s:
+            signal, source = "red", "amber_expiring"
     if signalled:
         inter["signal"] = signal
         inter["signal_source"] = source
@@ -178,8 +215,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     state["perception_ok"] = ok
     state["perceived_objects"] = objects
 
-    speed = _num(state.get("speed_mps")) or 0.0
-    age_s = max(0.0, (_num(state.get("vision_age_ms")) or 0.0) / 1000.0)
+    green_line = dist if signalled and signal == "green" and dist is not None and dist > 0 else None
     paths = state.get("candidate_paths") if isinstance(state.get("candidate_paths"), dict) else {}
     candidates = state.get("candidates")
     if isinstance(candidates, dict):
@@ -193,6 +229,9 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 hit = target is None or target > CRAWL_MPS  # blind: crawl or stop
             else:
                 hit = sweep_collision(vec, objects, speed, paths.get(cid), age_s)
+                # Speeding up on a green that may have turned since its frame (holding speed is left alone).
+                if green_line is not None and target is not None and target > speed:
+                    hit = hit or green_may_have_turned(target, speed, green_line, age_s)
             # The bundle's own flag is computed against the map's buildings in Vision mode.
             vec[4] = bool(vec[4]) or hit
     state["drive_mode"] = "vision"
