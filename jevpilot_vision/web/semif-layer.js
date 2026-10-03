@@ -966,87 +966,10 @@
     };
   }
 
-  function aheadOf(player, dist, lateral) {
-    const h = player.heading || 0;
-    const right = (lateral || 0);
-    return {
-      x: player.x + Math.sin(h) * dist + Math.cos(h) * right,
-      z: player.z - Math.cos(h) * dist + Math.sin(h) * right,
-    };
-  }
-
   function dist2(a, b) {
     const dx = a.x - b.x;
     const dz = a.z - b.z;
     return Math.hypot(dx, dz);
-  }
-
-  let lastInject = -1e9;
-  function injectFrustumEvents(sim, dt) {
-    if (!sim || !sim.player) return;
-    const player = sim.player;
-    sim._fsdAgents = sim._fsdAgents || [];
-    if (sim.time - lastInject > 7.5) {
-      lastInject = sim.time;
-      const roll = (sim.planRandom ? sim.planRandom() : Math.random());
-      if (roll < 0.45) {
-        const pose = aheadOf(player, 26 + roll * 12, (roll > 0.2 ? 6 : -6));
-        sim._fsdAgents.push({
-          id: `frustum-ped-${sim.time.toFixed(2)}`,
-          type: "pedestrian",
-          x: pose.x,
-          z: pose.z,
-          heading: player.heading + Math.PI / 2,
-          walking: true,
-          direction: 1,
-          speed: 1.4,
-          height: 1.7,
-          _fsd: "pedestrian",
-          walkPath: { heading: player.heading + Math.PI / 2 },
-        });
-      } else if (roll < 0.75) {
-        const pose = aheadOf(player, 22, 3.1);
-        sim._fsdAgents.push({
-          id: `frustum-park-${sim.time.toFixed(2)}`,
-          type: "car",
-          x: pose.x,
-          z: pose.z,
-          heading: player.heading,
-          speed: 0,
-          height: 1.5,
-          hazardLights: true,
-          _fsd: "parked",
-        });
-      } else {
-        const pose = aheadOf(player, 24, 3.4);
-        sim._fsdAgents.push({
-          id: `frustum-cut-${sim.time.toFixed(2)}`,
-          type: "car",
-          x: pose.x,
-          z: pose.z,
-          heading: player.heading,
-          speed: Math.max(6, (player.speed || 12) * 0.7),
-          height: 1.5,
-          _fsd: "cutin",
-          _cut: 1.6,
-        });
-      }
-    }
-
-    for (const agent of sim._fsdAgents) {
-      if (agent._fsd === "pedestrian" && agent.walking && agent.walkPath) {
-        const h = agent.walkPath.heading;
-        agent.x += Math.sin(h) * 1.6 * dt * agent.direction;
-        agent.z -= Math.cos(h) * 1.6 * dt * agent.direction;
-      }
-      if (agent._fsd === "cutin" && agent._cut > 0) {
-        const h = player.heading;
-        agent.x -= Math.cos(h) * 1.4 * dt;
-        agent.z -= Math.sin(h) * 0.2 * dt;
-        agent._cut -= dt;
-      }
-    }
-    sim._fsdAgents = sim._fsdAgents.filter((a) => dist2(a, player) < 80);
   }
 
   function drawBoxes(sim, world) {
@@ -1398,11 +1321,6 @@
             finishLap(sim, lapBefore);
           } catch (_err) {
             /* A finished lap must not kill the drive loop */
-          }
-          try {
-            injectFrustumEvents(sim, Math.min(dt || 0.016, 0.05));
-          } catch (_err) {
-            /* HUD ghosts must not kill the drive loop */
           }
           try {
             requestEgoReplan(sim, dt);
