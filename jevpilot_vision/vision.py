@@ -354,6 +354,7 @@ class VisionEncoder:
                     if "siglip" in self.model_id.lower():
                         raise
                     self._load_clip()
+            logger.info("vision: %s on %s", self.model_id, self.device)
         except Exception:
             self.backend = "stub"
             self._model = None
@@ -557,9 +558,25 @@ class VisionEncoder:
 _encoder: Optional[VisionEncoder] = None
 
 
+def vision_device(cuda: Optional[bool] = None) -> str:
+    """Where SigLIP runs (#57): SEMIF_VISION_DEVICE when set, else CUDA when there is one, as the
+    detector does (perception.pick_device); without CUDA it still runs, on the CPU."""
+    asked = os.environ.get("SEMIF_VISION_DEVICE")
+    if asked:
+        return asked
+    if cuda is None:
+        try:
+            import torch
+
+            cuda = bool(torch.cuda.is_available())
+        except Exception:
+            cuda = False
+    return "cuda" if cuda else "cpu"
+
+
 def get_vision_encoder() -> VisionEncoder:
     global _encoder
     if _encoder is None:
-        device = os.environ.get("SEMIF_VISION_DEVICE", "cpu")
+        device = vision_device()
         _encoder = VisionEncoder(device=device)
     return _encoder
