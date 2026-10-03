@@ -243,3 +243,40 @@ def test_the_coast_frame_is_measured_and_old_maps_are_not():
 def test_the_onboard_render_is_measured_in_the_layer():
     src = (REPO / "jevpilot_vision" / "web" / "semif-layer.js").read_text(encoding="utf-8")
     assert 'SEMIF_PERF.span("onboard", renderer, () => renderer.render(scene, cam))' in src
+
+
+# ---- The graphics button (gfx-panel.js) ---------------------------------------------------------
+
+def test_the_panel_offers_two_qualities_and_says_what_switching_does():
+    got = _render(
+        "const P = await mod('gfx-panel.js');"
+        "out({ medium: P.describe('medium'), high: P.describe('high') });"
+    )
+    assert "Integrated" in got["medium"] and "Discrete" in got["high"]
+
+
+def test_the_button_sits_in_the_chip_bar_on_the_coast_only():
+    got = _render(
+        "const view = { sim: { world }, scene: new Obj(), camera: { far: 1200, updateProjectionMatrix() {} }, render() {},"
+        "  renderer: { getContext: () => null },"
+        "  sun: { position: { set() { return this; } }, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() } };"
+        "api.built(view);"
+        "const bar = globalThis.__clock.parent; const coast = { bar: bar.className, kids: bar.children.map((c) => c.className), label: bar.children[0].textContent, shown: bar.children[0].style.display };"
+        "window.SEMIF_SIM = { world: { type: 'city' } }; api.built({ scene: new Obj() });"
+        "out({ coast, city: bar.children[0].style.display });"
+    )
+    assert got["coast"]["bar"] == "semif-hud-chips"
+    assert got["coast"]["kids"] == ["semif-gfx", "semif-clock"], "the graphics button sits left of the clock"
+    assert "Medium" in got["coast"]["label"] and got["coast"]["shown"] == ""
+    assert got["city"] == "none"
+
+
+def test_the_chip_bar_carries_the_clock_position_in_every_layout():
+    css = (REPO / "jevpilot_vision" / "web" / "semif-layer.css").read_text(encoding="utf-8")
+    bar = css.split(".semif-hud-chips {", 1)[1].split("}", 1)[0]
+    assert "position: fixed" in bar
+    clock = css.split(".semif-clock,", 1)[1].split("}", 1)[0]
+    assert "position: fixed" not in clock, "the bar is placed, not the clock"
+    assert "body.fsd-theme .semif-hud-chips {" in css, "the desktop layout moves the bar"
+    minimal = css.split("body.semif-minimal :is(", 1)[1].split(")", 1)[0]
+    assert ".semif-hud-chips" in minimal and ".semif-gfx-panel" in minimal

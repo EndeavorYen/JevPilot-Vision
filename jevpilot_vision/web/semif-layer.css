@@ -509,12 +509,19 @@ body.fsd-theme .touch-brake.held {
 
 /* ---- Time-of-day chip (semif-world/clock.js) ------------------------------------------------- */
 
-.semif-clock {
+.semif-hud-chips {
   position: fixed;
   top: 14px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 20;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.semif-clock,
+.semif-gfx {
   padding: 7px 16px;
   border: 1px solid var(--sol-line);
   border-radius: var(--sol-radius-pill);
@@ -530,8 +537,79 @@ body.fsd-theme .touch-brake.held {
   transition: background var(--sol-motion-fast);
 }
 
-.semif-clock:hover {
+.semif-clock:hover,
+.semif-gfx:hover {
   background: var(--sol-hover);
+}
+
+/* ---- Graphics quality (semif-world/gfx-panel.js) ----------------------------------------------- */
+
+.semif-gfx-panel {
+  position: fixed;
+  top: 56px;
+  right: 64px;
+  z-index: 30;
+  width: min(320px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border: 1px solid var(--sol-line);
+  border-radius: var(--sol-radius-md);
+  background: var(--sol-panel-solid);
+  color: var(--sol-ink);
+  font: 500 13px var(--sol-font);
+  box-shadow: var(--sol-shadow);
+}
+
+.semif-gfx-panel[hidden] {
+  display: none;
+}
+
+.semif-gfx-panel h2 {
+  margin: 0 0 8px;
+  font: 700 11px var(--sol-font);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sol-muted);
+}
+
+.semif-gfx-option,
+.semif-gfx-fps {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 6px;
+  border-radius: var(--sol-radius-sm);
+  cursor: pointer;
+}
+
+.semif-gfx-option:hover,
+.semif-gfx-fps:hover {
+  background: var(--sol-hover);
+}
+
+.semif-gfx-option input,
+.semif-gfx-fps input {
+  margin: 2px 0 0;
+  accent-color: var(--sol-accent);
+}
+
+.semif-gfx-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.semif-gfx-option b {
+  color: var(--sol-ink-strong);
+}
+
+.semif-gfx-option small,
+.semif-gfx-note {
+  color: var(--sol-muted);
+}
+
+.semif-gfx-note {
+  margin: 8px 6px 0;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* ---- Our overlay ------------------------------------------------------------------------------- */
@@ -1219,7 +1297,7 @@ button.fsd-chip:hover {
   transform: rotate(180deg) scale(0.85);
 }
 
-body.semif-minimal :is(.topbar, #fsd-status, #fsd-pip, #minimap, .semif-clock, #fsd-boxes, #fsd-stats, #decision-status, .dock-tools, #candidates-toggle, .dock-divider, .nav-divider, #remaining, #map-toggle) {
+body.semif-minimal :is(.topbar, #fsd-status, #fsd-pip, #minimap, .semif-clock, .semif-hud-chips, .semif-gfx-panel, #fsd-boxes, #fsd-stats, #decision-status, .dock-tools, #candidates-toggle, .dock-divider, .nav-divider, #remaining, #map-toggle) {
   display: none !important;
 }
 
@@ -1491,7 +1569,7 @@ body.fsd-theme .drive-header-row {
     aspect-ratio: 380 / 310;
   }
 
-  body.fsd-theme .semif-clock {
+  body.fsd-theme .semif-hud-chips {
     left: auto;
     right: 64px;
     transform: none;

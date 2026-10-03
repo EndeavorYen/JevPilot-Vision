@@ -20,6 +20,7 @@ import { createPost } from "./post.js";
 import { clock, mountClock, showClock, tick } from "./clock.js";
 import { settleQuality } from "./quality.js";
 import "./perf.js";
+import { mountGfx, showGfx, gfxTick } from "./gfx-panel.js";
 
 const legacy = window.SEMIF_SCENERY || {};
 // ?post=0 draws the main view straight to the screen, without bloom or grade.
@@ -65,6 +66,7 @@ let post = null;
 
 frameHooks.push((view, dt) => {
   tick(dt);
+  gfxTick(dt);
   const light = applyLight(view, sky, clock.hours, dt);
   updateSea(sea, light, sunDirection(clock.hours), dt);
   updateVegetation(dt);
@@ -183,6 +185,8 @@ function buildCoast(view) {
   widenShadows(view.sun);
   mountClock();
   showClock(true);
+  mountGfx();
+  showGfx(true);
   applyLight(view, sky, clock.hours, 0);
   return root;
 }
@@ -215,6 +219,7 @@ window.SEMIF_SCENERY = {
     if (!onCoast()) {
       setFar(view, BUNDLE_FAR);
       showClock(false);
+      showGfx(false);
       return legacy.built?.(view);
     }
     try {
