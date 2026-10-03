@@ -1,0 +1,60 @@
+{
+ "medium": {
+  "frames": 600,
+  "fps_p50": 22.27,
+  "fps_p5": 16.03,
+  "frame_ms_p50": 44.9,
+  "gpu_timer": true,
+  "gpu_ms_p50": {
+   "main": 0.62,
+   "onboard": 0.73
+  },
+  "calls_p50": {
+   "main": 224,
+   "onboard": 541
+  },
+  "triangles_p50": {
+   "main": 2279052,
+   "onboard": 2467024
+  },
+  "nested": 0,
+  "canvas": [
+   1257,
+   1168
+  ],
+  "dpr": 2.25,
+  "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5080 (0x00002C02) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "quality_seen": "medium",
+  "url": "http://localhost:8790/jevpilot/?minimal=0&seed=895794&world=coast:festival&mode=privileged&gfx=medium&time=16:30&daycycle=0",
+  "seconds": 60
+ },
+ "high": {
+  "frames": 600,
+  "fps_p50": 21.65,
+  "fps_p5": 15.5,
+  "frame_ms_p50": 46.2,
+  "gpu_timer": true,
+  "gpu_ms_p50": {
+   "main": 0.65,
+   "onboard": 0.72
+  },
+  "calls_p50": {
+   "main": 246,
+   "onboard": 544
+  },
+  "triangles_p50": {
+   "main": 2266308,
+   "onboard": 2420836
+  },
+  "nested": 0,
+  "canvas": [
+   1257,
+   1168
+  ],
+  "dpr": 2.25,
+  "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5080 (0x00002C02) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "quality_seen": "high",
+  "url": "http://localhost:8790/jevpilot/?minimal=0&seed=895794&world=coast:festival&mode=privileged&gfx=high&time=16:30&daycycle=0",
+  "seconds": 60
+ }
+}

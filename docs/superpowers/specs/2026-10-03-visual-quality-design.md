@@ -67,6 +67,18 @@
 - 高檔預算：在 5080、1080p 上 GPU p50 ≤ 8 ms（含車載相機）。推導：中階獨顯（約 RTX 3060 等級）以約 3 倍慢估計（估計值，非量測），仍能在 60 fps 的 16.7 ms 內完成 GPU 工作並留餘裕給 CPU。
 - 每個高檔 PR 附基準 JSON，改前改後並列；中檔數字必須不變（容許量測雜訊 ±5%）。
 
+**第 0 項實測（2026-10-03，`docs/visual/visual-quality/perf/2026-10-03-baseline.json`）：** RTX 5080、背景 debug Chrome，canvas 1257×1168（DPR 2.25；chrome-cdp-ex 無法設定視窗大小，所以不是 1920×1080），seed 895794、節慶據點、16:30、Privileged、自駕。
+
+| | fps p50 | fps p5 | 幀時間 p50 | GPU 主畫面 p50 | GPU 車載 p50 | draw call 主畫面／車載 | 三角形 主畫面／車載 |
+|---|---|---|---|---|---|---|---|
+| 中 | 22.3 | 16.0 | 44.9 ms | 0.62 ms | 0.73 ms | 224／541 | 2.28 M／2.47 M |
+| 高 | 21.7 | 15.5 | 46.2 ms | 0.65 ms | 0.72 ms | 246／544 | 2.27 M／2.42 M |
+
+- 兩檔目前是同一個世界，差異在 ±5% 內。
+- `EXT_disjoint_timer_query_webgl2` 可用；`nested` 為 0，車載相機與主畫面分開量得到。GPU 毫秒在不同次之間差很多（15 秒的 smoke run 主畫面 4.9 ms），只當相對參考。
+- **瓶頸在主執行緒，不在 GPU：** 同一個分頁空轉的 `requestAnimationFrame` 是 121 fps，模擬只有約 22 fps。5 秒抽樣：車載相機的 render 佔主執行緒約 400 ms／s、`readRenderTargetPixels` 約 145 ms／s，主畫面約 120 ms／s。原因另開 issue 分析，不在本項處理。
+- 「中檔 1080p 內顯 30 fps」目前達不到，連 5080 都只有約 22 fps；在主執行緒問題解決之前，3 ms／8 ms 的 GPU 預算不是限制因素。
+
 ## 5. 高檔的質感子項目
 
 每項一個 issue、一個 PR，只動高檔路徑。
