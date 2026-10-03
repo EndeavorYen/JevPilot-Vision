@@ -10,12 +10,15 @@
     root.SEMIF_VISION_PACE = factory();
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  // Well past any answer seen so far: evidence age p95 was 1.3 s even with frames queued behind
+  // each other before this pacing (#42 measurement, RTX 5080), and the first RT-DETR call warms up.
   const STALE_MS = 5000;
 
   function createVisionPacer(opts) {
     const now = (opts && opts.now) || (() => performance.now());
     let current = 0; // the ticket of the request that is out, 0 when none
     let since = 0;
+    let controller = null; // aborts the request when it is given up, so connections do not pile up
     let issued = 0;
     const counts = { grabs: 0, skipped: 0, stale: 0 };
 
@@ -27,7 +30,11 @@
           counts.skipped++;
           return false;
         }
-        if (current) counts.stale++;
+        if (current) {
+          counts.stale++;
+          if (controller) controller.abort();
+        }
+        controller = typeof AbortController === "function" ? new AbortController() : null;
         current = ++issued;
         since = t;
         counts.grabs++;
@@ -35,6 +42,10 @@
       },
       ticket() {
         return current;
+      },
+      // For the request's fetch: aborted if the request is given up.
+      signal() {
+        return controller ? controller.signal : undefined;
       },
       // An answer or a failure frees the slot; one from a request already given up does not.
       end(ticket) {

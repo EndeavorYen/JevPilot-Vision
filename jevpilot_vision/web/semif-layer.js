@@ -297,7 +297,7 @@
   const visionOn = params.get("vision") !== "0";
   const visionPacer = window.SEMIF_VISION_PACE
     ? window.SEMIF_VISION_PACE.createVisionPacer()
-    : { tryBegin: () => true, ticket: () => 0, end() {}, stats: () => null };
+    : { tryBegin: () => true, ticket: () => 0, signal: () => undefined, end() {}, stats: () => null };
   window.SEMIF_VISION_PACER = visionPacer;
   const lapOnce = params.get("lap") === "1";
   window.SEMIF_VISION = null;
@@ -1453,6 +1453,7 @@
         const tVis = performance.now();
         const res = await origFetch("/v1/vision", {
           method: "POST",
+          signal: visionPacer.signal(),
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ frames: frames, t_ms: tGrab }),
         });

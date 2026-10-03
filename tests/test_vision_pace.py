@@ -76,3 +76,18 @@ def test_the_layer_asks_the_pacer_before_it_grabs_and_always_releases():
 def test_the_page_loads_the_pacer_before_the_layer():
     html = INDEX.read_text(encoding="utf-8")
     assert html.index("semif-vision-pace.js") < html.index("semif-layer.js")
+
+
+def test_a_given_up_request_is_aborted_so_connections_do_not_pile_up():
+    got = _node("""
+let t = 0; const p = P.createVisionPacer({ now: () => t });
+p.tryBegin(); const first = p.signal();
+t += 6000; p.tryBegin(); const second = p.signal();
+out({ firstAborted: first.aborted, secondAborted: second.aborted, distinct: first !== second });""")
+    assert got == {"firstAborted": True, "secondAborted": False, "distinct": True}
+
+
+def test_the_layer_hands_the_abort_signal_to_its_vision_post():
+    js = LAYER_JS.read_text(encoding="utf-8")
+    post = js.split('origFetch("/v1/vision", {', 1)[1].split("});", 1)[0]
+    assert "signal: visionPacer.signal()" in post
