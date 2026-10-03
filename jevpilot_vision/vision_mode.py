@@ -134,6 +134,36 @@ def sweep_collision(
 
 CRAWL_MPS = 1.0  # without perception, only this slow is safe
 
+# Following distance (#37). The 3 s sweep assumes the car ahead keeps its speed; a following rule must
+# leave room for it to brake, counted from when we could next change our mind.
+DECISION_GAP_S = 1.5  # between decisions; measured in one background Chrome (#18, demo/server.py)
+STOP_DECEL_MPS2 = 2.5  # our stop brake; measured with DECISION_GAP_S (#18, demo/server.py)
+LEAD_DECEL_MPS2 = 6.0  # assumed: the car ahead brakes hard, short of an emergency stop
+FOLLOW_MARGIN_M = 2.0  # left between bumpers once both have stopped
+
+
+def following_limit(objects: List[Dict[str, Any]], speed: float, age_s: float) -> Optional[float]:
+    """The fastest speed at which we can still stop behind the nearest car in our lane if it brakes
+    now: seen `age_s` ago and acted on again at most DECISION_GAP_S later. None: no car ahead.
+
+    At speed v we cover v * reaction and v^2 / (2 * STOP_DECEL_MPS2) braking; the car ahead covers
+    its own braking distance; MARGIN is left. The limit is the v where that just fits the gap."""
+    leads = [o for o in objects if o.get("kind") in ("car", "motorcycle") and o["ahead_m"] > 0 and abs(o["right_m"]) <= LANE_HALF_M]
+    if not leads:
+        return None
+    lead = min(leads, key=lambda o: o["ahead_m"])
+    closing = lead.get("closing_mps")
+    closing = speed if closing is None else min(closing, speed)  # unknown: standing; never reversing at us
+    lead_v = max(0.0, speed - closing)
+    gap = lead["ahead_m"] + CAMERA_AHEAD_M - closing * age_s - (EGO_HALF[0] + OBJECT_HALF[lead["kind"]][0])
+    room = gap - FOLLOW_MARGIN_M + lead_v * lead_v / (2.0 * LEAD_DECEL_MPS2)
+    if room <= 0:
+        return 0.0
+    reaction = age_s + DECISION_GAP_S
+    b = STOP_DECEL_MPS2
+    # v^2 / (2b) + reaction * v - room = 0
+    return -b * reaction + math.sqrt((b * reaction) ** 2 + 2.0 * b * room)
+
 
 def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
@@ -181,6 +211,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     speed = _num(state.get("speed_mps")) or 0.0
     age_s = max(0.0, (_num(state.get("vision_age_ms")) or 0.0) / 1000.0)
     paths = state.get("candidate_paths") if isinstance(state.get("candidate_paths"), dict) else {}
+    limit = following_limit(objects, speed, age_s) if ok else None
     candidates = state.get("candidates")
     if isinstance(candidates, dict):
         for cid, vec in candidates.items():
@@ -193,6 +224,8 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 hit = target is None or target > CRAWL_MPS  # blind: crawl or stop
             else:
                 hit = sweep_collision(vec, objects, speed, paths.get(cid), age_s)
+                # A candidate that heads for a speed we could not stop from behind the car ahead.
+                hit = hit or (limit is not None and target is not None and target > limit)
             # The bundle's own flag is computed against the map's buildings in Vision mode.
             vec[4] = bool(vec[4]) or hit
     state["drive_mode"] = "vision"
