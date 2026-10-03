@@ -253,3 +253,63 @@ def test_issue37_the_mock_drops_back_from_a_close_lead(engine):
     lead = {"kind": "car", "ahead_m": 32.1, "right_m": 0.1, "closing_mps": 7.62}
     cands = {"fast": [13.6, 0.0, 0.1, 0.0, False, False], "mid": [9.0, 0.0, 0.2, 0.0, False, False], "slow": [4.0, 0.0, 0.3, 0.0, False, False]}
     assert _choice(engine, _payload(_perception([lead], signal="green"), candidates=cands, line=200.0, speed=13.2, age_ms=584)) == "slow"
+
+
+def _with_paths(lead, speed, cands, paths, age_ms=300):
+    payload = _payload(_perception([lead], signal="green"), candidates=cands, line=200.0, speed=speed, age_ms=age_ms)
+    payload["state"]["candidate_paths"] = paths
+    return {k: v[4] for k, v in vision_mode.prepare(payload)["state"]["candidates"].items()}
+
+
+def _path(speed, lateral_at):
+    """[t, ahead, right, heading] every 0.2 s for 3 s; `lateral_at(ahead)` gives the offset."""
+    pts = []
+    for k in range(1, 16):
+        t = 0.2 * k
+        a = speed * t
+        pts.append([round(t, 1), round(a, 2), round(lateral_at(a), 3), 0.0])
+    return pts
+
+
+def test_issue37_review_h_a_candidate_that_goes_round_a_parked_car_is_not_held_behind_it():
+    """Review High: stopped behind a parked car, the swerve that clears it must stay open."""
+    parked = {"kind": "car", "ahead_m": 12.0, "right_m": 0.0, "closing_mps": None}
+    cands = {"swerve": [3.0, -0.3, 0.1, 0.0, False, False], "stay": [3.0, 0.0, 0.1, 0.0, False, False]}
+    paths = {"swerve": _path(3.0, lambda a: -min(3.5, a * 0.6)), "stay": _path(3.0, lambda a: 0.0)}
+    assert _with_paths(parked, 0.5, cands, paths) == {"swerve": False, "stay": True}
+
+
+def test_issue37_review_m_on_a_curve_the_lane_is_where_the_path_goes():
+    """The car ahead on a bend sits off our straight line but on our path; one beside the straight
+    line but off the path is in the next lane."""
+    cands = {"go": [10.0, 0.2, 0.1, 0.0, False, False]}
+    bend = {"go": _path(10.0, lambda a: 0.01 * a * a)}  # 4 m right at 20 m ahead
+    on_bend = {"kind": "car", "ahead_m": 20.0, "right_m": 4.0, "closing_mps": 10.0}
+    beside = {"kind": "car", "ahead_m": 20.0, "right_m": -1.5, "closing_mps": 10.0}  # within 1.75 m of the straight line
+    assert _with_paths(on_bend, 10.0, cands, bend) == {"go": True}
+    assert _with_paths(beside, 10.0, cands, bend) == {"go": False}
+
+
+def test_issue37_review_the_nearest_lead_in_our_lane_sets_the_limit():
+    near = {"kind": "motorcycle", "ahead_m": 15.0, "right_m": 0.0, "closing_mps": None}
+    far = {"kind": "car", "ahead_m": 60.0, "right_m": 0.0, "closing_mps": 0.0}
+    behind = {"kind": "car", "ahead_m": -6.0, "right_m": 0.0, "closing_mps": 0.0}
+    limit = vision_mode.following_limit([far, near, behind], 5.0, 0.0)
+    gap = 15.0 + vision_mode.CAMERA_AHEAD_M - vision_mode.EGO_HALF[0] - vision_mode.OBJECT_HALF["motorcycle"][0]
+    room = gap - vision_mode.FOLLOW_MARGIN_M
+    b, r = vision_mode.STOP_DECEL_MPS2, vision_mode.DECISION_GAP_S
+    assert limit == pytest.approx(-b * r + (b * b * r * r + 2 * b * room) ** 0.5)
+    assert vision_mode.following_limit([behind], 5.0, 0.0) is None
+    touching = {"kind": "car", "ahead_m": 5.0, "right_m": 0.0, "closing_mps": None}
+    assert vision_mode.following_limit([touching], 0.0, 0.0) == 0.0
+
+
+def test_issue37_review_l_the_evidence_age_is_counted_once():
+    """The lead may have started braking when the frame was taken: the gap is as seen, and the age
+    is part of the reaction time (not also taken off the gap)."""
+    lead = [{"kind": "car", "ahead_m": 40.0, "right_m": 0.0, "closing_mps": None}]  # standing
+    young, old = vision_mode.following_limit(lead, 12.0, 0.0), vision_mode.following_limit(lead, 12.0, 0.5)
+    b = vision_mode.STOP_DECEL_MPS2
+    room = 40.0 + vision_mode.CAMERA_AHEAD_M - vision_mode.EGO_HALF[0] - vision_mode.OBJECT_HALF["car"][0] - vision_mode.FOLLOW_MARGIN_M
+    assert old == pytest.approx(-b * 2.0 + (b * b * 4.0 + 2 * b * room) ** 0.5)
+    assert young > old
