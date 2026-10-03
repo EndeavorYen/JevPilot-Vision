@@ -13,7 +13,13 @@
   async function readPixels(renderer, target, w, h) {
     const pixels = new Uint8Array(w * h * 4);
     if (renderer && renderer.readRenderTargetPixelsAsync) {
-      await renderer.readRenderTargetPixelsAsync(target, 0, 0, w, h, pixels);
+      const pending = renderer.readRenderTargetPixelsAsync(target, 0, 0, w, h, pixels);
+      // three.js leaves its PIXEL_PACK_BUFFER bound through the fence wait, and WebGL2 refuses a
+      // plain readPixels while one is bound: the PIP's synchronous read would come back black.
+      // It binds the buffer again itself when the fence signals.
+      const gl = renderer.getContext && renderer.getContext();
+      if (gl && gl.bindBuffer) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      await pending;
     } else if (renderer && renderer.readRenderTargetPixels) {
       renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
     }

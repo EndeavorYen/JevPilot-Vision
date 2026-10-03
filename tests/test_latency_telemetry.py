@@ -150,7 +150,7 @@ def test_overlay_wires_live_telemetry_hooks():
     assert "res.ok" in fetch_block
     vision_block = js.split("async function visionTick")[1].split("if (visionOn)")[0]
     assert "recordVision" in vision_block
-    assert "grabFrame" in vision_block
+    assert "grabSurround" in vision_block
     assert "res.ok" in vision_block
     assert "data.error" in vision_block
 

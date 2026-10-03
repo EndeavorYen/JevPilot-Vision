@@ -1436,8 +1436,7 @@
     } catch (_err) {
       /* The onboard view must not kill the drive loop */
     }
-    if (painted) visionTick(true);
-    else if (!pipDue) visionTick(false);
+    visionTick(); // the pacer decides whether the server can take frames now
     if (window.SEMIF_DRIVE_MODE === "vision") updateSeenSignal();
     wireStrategy();
     try {
@@ -1459,26 +1458,29 @@
 
   window.SEMIF_GRAB_FRAME = grabFrame;
 
-  // Front comes from the painted PIP; right, rear and left (and the narrow camera in Vision mode)
-  // render off-screen. Every view renders now, in one instant of the world, and queues its pixel
-  // read on the GPU at once (semif-capture.js); waiting and JPEG encoding happen after, off the
-  // main thread's critical path. `front` is a promise of the PIP's JPEG, taken before the renders.
-  async function grabSurround(front) {
-    if (!front) return null;
+  // Front, right, rear and left (and the narrow camera in Vision mode). Every view renders now, in
+  // one instant of the world, and queues its pixel read on the GPU at once (semif-capture.js); the
+  // waiting and the JPEG encoding happen after, off the main thread's critical path. The front view
+  // is painted into the PIP canvas, so the preview shows what Vision was sent.
+  async function grabSurround() {
     const world = window.SEMIF_WORLD;
     const capture = window.SEMIF_CAPTURE;
-    const views = SURROUND_SIDES.map(([name, yaw]) => [name, yaw, PIP_W, PIP_H, ONBOARD_VFOV, 0.55]);
+    const views = [["front", 0, FRONT_W, FRONT_H, ONBOARD_VFOV, FRONT_JPEG]].concat(
+      SURROUND_SIDES.map(([name, yaw]) => [name, yaw, PIP_W, PIP_H, ONBOARD_VFOV, 0.55])
+    );
     if (window.SEMIF_DRIVE_MODE === "vision") views.push(["narrow", 0, FRONT_W, FRONT_H, NARROW_VFOV, FRONT_JPEG]);
     const reads = [];
     for (const [name, yaw, w, h, vfov, quality] of views) {
       const shot = renderToTarget(world, yaw, w, h, vfov);
       if (!shot) return null;
-      reads.push({ name, w, h, quality, pixels: capture.readPixels(shot.renderer, shot.target, w, h) });
+      const pixels = capture.readPixels(shot.renderer, shot.target, w, h);
+      pixels.catch(() => {}); // awaited below; after a failure the rest are not, and stay quiet
+      reads.push({ name, w, h, quality, pixels });
     }
-    const frames = { front: await front };
+    const frames = {};
     const encodes = [];
     for (const read of reads) {
-      const canvas = surroundCanvas(read.name, read.w, read.h);
+      const canvas = read.name === "front" && pipCanvas ? pipCanvas : surroundCanvas(read.name, read.w, read.h);
       paintOnboardPixels(await read.pixels, canvas, read.w, read.h);
       encodes.push(capture.encodeJpeg(canvas, read.quality).then((url) => (frames[read.name] = url)));
     }
@@ -1486,7 +1488,7 @@
     return frames;
   }
 
-  async function visionTick(alreadyPainted) {
+  async function visionTick() {
     if (!visionOn) {
       visionEl.textContent = "VISION off";
       return;
@@ -1495,15 +1497,13 @@
     // thrown away there, after costing four renders, reads and encodes here.
     if (!visionPacer.tryBegin()) return;
     const ticket = visionPacer.ticket();
+    const signal = visionPacer.signal();
     try {
+      // The moment of the renders; grab_ms runs to when the frames are encoded (#42 item 2).
       const tGrab = performance.now();
       let frames = null;
       try {
-        frames = await grabSurround(
-          alreadyPainted && pipCanvas
-            ? window.SEMIF_CAPTURE.encodeJpeg(pipCanvas, FRONT_JPEG)
-            : grabFrame()
-        );
+        frames = await grabSurround();
       } catch (_err) {
         visionEl.textContent = "VISION error";
         return;
@@ -1517,7 +1517,7 @@
         const tVis = performance.now();
         const res = await origFetch("/v1/vision", {
           method: "POST",
-          signal: visionPacer.signal(),
+          signal: signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ frames: frames, t_ms: tGrab }),
         });

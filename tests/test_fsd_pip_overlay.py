@@ -694,7 +694,7 @@ if (spec.cmd === "cstats") {
       outputColorSpace: "srgb",
       setRenderTarget() {},
       render() {},
-      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 5) readSizes.push([w, h]); buf.fill(8); },
+      readRenderTargetPixels(_t, _x, _y, w, h, buf) { if (readSizes.length < 6) readSizes.push([w, h]); buf.fill(8); },
     },
   };
   const readSizes = [];
@@ -706,7 +706,7 @@ if (spec.cmd === "cstats") {
   const paint = renderer.render;
   renderer.render = function (_scene, cam) {
     renders += 1;
-    if (surroundLooks.length < 5 && cam && cam.look) {
+    if (surroundLooks.length < 6 && cam && cam.look) {
       surroundLooks.push({
         dx: cam.look.x - cam.position.x,
         dz: cam.look.z - cam.position.z,
@@ -1077,13 +1077,14 @@ def test_each_display_frame_posts_four_surround_jpegs():
     """Live tick posts one /v1/vision with four camera JPEGs per painted onboard frame."""
     pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
     assert pumped["posts"] == 120
-    assert pumped["renders"] == 120 * 4
+    # four cameras per capture, plus the 15 Hz PIP repaint (31 in 2 s at most; #42 item 3)
+    assert 120 * 4 + 25 <= pumped["renders"] <= 120 * 4 + 31
     body = pumped["bodies"][0]
     assert body["keys"] == ["frames", "t_ms"], "frames carry the moment they were grabbed (#18)"
     assert body["frames"] == ["front", "right", "rear", "left"]
     assert body["front"] == "data:image/jpeg;base64,ONBOARD"
     # heading pi/2 faces +x; right, rear and left turn clockwise from there
-    looks = pumped["yaws"][:4]
+    looks = pumped["yaws"][1:5]  # render 0 is the PIP repaint
     directions = [(round(look["dx"]), round(look["dz"])) for look in looks]
     assert directions == [(25, 0), (0, 25), (-25, 0), (0, -25)]
     hfov = [2 * math.degrees(math.atan(math.tan(math.radians(look["fov"] / 2)) * PIP_W / PIP_H)) for look in looks]
@@ -1092,7 +1093,8 @@ def test_each_display_frame_posts_four_surround_jpegs():
     assert 700 not in pumped["intervals"]
     assert pumped["fps"] == "15 FPS", "the PIP is a 15 Hz preview (#42 item 3)"
     # #18: the front camera, which perception reads, renders at 640x360; the other three at 320x180.
-    assert pumped["readSizes"][:4] == [[640, 360], [320, 180], [320, 180], [320, 180]]
+    # read 0 is the PIP repaint; the capture reads front 640x360 then three 320x180 sides
+    assert pumped["readSizes"][:5] == [[640, 360], [640, 360], [320, 180], [320, 180], [320, 180]]
 
 
 def test_late_older_vision_does_not_replace_newer_evidence():
@@ -1151,8 +1153,8 @@ def test_pip_shows_the_fixed_onboard_camera_not_the_player_view():
     assert any(op["op"] == "putImageData" for op in grabbed["ops"])
     assert not any(op["op"] == "drawImage" for op in grabbed["ops"])
     js = OVERLAY_JS.read_text(encoding="utf-8")
-    vision = js.split("async function visionTick")[1].split("if (visionOn)")[0]
-    assert "grabFrame()" in vision
+    # The front frame comes through the async capture now, not grabFrame() (#42 review M1):
+    # tests/test_capture.py pins that.
 
 
 def test_v_and_header_toggle_without_stealing_seed_input():
@@ -1255,8 +1257,9 @@ def test_vision_mode_adds_a_narrow_forward_camera_for_far_lights():
     """#18: in Vision mode a fifth, narrow (40 degree) forward camera goes with the four, at 640x360."""
     pumped = _run({"cmd": "upload", "vision": "1", "mode": "vision", "frames": 3})
     assert pumped["bodies"][0]["frames"] == ["front", "right", "rear", "left", "narrow"]
-    assert pumped["readSizes"][4] == [640, 360]
-    narrow = pumped["yaws"][4]
+    # render 0 is the 15 Hz PIP repaint (#42 item 3); the capture is front, right, rear, left, narrow
+    assert pumped["readSizes"][5] == [640, 360]
+    narrow = pumped["yaws"][5]
     hfov = 2 * math.degrees(math.atan(math.tan(math.radians(narrow["fov"] / 2)) * PIP_W / PIP_H))
     assert abs(hfov - 40.0) < 0.5
     assert (round(narrow["dx"]), round(narrow["dz"])) == (25, 0), "it looks straight ahead"
@@ -1397,6 +1400,6 @@ def test_issue42_the_onboard_pip_repaints_at_15_hz_not_every_frame():
 
 def test_issue42_vision_grabs_on_any_frame_the_server_can_take_not_only_on_pip_frames():
     """Between PIP repaints, a free vision slot still grabs at once: the front frame then comes
-    from grabFrame(), so the 15 Hz preview never delays the evidence."""
+    from the async capture, so the 15 Hz preview never delays the evidence."""
     pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
     assert pumped["posts"] == 120, "the harness's server answers at once, so every frame can grab"

@@ -77,3 +77,38 @@ def test_the_layer_renders_every_view_before_it_waits_and_queues_each_read_befor
 def test_the_page_loads_the_capture_helpers_before_the_layer():
     html = INDEX.read_text(encoding="utf-8")
     assert html.index("semif-capture.js") < html.index("semif-layer.js")
+
+
+def test_the_pack_buffer_three_leaves_bound_is_unbound_before_the_wait():
+    """three.js binds a PIXEL_PACK_BUFFER for the async read and keeps it bound through the fence
+    wait; any synchronous readPixels in that window (the PIP) fails and paints black (#42 review)."""
+    got = _node("""
+(async () => {
+  let bound = 'pbo';
+  const gl = { PIXEL_PACK_BUFFER: 0x88EB, bindBuffer(target, buf) { if (target === 0x88EB) bound = buf; } };
+  let boundDuringWait = null;
+  const renderer = { getContext: () => gl,
+    readRenderTargetPixelsAsync: (t, x, y, w, h, buf) => { bound = 'pbo'; return new Promise((r) => setTimeout(() => { boundDuringWait = bound; r(buf); }, 0)); } };
+  await C.readPixels(renderer, {}, 1, 1);
+  out({ boundDuringWait });
+})();""")
+    assert got["boundDuringWait"] is None
+
+
+def test_the_front_camera_is_read_and_encoded_like_the_others():
+    """#42 review M1: the front frame used to come from grabFrame() (sync read, toDataURL) on most
+    captures; now every view goes through the async read and toBlob."""
+    js = LAYER_JS.read_text(encoding="utf-8")
+    grab = js.split("async function grabSurround(", 1)[1].split("\n  }\n", 1)[0]
+    assert '["front", 0, FRONT_W, FRONT_H' in grab
+    vision = js.split("async function visionTick(", 1)[1].split("\n  }\n\n", 1)[0]
+    assert "grabFrame()" not in vision and "toDataURL" not in vision
+
+
+def test_a_failed_read_never_leaves_an_unhandled_rejection_and_the_abort_signal_is_taken_first():
+    js = LAYER_JS.read_text(encoding="utf-8")
+    grab = js.split("async function grabSurround(", 1)[1].split("\n  }\n", 1)[0]
+    assert ".catch(() => {})" in grab, "queued reads that are never awaited after a failure are handled"
+    vision = js.split("async function visionTick(", 1)[1].split("\n  }\n\n", 1)[0]
+    assert vision.index("const signal = visionPacer.signal();") < vision.index("grabSurround("), "the signal belongs to this request"
+    assert "signal: signal" in vision
