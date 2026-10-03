@@ -426,7 +426,7 @@ def test_issue39_the_evaluation_closes_its_tab_and_keeps_an_anchor(monkeypatch, 
     cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
              "--out", str(tmp_path / "runs.jsonl")])
     assert not chrome.quit, "Chrome kept running: an anchor page stayed"
-    assert [p["url"] for p in chrome.pages] == ["http://localhost:8768/openapi.json"], chrome.pages
+    assert [p["url"] for p in chrome.pages] == ["about:blank"], chrome.pages  # the anchor (#88)
     assert len(chrome.closed) == 1 and seen and all(t == seen[0] for t in seen)
 
 
@@ -546,6 +546,29 @@ def test_issue53_a_tab_with_company_is_simply_closed(monkeypatch):
     _with_chrome(monkeypatch, chrome, [])
     cl.close_tab({"target": "OURS0001", "id": ours["id"]})
     assert chrome.pages == [other], "no extra anchor when another page keeps Chrome alive"
+
+
+def test_issue88_an_edge_internal_page_does_not_keep_chrome_alive(monkeypatch):
+    """edge://extensions closes itself after a run; counting it as company let Edge quit (#88)."""
+    ours = {"id": "OURS0001" + "A" * 24, "url": "http://localhost:8768/jevpilot/?minimal=0"}
+    internal = {"id": "EDGE0001" + "C" * 24, "url": "edge://extensions/"}
+    chrome = _FakeChrome([internal, ours])
+    _with_chrome(monkeypatch, chrome, [])
+    cl.close_tab({"target": "OURS0001", "id": ours["id"]})
+    assert [p["url"] for p in chrome.pages] == ["edge://extensions/", "about:blank"], chrome.pages
+
+
+def test_issue88_the_anchor_is_a_new_blank_page_and_only_web_pages_count(monkeypatch):
+    chrome = _FakeChrome([{"id": "EDGE0001" + "C" * 24, "url": "edge://newtab/"}])
+    _with_chrome(monkeypatch, chrome, [])
+    cl.ensure_anchor("http://localhost:8768")
+    assert [p["url"] for p in chrome.pages] == ["edge://newtab/", "about:blank"], "opened through /json/new"
+    cl.ensure_anchor("http://localhost:8768")
+    assert len(chrome.pages) == 2, "a blank page is already an anchor"
+    web = _FakeChrome([{"id": "WEB00001" + "D" * 24, "url": "https://example.com/"}])
+    _with_chrome(monkeypatch, web, [])
+    cl.ensure_anchor("http://localhost:8768")
+    assert len(web.pages) == 1
 
 
 # ---- Graphics quality (docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3) ---------
