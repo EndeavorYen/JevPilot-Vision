@@ -555,7 +555,6 @@ if (spec.cmd === "cstats") {
     player,
     pedestrians: spec.ped ? [spec.ped] : [],
     traffic: [],
-    _fsdAgents: spec.agents || [],
     step() {},
     lastDecisionState: spec.decision || null,
     decisionState() {
@@ -903,6 +902,22 @@ if (spec.cmd === "cstats") {
     endZ: end.z,
     s: player.s,
   }));
+} else if (spec.cmd === "rng") {
+  // #55: the page must not draw from the planner's seeded random; the bundle owns that sequence.
+  let draws = 0;
+  const sim = {
+    time: 0,
+    player: { x: 0, z: 0, heading: 0, speed: 10 },
+    pedestrians: [],
+    traffic: [],
+    planRandom() { draws += 1; return 0.5; },
+    step(dt) { sim.time += dt; },
+  };
+  window.SEMIF_SIM = sim;
+  window.SEMIF_WORLD = {};
+  window.__raf();
+  for (let i = 0; i < 1500; i++) sim.step(0.02);
+  process.stdout.write(JSON.stringify({ time: sim.time, draws, agents: "_fsdAgents" in sim, wrapped: sim._pdDt === 0.02 }));
 } else if (spec.cmd === "candidates") {
   // #19: the bundle's candidates button appears once its module has run, and only then gets its
   // handler; pressing it flips aria-pressed, as main-*.js does.
@@ -1404,3 +1419,12 @@ def test_issue42_vision_grabs_on_any_frame_the_server_can_take_not_only_on_pip_f
     from the async capture, so the 15 Hz preview never delays the evidence."""
     pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
     assert pumped["posts"] == 120, "the harness's server answers at once, so every frame can grab"
+
+
+def test_issue55_the_page_never_draws_from_the_planners_seeded_random():
+    """Same seed, same drive: only the bundle consumes planRandom (30 s of steps, 0 draws)."""
+    out = _run({"cmd": "rng"})
+    assert out["wrapped"] is True, "the page's step wrapper ran (else 0 draws proves nothing)"
+    assert out["time"] > 29.9
+    assert out["draws"] == 0
+    assert out["agents"] is False, "no ghost agents that nothing reads"
