@@ -131,7 +131,7 @@ def _medium_fingerprint():
         "  sun: { position: { set() { return this; } }, target: { position: { set() {} } }, shadow: { camera: { updateProjectionMatrix() {} } }, color: new Color() } };"
         "api.built(view);"
         "const V = await mod('vehicles.js'); const P = await mod('people.js');"
-        "const cars = [...V.HERO_MODELS.map((m) => V.buildHero(m)), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => V.buildTrafficFor({ id }))];"
+        "const cars = [...V.PROCEDURAL_HEROES.map((m) => V.buildHero(m)), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((id) => V.buildTrafficFor({ id }))];"
         "out({ quality: window.SEMIF_GFX?.quality ?? null, world: fp(view.scene.children[0], ''),"
         "  cars: cars.flatMap((c, i) => fp(c, `car${i}`)), people: [0, 1, 2, 3, 4, 5].flatMap((i) => fp(P.buildPedestrian(i), `ped${i}`)) });",
         search="?gfx=medium",
