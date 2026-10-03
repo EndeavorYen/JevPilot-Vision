@@ -61,8 +61,24 @@ function refreshApply() {
 function applyPicked() {
   const quality = picked();
   if (quality === gfx.quality) return setOpen(false);
-  saveQuality(storage(), quality);
-  globalThis.location.assign(switchUrl(globalThis.location.href, quality));
+  reloadWith(quality, densityChanged() ? densityPicked() : null);
+}
+
+// Both buttons reload the page, so each carries the other's pick too.
+function reloadWith(quality, levels) {
+  let href = globalThis.location.href;
+  if (quality !== gfx.quality) {
+    saveQuality(storage(), quality);
+    href = switchUrl(href, quality);
+  }
+  if (levels) {
+    const keys = globalThis.SEMIF_WORLDGEN?.DENSITY_KEY ?? { traffic: "semif.density.traffic", people: "semif.density.people" };
+    try {
+      for (const [kind] of DENSITY_ROWS) storage()?.setItem(keys[kind], levels[kind]);
+    } catch (_) {}
+    href = densityUrl(href, levels);
+  }
+  globalThis.location.assign(href);
 }
 
 // Density (#22): vehicles and people, each low / med / high, in this panel too. Like the quality,
@@ -87,22 +103,31 @@ function densityPicked() {
   return Object.fromEntries(densitySelects.map((s) => [s.name, s.value]));
 }
 
-function refreshDensity() {
+function densityChanged() {
+  if (!densitySelects.length) return false;
   const now = densityNow();
   const picked = densityPicked();
-  const same = DENSITY_ROWS.every(([kind]) => picked[kind] === now[kind]);
-  densityApply.disabled = same;
-  densityApply.textContent = same ? "Using these" : "Apply (reloads)";
+  return DENSITY_ROWS.some(([kind]) => picked[kind] !== now[kind]);
+}
+
+// A lap (?lap=1) always drives today's counts (semif-worldgen.js density()): nothing to choose.
+function onLap() {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("lap") === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function refreshDensity() {
+  const changed = densityChanged();
+  densityApply.disabled = !changed || onLap();
+  densityApply.textContent = changed ? "Apply (reloads)" : "Using these";
 }
 
 function applyDensity() {
-  const picked = densityPicked();
-  if (DENSITY_ROWS.every(([kind]) => picked[kind] === densityNow()[kind])) return setOpen(false);
-  const keys = globalThis.SEMIF_WORLDGEN?.DENSITY_KEY ?? { traffic: "semif.density.traffic", people: "semif.density.people" };
-  try {
-    for (const [kind] of DENSITY_ROWS) storage()?.setItem(keys[kind], picked[kind]);
-  } catch (_) {}
-  globalThis.location.assign(densityUrl(globalThis.location.href, picked));
+  if (!densityChanged() || onLap()) return setOpen(false);
+  reloadWith(picked(), densityPicked());
 }
 
 function buildDensity() {
@@ -120,6 +145,7 @@ function buildDensity() {
       select.appendChild(option);
     }
     select.value = now[kind];
+    select.disabled = onLap();
     select.addEventListener("change", refreshDensity);
     row.appendChild(select);
     section.appendChild(row);
@@ -127,8 +153,10 @@ function buildDensity() {
   });
   densityApply = el("button", "semif-density-apply");
   densityApply.type = "button";
+  densityApply.setAttribute("aria-label", "Apply traffic density");
   densityApply.addEventListener("click", applyDensity);
   section.appendChild(densityApply);
+  if (onLap()) section.appendChild(el("p", "semif-density-note", "A lap (?lap=1) keeps today's traffic, so its results stay comparable."));
   refreshDensity();
   return section;
 }

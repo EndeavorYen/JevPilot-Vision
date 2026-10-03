@@ -651,6 +651,13 @@ body.fsd-theme .touch-brake.held {
   font-weight: 700;
 }
 
+.semif-density-note {
+  margin: 4px 6px 0;
+  color: var(--sol-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .semif-density-select {
   min-width: 120px;
   padding: 6px 8px;

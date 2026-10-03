@@ -385,3 +385,27 @@ def test_issue22_picking_a_level_never_reloads_and_apply_saves_and_rebuilds():
     assert got["before"] == 0 and got["enabled"]
     assert got["went"] == ["http://localhost:8768/jevpilot/?seed=7&gfx=medium&traffic=low&people=high"]
     assert got["kept"] == {"semif.density.traffic": "low", "semif.density.people": "high"}
+
+
+def test_issue22_review_a_lap_page_shows_the_density_it_cannot_change():
+    """?lap=1 keeps today's counts: the panel says so instead of offering a choice that does nothing."""
+    got = _render(
+        _DENSITY + "out({ disabled: selects.map((s) => s.disabled), apply: dApply.disabled,"
+        "  note: walk(panel).filter((e) => e.className === 'semif-density-note').map((e) => e.textContent) });",
+        search="?gfx=medium&lap=1",
+    )
+    assert got["disabled"] == [True, True] and got["apply"] is True
+    assert got["note"] and "lap" in got["note"][0].lower()
+
+
+def test_issue22_review_either_apply_keeps_the_other_pick():
+    got = _render(
+        _DENSITY
+        + "const high = radios.find((r) => r.value === 'high'); radios.forEach((r) => { r.checked = r === high; }); high.fire('change');"
+        "selects[1].value = 'high'; selects[1].fire('change');"
+        "dApply.fire('click'); apply.fire('click');"
+        "out({ went, label: dApply.attrs['aria-label'] });",
+        search="?gfx=medium&traffic=med&people=med",
+    )
+    assert got["went"] == ["http://localhost:8768/jevpilot/?seed=7&gfx=high&traffic=med&people=high"] * 2
+    assert got["label"] == "Apply traffic density"
