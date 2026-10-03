@@ -41,6 +41,17 @@ def test_a_page_on_the_wrong_quality_is_refused(monkeypatch):
         pb.measure("T", "http://localhost:8768", "high", seconds=60)
 
 
+def test_main_drives_the_tab_open_tab_hands_back_and_closes_it(tmp_path, monkeypatch):
+    """closed_loop.open_tab returns {target, id} (#41): measure gets the target, close_tab the tab."""
+    tab = {"target": "ABCD1234", "id": "ABCD1234FFFF"}
+    seen, closed = [], []
+    monkeypatch.setattr(pb, "open_tab", lambda base: tab)
+    monkeypatch.setattr(pb, "close_tab", lambda t, wait=False: closed.append(t))
+    monkeypatch.setattr(pb, "measure", lambda target, base, gfx, seconds: seen.append(target) or {"fps_p50": 1})
+    assert pb.main(["--gfx", "medium", "--out", str(tmp_path / "perf.json")]) == 0
+    assert seen == ["ABCD1234"] and closed == [tab]
+
+
 def test_issue19_review_the_perf_baseline_never_draws_the_candidate_fan():
     """A fan remembered in the measuring Chrome profile would add its lines and worker load."""
     assert "candidates=selected" in pb.page_url("http://localhost:8768", "medium")

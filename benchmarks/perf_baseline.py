@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from closed_loop import _READY, _cdp, _js, open_tab  # noqa: E402
+from closed_loop import _READY, _cdp, _js, close_tab, open_tab  # noqa: E402
 
 SEED = 895794  # the seed of docs/visual/new-ui and docs/visual/mode-indicator, so the views match
 WARMUP_S = 10  # shaders compile and textures upload in the first seconds
@@ -65,14 +65,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
     if not args.out.is_absolute():
         ap.error("--out must be an absolute path")
-    target = open_tab(args.base)
+    tab = open_tab(args.base)  # {target, id} (closed_loop.open_tab)
     results: Dict[str, Any] = {}
     try:
         for gfx in args.gfx:
-            results[gfx] = measure(target, args.base, gfx, args.seconds)
+            results[gfx] = measure(tab["target"], args.base, gfx, args.seconds)
             print(json.dumps({gfx: results[gfx]}), flush=True)
     finally:
-        _cdp("nav", target, f"{args.base.rstrip('/')}/openapi.json")  # stop the drive
+        close_tab(tab)  # stops the drive and leaves no tab behind
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=1) + "\n", encoding="utf-8", newline="\n")
     return 0
