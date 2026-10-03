@@ -140,3 +140,40 @@ def test_a_failed_read_never_leaves_an_unhandled_rejection_and_the_abort_signal_
     vision = js.split("async function visionTick(", 1)[1].split("\n  }\n\n", 1)[0]
     assert vision.index("const signal = visionPacer.signal();") < vision.index("grabSurround("), "the signal belongs to this request"
     assert "signal: signal" in vision
+
+
+def test_a_job_the_worker_never_answers_fails_after_its_timeout():
+    """#42 review M1: a hung encode would keep its grab pending forever, one more every 5 s."""
+    got = _node("""
+(async () => {
+  class SilentWorker { postMessage() {} terminate() {} }
+  globalThis.Worker = SilentWorker; globalThis.OffscreenCanvas = function () {};
+  const enc = C.createEncoder('/w.js', null, { timeoutMs: 20 });
+  let error = null;
+  try { await enc.encode(new Uint8Array(4), 1, 1, 0.5); } catch (e) { error = e.message; }
+  out({ error, waiting: enc.waiting() });
+})();""")
+    assert got == {"error": "encode timed out", "waiting": 0}
+
+
+def test_a_failed_worker_is_terminated_and_later_frames_use_the_canvas():
+    """#42 review M3 and L3."""
+    got = _node("""
+(async () => {
+  let terminated = false, prevented = false, w = null;
+  class BadWorker { constructor() { w = this; } postMessage() { setTimeout(() => this.onerror({ preventDefault() { prevented = true; } }), 0); } terminate() { terminated = true; } }
+  globalThis.Worker = BadWorker; globalThis.OffscreenCanvas = function () {};
+  const canvas = { getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }), toDataURL: () => 'data:canvas' };
+  const enc = C.createEncoder('/w.js', () => canvas);
+  let first = null; try { await enc.encode(new Uint8Array(4), 1, 1, 0.5); } catch (e) { first = e.message; }
+  const second = await enc.encode(new Uint8Array(4), 1, 1, 0.5);
+  out({ first, second, terminated, prevented, messageerror: typeof w.onmessageerror });
+})();""")
+    assert got == {"first": "encode worker failed", "second": "data:canvas", "terminated": True, "prevented": True, "messageerror": "function"}
+
+
+def test_encodes_already_queued_stay_quiet_if_a_later_read_fails():
+    js = LAYER_JS.read_text(encoding="utf-8")
+    grab = js.split("async function grabSurround(", 1)[1].split("\n  }\n", 1)[0]
+    queued = grab.split("encodes.push(", 1)[1].split("\n", 1)[0]
+    assert ".catch(" in grab.split("encodes.push(", 1)[1].split("await Promise.all", 1)[0], queued

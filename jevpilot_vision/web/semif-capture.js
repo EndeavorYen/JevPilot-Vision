@@ -29,25 +29,35 @@
   // Pixels as read from WebGL (bottom-up) to a JPEG data URL. A worker does the flip and the
   // encode (semif-encode-worker.js); the pixels are transferred, so the caller must be done with
   // them. Without Worker and OffscreenCanvas, a canvas on this thread does it.
-  function createEncoder(workerUrl, makeCanvas) {
+  // A job the worker never answers fails after timeoutMs (well past the 8-50 ms measured), so a
+  // grab cannot stay pending; the vision pacer gives up on its request after 5 s anyway.
+  function createEncoder(workerUrl, makeCanvas, opts) {
+    const timeoutMs = (opts && opts.timeoutMs) || 3000;
     let worker = null;
     let next = 0;
     const waiting = new Map();
+    const settle = (id, fn, value) => {
+      const job = waiting.get(id);
+      if (!job) return;
+      waiting.delete(id);
+      clearTimeout(job.timer);
+      job[fn](value);
+    };
+    const fail = (e) => {
+      if (e && e.preventDefault) e.preventDefault(); // handled here, not a page error
+      if (worker) worker.terminate();
+      worker = null; // later frames use the canvas; these fail once
+      Array.from(waiting.keys()).forEach((id) => settle(id, "reject", new Error("encode worker failed")));
+    };
     if (typeof Worker === "function" && typeof OffscreenCanvas !== "undefined") {
       try {
         worker = new Worker(workerUrl);
         worker.onmessage = (e) => {
-          const job = waiting.get(e.data.id);
-          if (!job) return;
-          waiting.delete(e.data.id);
-          if (e.data.error) job.reject(new Error(e.data.error));
-          else job.resolve(e.data.url);
+          if (e.data.error) settle(e.data.id, "reject", new Error(e.data.error));
+          else settle(e.data.id, "resolve", e.data.url);
         };
-        worker.onerror = () => {
-          worker = null; // later frames use the canvas; these fail once
-          waiting.forEach((job) => job.reject(new Error("encode worker failed")));
-          waiting.clear();
-        };
+        worker.onerror = fail;
+        worker.onmessageerror = fail;
       } catch (_err) {
         worker = null;
       }
@@ -70,9 +80,13 @@
         if (!worker) return Promise.resolve(onCanvas(pixels, w, h, quality));
         const id = ++next;
         return new Promise((resolve, reject) => {
-          waiting.set(id, { resolve, reject });
+          const timer = setTimeout(() => settle(id, "reject", new Error("encode timed out")), timeoutMs);
+          waiting.set(id, { resolve, reject, timer });
           worker.postMessage({ id: id, w: w, h: h, q: quality, buf: pixels.buffer }, [pixels.buffer]);
         });
+      },
+      waiting() {
+        return waiting.size;
       },
     };
   }

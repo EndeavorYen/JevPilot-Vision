@@ -1488,6 +1488,7 @@
       if (read.name === "front" && pipCanvas) paintOnboardPixels(pixels, pipCanvas, read.w, read.h);
       // The encoder takes the pixels by transfer: nothing may read them after this line.
       encodes.push(encoder.encode(pixels, read.w, read.h, read.quality).then((url) => (frames[read.name] = url)));
+      encodes[encodes.length - 1].catch(() => {}); // awaited below, unless a later read fails first
     }
     await Promise.all(encodes);
     return frames;
