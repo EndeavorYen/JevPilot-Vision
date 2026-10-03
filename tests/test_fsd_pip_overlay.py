@@ -229,6 +229,8 @@ if (specEarly.lap === "1") search += (search ? "&" : "?") + "lap=1";
 if (specEarly.fleet) search += (search ? "&" : "?") + "fleet=" + specEarly.fleet;
 if (specEarly.mode) search += (search ? "&" : "?") + "mode=" + specEarly.mode;
 if (specEarly.lag) search += (search ? "&" : "?") + "lag_ms=" + specEarly.lag;
+if (specEarly.candidates) search += (search ? "&" : "?") + "candidates=" + specEarly.candidates;
+if (specEarly.minimal) search += (search ? "&" : "?") + "minimal=" + specEarly.minimal;
 // Latency stress (#28): timers the overlay sets, and when the decision request really goes out.
 const timers = [];
 const sentAt = [];
@@ -888,6 +890,29 @@ if (spec.cmd === "cstats") {
     endZ: end.z,
     s: player.s,
   }));
+} else if (spec.cmd === "candidates") {
+  // #19: the bundle's candidates button appears once its module has run, and only then gets its
+  // handler; pressing it flips aria-pressed, as main-*.js does.
+  window.__raf();
+  const btn = el("button");
+  btn.id = "candidates-toggle";
+  btn.setAttribute("aria-pressed", "false");
+  document.body.appendChild(btn);
+  window.__raf();
+  const pressedBeforeBound = btn.getAttribute("aria-pressed");
+  let clicks = 0;
+  const handler = () => { clicks += 1; btn.setAttribute("aria-pressed", String(btn.getAttribute("aria-pressed") !== "true")); };
+  btn.addEventListener("click", handler);
+  btn.onclick = handler;
+  window.__raf();
+  window.__raf();
+  const restored = btn.getAttribute("aria-pressed");
+  const restoreClicks = clicks;
+  const storedAfterRestore = window.localStorage.getItem("semif.candidates");
+  btn.click(); // the driver flips it
+  window.__raf();
+  process.stdout.write(JSON.stringify({ pressedBeforeBound, restored, restoreClicks, storedAfterRestore,
+    stored: window.localStorage.getItem("semif.candidates") }));
 } else if (spec.cmd === "fleet") {
   const player = { id: undefined, x: 0, z: 0, heading: 0, speed: 5 };
   const near = { id: "vehicle-0", x: 1.0, z: -12, heading: 0, speed: 8 };
@@ -1163,6 +1188,26 @@ def test_fleet_mode_drives_traffic_from_v1_fleet():
     assert out["restart"]["sessions"] >= 2, "a restarted world starts fresh tracks"
 
 
+def test_issue19_the_candidate_fan_choice_is_remembered_per_browser():
+    """#19: the bundle draws only the chosen path unless its candidates button is pressed; the choice
+    now survives a reload."""
+    fresh = _run({"cmd": "candidates"})
+    assert fresh["restored"] == "false" and fresh["restoreClicks"] == 0, "default: the chosen path only"
+    assert fresh["stored"] == "1", "pressing the button is remembered"
+    again = _run({"cmd": "candidates", "storage": {"semif.candidates": "1"}})
+    assert again["pressedBeforeBound"] == "false", "nothing is pressed before the bundle handles it"
+    assert again["restored"] == "true" and again["restoreClicks"] == 1
+    assert again["stored"] == "0", "turning it off is remembered too"
+
+
+def test_issue19_the_address_bar_wins_over_the_remembered_choice():
+    shown = _run({"cmd": "candidates", "candidates": "all", "storage": {"semif.candidates": "0"}})
+    assert shown["restored"] == "true"
+    assert shown["storedAfterRestore"] == "0", "the address bar does not overwrite the browser's choice"
+    hidden = _run({"cmd": "candidates", "candidates": "selected", "storage": {"semif.candidates": "1"}})
+    assert hidden["restored"] == "false" and hidden["restoreClicks"] == 0
+
+
 def test_fleet_mode_is_off_by_default():
     out = _run({"cmd": "fleet"})
     assert out["bodies"] == []
@@ -1322,3 +1367,8 @@ def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
     # Review #28 (8): an outage (network failure, 502/503/504) is told apart from a failure of the
     # system under test (a 500, a 12 s timeout, a reply that is not JSON).
     assert out["stats"] == {"ok": 1, "http_errors": 1, "network_errors": 1, "bad_replies": 1, "gateway_errors": 1, "timeouts": 1}
+
+
+def test_issue19_review_the_minimal_view_does_not_bring_back_a_fan_it_has_no_button_for():
+    out = _run({"cmd": "candidates", "minimal": "1", "storage": {"semif.candidates": "1"}})
+    assert out["restored"] == "false" and out["restoreClicks"] == 0

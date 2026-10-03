@@ -122,7 +122,8 @@ def pending(plan: List[Dict[str, Any]], done: List[Dict[str, Any]]) -> List[Dict
 
 
 def page_url(base: str, run: Dict[str, Any]) -> str:
-    url = f"{base.rstrip('/')}/jevpilot/?minimal=0&seed={run['seed']}&world=coast:{run['route']}&mode={run['mode']}"
+    # candidates=selected: a fan remembered in this Chrome profile would load the planner worker (#19).
+    url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&seed={run['seed']}&world=coast:{run['route']}&mode={run['mode']}"
     if run.get("lag_ms"):
         url += f"&lag_ms={int(run['lag_ms'])}"
     return url + f"&gfx={run.get('gfx', 'medium')}"
