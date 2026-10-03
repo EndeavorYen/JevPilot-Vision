@@ -393,6 +393,10 @@ class _FakeChrome:
             return ""
         return ""
 
+    def new_blank(self):
+        self.pages.append({"id": f"BLANK{self.next:05d}" + "Z" * 22, "url": "about:blank"})
+        self.next += 1
+
     def close(self, full_id):
         self.closed.append(full_id)
         self.pages = [p for p in self.pages if p["id"] != full_id]
@@ -404,6 +408,7 @@ def _with_chrome(monkeypatch, chrome, rows):
     monkeypatch.setattr(cl, "_cdp", chrome.cdp)
     monkeypatch.setattr(cl, "_devtools_pages", lambda: list(chrome.pages))
     monkeypatch.setattr(cl, "_devtools_close", chrome.close)
+    monkeypatch.setattr(cl, "_devtools_new_blank", chrome.new_blank)
     monkeypatch.setattr(cl.time, "sleep", lambda s: None)
     seen = []
 
@@ -523,6 +528,24 @@ def test_issue39_review_l2_an_anchor_closed_mid_evaluation_is_restored_before_a_
     cl.main(["--set", "tuning", "--seeds", "7", "--routes", "festival", "--modes", "vision", "--seconds", "30",
              "--out", str(tmp_path / "runs.jsonl")])
     assert not chrome.quit
+
+
+def test_issue53_closing_the_last_page_leaves_a_blank_anchor_not_a_dead_chrome(monkeypatch):
+    ours = {"id": "OURS0001" + "A" * 24, "url": "http://localhost:8768/jevpilot/?minimal=0"}
+    chrome = _FakeChrome([ours])
+    _with_chrome(monkeypatch, chrome, [])
+    cl.close_tab({"target": "OURS0001", "id": ours["id"]})
+    assert not chrome.quit, "Chrome kept a page"
+    assert [p["url"] for p in chrome.pages] == ["about:blank"], "our simulation tab is gone"
+
+
+def test_issue53_a_tab_with_company_is_simply_closed(monkeypatch):
+    ours = {"id": "OURS0001" + "A" * 24, "url": "http://localhost:8768/jevpilot/?minimal=0"}
+    other = {"id": "OTHER001" + "B" * 24, "url": "https://example.com/"}
+    chrome = _FakeChrome([other, ours])
+    _with_chrome(monkeypatch, chrome, [])
+    cl.close_tab({"target": "OURS0001", "id": ours["id"]})
+    assert chrome.pages == [other], "no extra anchor when another page keeps Chrome alive"
 
 
 # ---- Graphics quality (docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3) ---------
