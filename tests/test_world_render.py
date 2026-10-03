@@ -529,3 +529,23 @@ def test_k_swaps_the_cybercab_for_the_bundles_model_y_and_remembers_it():
     assert got["first"] == "semif-hero-cybercab"
     assert got["now"] == ["tesla-model-y"] and got["eye"] == 1.28
     assert got["saved"] == "model-y"
+
+
+def test_a_slow_model_y_does_not_replace_the_car_picked_after_it():
+    """#47 review: K twice quickly (cybercab -> model-y -> cybercab); the glb resolves last and must
+    not replace the Cybercab the driver picked afterwards."""
+    got = _render(
+        "const saved = {}; globalThis.localStorage = { getItem: (k) => saved[k] ?? null, setItem: (k, v) => { saved[k] = v; } };"
+        "const view = { sim: { world, traffic: [], pedestrians: [] }, scene: new Obj(), render() {}, vehicles: new Map(), people: new Map(), player: new Obj(), heroCar: null };"
+        "view.player.clear = function () { this.children = []; };"
+        "api.built(view);"
+        "let release; const slow = () => new Promise((r) => { release = () => r(Object.assign(new Obj(), { name: 'tesla-model-y', userData: {} })); });"
+        "const first = await window.SEMIF_WORLD_KIT.hero(view, slow); view.player.add(first); view.heroCar = first;"
+        "const k = () => document.fire('keydown', { code: 'KeyK', target: { tagName: 'CANVAS' } });"
+        "k(); view.render(0.016);"
+        "k(); view.render(0.016); await new Promise((r) => setTimeout(r, 0));"
+        "release(); await new Promise((r) => setTimeout(r, 0));"
+        "out({ now: view.player.children.map((c) => c.name), saved: saved['semif-car'] });"
+    )
+    assert got["saved"] == "cybercab"
+    assert got["now"] == ["semif-hero-cybercab"], "the car on screen is the one picked last"

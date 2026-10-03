@@ -114,6 +114,7 @@ window.SEMIF_WORLD_KIT = {
 };
 
 let heroSwap = false;
+let swapSeq = 0; // the latest K press; a car loaded for an earlier one is dropped (#47)
 globalThis.document?.addEventListener?.("keydown", (e) => {
   if (e.code !== "KeyK" || e.repeat || e.ctrlKey || e.metaKey || e.altKey || !onCoast()) return;
   if (/input|select|textarea/i.test(e.target?.tagName || "")) return;
@@ -159,10 +160,15 @@ function dressAgents(view) {
   if (heroSwap && view.player && view.heroCar && !view.sim.crash) {
     heroSwap = false;
     const player = view.player;
+    const seq = ++swapSeq;
     heroFor(heroModel())
       .then((hero) => {
-        // A new map or a crash while the glb loaded: this car is no longer wanted.
-        if (view.player !== player || view.sim.crash) return dispose(hero);
+        // A later K press, a new map or a crash while the glb loaded: this car is no longer wanted.
+        if (seq !== swapSeq || view.player !== player) return dispose(hero);
+        if (view.sim.crash) {
+          heroSwap = true; // swap once the crash is over, as asked
+          return dispose(hero);
+        }
         for (const child of player.children || []) dispose(child);
         player.clear();
         player.add(hero);
