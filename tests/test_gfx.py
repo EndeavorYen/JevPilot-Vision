@@ -145,3 +145,81 @@ def test_the_medium_world_is_the_world_before_the_tiers():
         SNAPSHOT.write_text(json.dumps(got, indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     want = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     assert got == want, "medium must stay the world it was; refresh the snapshot only with the owner's say-so"
+
+
+# ---- Frame time, GPU time and draw calls (perf.js) ----------------------------------------------
+
+_FAKE_GL = """
+const TIME = 0x88BF, DISJOINT = 0x8FBB;
+const makeGl = ({ timer = true, ready = true } = {}) => {
+  const gl = { QUERY_RESULT: 1, QUERY_RESULT_AVAILABLE: 2, live: 0, active: 0, errors: 0, deleted: 0,
+    getExtension: (n) => timer && n === 'EXT_disjoint_timer_query_webgl2' ? { TIME_ELAPSED_EXT: TIME, GPU_DISJOINT_EXT: DISJOINT } : null,
+    createQuery() { gl.live++; return { ns: 2e6 }; },
+    beginQuery() { if (gl.active) gl.errors++; gl.active++; },
+    endQuery() { gl.active--; },
+    deleteQuery() { gl.live--; gl.deleted++; },
+    getParameter: (p) => p === DISJOINT ? false : null,
+    getQueryParameter: (q, p) => p === 2 ? ready : q.ns };
+  return gl;
+};
+const renderer = (calls) => ({ info: { autoReset: true, render: { calls: 0, triangles: 0 }, reset() { this.render.calls = 0; this.render.triangles = 0; } },
+  draw() { this.info.render.calls += calls; this.info.render.triangles += calls * 100; } });
+"""
+
+
+def test_frames_gpu_time_and_draw_calls_are_kept_per_view():
+    got = _node("perf.js", _FAKE_GL + """
+let t = 0; const perf = M.createPerf({ now: () => t });
+const gl = makeGl(); perf.attach(gl);
+const main = renderer(40), onboard = renderer(25);
+for (let i = 0; i < 10; i++) {
+  t += 20; perf.frame();
+  perf.span('main', main, () => main.draw());
+  perf.span('onboard', onboard, () => onboard.draw());
+}
+t += 20; perf.frame();
+out({ s: perf.snapshot(), autoReset: main.info.autoReset, errors: gl.errors });""")
+    s = got["s"]
+    assert s["frames"] == 10 and s["fps_p50"] == 50 and s["frame_ms_p50"] == 20
+    assert s["gpu_timer"] is True and s["gpu_ms_p50"] == {"main": 2, "onboard": 2}
+    assert s["calls_p50"] == {"main": 40, "onboard": 25} and s["triangles_p50"] == {"main": 4000, "onboard": 2500}
+    assert got["autoReset"] is True, "the renderer's own bookkeeping is put back"
+    assert got["errors"] == 0
+
+
+def test_without_the_timer_extension_frames_are_still_measured():
+    got = _node("perf.js", _FAKE_GL + """
+let t = 0; const perf = M.createPerf({ now: () => t }); perf.attach(makeGl({ timer: false }));
+const r = renderer(3);
+for (let i = 0; i < 5; i++) { t += 40; perf.frame(); perf.span('main', r, () => r.draw()); }
+perf.attach(null); perf.span('main', null, () => 1);
+out(perf.snapshot());""")
+    assert got["gpu_timer"] is False and got["gpu_ms_p50"] == {"main": None, "onboard": None}
+    assert got["fps_p50"] == 25 and got["calls_p50"]["main"] == 3
+
+
+def test_a_span_inside_a_span_runs_unmeasured_and_is_counted():
+    got = _node("perf.js", _FAKE_GL + """
+const perf = M.createPerf({ now: () => 0 }); const gl = makeGl(); perf.attach(gl);
+const value = perf.span('main', null, () => perf.span('onboard', null, () => 7));
+perf.frame();
+out({ value, errors: gl.errors, s: perf.snapshot() });""")
+    assert got["value"] == 7 and got["errors"] == 0
+    assert got["s"]["nested"] == 1 and got["s"]["gpu_ms_p50"]["onboard"] is None
+
+
+def test_queries_that_never_finish_are_dropped_not_hoarded():
+    got = _node("perf.js", _FAKE_GL + """
+const perf = M.createPerf({ now: () => 0, maxPending: 8 }); const gl = makeGl({ ready: false }); perf.attach(gl);
+for (let i = 0; i < 100; i++) { perf.span('main', null, () => 0); perf.frame(); }
+out({ live: gl.live });""")
+    assert got["live"] <= 8
+
+
+def test_a_throwing_render_still_ends_its_query():
+    got = _node("perf.js", _FAKE_GL + """
+const perf = M.createPerf({ now: () => 0 }); const gl = makeGl(); perf.attach(gl);
+let caught = false; try { perf.span('main', null, () => { throw new Error('boom'); }); } catch (_) { caught = true; }
+perf.span('main', null, () => 0);
+out({ caught, errors: gl.errors, active: gl.active });""")
+    assert got == {"caught": True, "errors": 0, "active": 0}
