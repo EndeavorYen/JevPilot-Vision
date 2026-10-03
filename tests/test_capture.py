@@ -47,18 +47,46 @@ def test_pixels_are_read_through_the_gpu_fence_when_three_offers_it():
     assert got["calls"] == ["async", "sync"]
 
 
-def test_jpeg_is_encoded_by_to_blob_and_falls_back_to_to_data_url():
+def test_pixels_go_to_the_encode_worker_by_transfer_and_come_back_as_jpeg():
+    """toBlob and a main-thread convertToBlob wait for the main thread's idle time: about 1 s per
+    frame in the running simulation (#42 measurement). A worker encodes in 8-50 ms, off the main
+    thread; the pixels are transferred, not copied."""
     got = _node("""
 (async () => {
-  const a = await C.encodeJpeg(blobCanvas, 0.55);
-  const b = await C.encodeJpeg(plainCanvas, 0.7);
-  const c = await C.encodeJpeg(nullBlobCanvas, 0.7);
-  out({ a, b, c, calls });
+  const sent = [];
+  class FakeWorker { constructor(url) { this.url = url; } postMessage(msg, transfer) {
+      sent.push({ url: this.url, w: msg.w, h: msg.h, q: msg.q, transferred: transfer && transfer[0] === msg.buf });
+      setTimeout(() => this.onmessage({ data: { id: msg.id, url: 'data:image/jpeg;base64,W' + msg.id } }), 0); } }
+  globalThis.Worker = FakeWorker; globalThis.OffscreenCanvas = function () {};
+  const enc = C.createEncoder('/jevpilot/semif-encode-worker.js');
+  const [a, b] = await Promise.all([enc.encode(new Uint8Array(8), 2, 1, 0.55), enc.encode(new Uint8Array(8), 2, 1, 0.7)]);
+  out({ a, b, sent });
 })();""")
-    assert got["a"] == "data:image/jpeg;base64,BLOB"
-    assert got["b"] == "data:sync"
-    assert got["c"] == "data:fallback", "a canvas that cannot make a blob still yields a frame"
-    assert got["calls"] == ["toBlob:image/jpeg:0.55", "toDataURL:image/jpeg:0.7"]
+    assert got["a"] == "data:image/jpeg;base64,W1" and got["b"] == "data:image/jpeg;base64,W2", "answers matched by id"
+    assert got["sent"][0] == {"url": "/jevpilot/semif-encode-worker.js", "w": 2, "h": 1, "q": 0.55, "transferred": True}
+
+
+def test_without_a_worker_the_pixels_are_encoded_on_a_canvas():
+    got = _node("""
+(async () => {
+  delete globalThis.Worker;
+  const painted = [];
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData: (img) => painted.push(Array.from(img.data)) }),
+    toDataURL: (type, q) => 'data:fallback:' + type + ':' + q };
+  const enc = C.createEncoder('/x.js', () => canvas);
+  const url = await enc.encode(new Uint8Array([1, 1, 1, 1, 2, 2, 2, 2]), 1, 2, 0.6);
+  out({ url, painted, size: [canvas.width, canvas.height] });
+})();""")
+    assert got["url"] == "data:fallback:image/jpeg:0.6"
+    assert got["painted"] == [[2, 2, 2, 2, 1, 1, 1, 1]], "rows flipped: WebGL reads bottom-up"
+    assert got["size"] == [1, 2]
+
+
+def test_the_worker_flips_rows_and_encodes_with_offscreen_canvas():
+    worker = (REPO / "jevpilot_vision" / "web" / "semif-encode-worker.js").read_text(encoding="utf-8")
+    assert "convertToBlob" in worker and "FileReaderSync" in worker and "OffscreenCanvas" in worker
+    got = json.loads(subprocess.check_output(["node", "-e", "const W = require(%s); process.stdout.write(JSON.stringify(Array.from(W.flipRows(new Uint8Array([1,1,1,1,2,2,2,2,3,3,3,3]), 1, 3))))" % json.dumps(str(REPO / "jevpilot_vision" / "web" / "semif-encode-worker.js"))], cwd=str(REPO)))
+    assert got == [3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1]
 
 
 def test_the_layer_renders_every_view_before_it_waits_and_queues_each_read_before_the_next_render():
@@ -66,7 +94,7 @@ def test_the_layer_renders_every_view_before_it_waits_and_queues_each_read_befor
     its first await, so the read must be issued right after its own render."""
     js = LAYER_JS.read_text(encoding="utf-8")
     grab = js.split("async function grabSurround(", 1)[1].split("\n  }\n", 1)[0]
-    assert "window.SEMIF_CAPTURE" in grab and "capture.readPixels(" in grab and "capture.encodeJpeg(" in grab
+    assert "window.SEMIF_CAPTURE" in grab and "capture.readPixels(" in grab and "encoder.encode(" in grab
     first_await = grab.index("await ")
     renders = [i for i in range(len(grab)) if grab.startswith("renderToTarget(", i)]
     assert renders and all(i < first_await for i in renders), "every render before any await: one instant of the world"

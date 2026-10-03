@@ -1,8 +1,8 @@
 // Onboard camera frames, read back and encoded off the main thread's critical path (#42 item 2).
 // The renders stay synchronous in semif-layer.js (one instant of the world). The pixel read waits
 // on a GPU fence (three.js readRenderTargetPixelsAsync) instead of stalling the pipeline, and the
-// JPEG comes from canvas.toBlob, which Chrome encodes off the main thread. Where the async call is
-// missing, the synchronous one is used, so a frame is never lost to a missing API.
+// JPEG is encoded in a worker (semif-encode-worker.js). Where the async API is missing, the
+// synchronous one is used, so a frame is never lost to a missing API.
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
     module.exports = factory();
@@ -26,22 +26,56 @@
     return pixels;
   }
 
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  async function encodeJpeg(canvas, quality) {
-    if (canvas && canvas.toBlob && typeof FileReader !== "undefined") {
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-      if (blob) return blobToDataUrl(blob);
+  // Pixels as read from WebGL (bottom-up) to a JPEG data URL. A worker does the flip and the
+  // encode (semif-encode-worker.js); the pixels are transferred, so the caller must be done with
+  // them. Without Worker and OffscreenCanvas, a canvas on this thread does it.
+  function createEncoder(workerUrl, makeCanvas) {
+    let worker = null;
+    let next = 0;
+    const waiting = new Map();
+    if (typeof Worker === "function" && typeof OffscreenCanvas !== "undefined") {
+      try {
+        worker = new Worker(workerUrl);
+        worker.onmessage = (e) => {
+          const job = waiting.get(e.data.id);
+          if (!job) return;
+          waiting.delete(e.data.id);
+          if (e.data.error) job.reject(new Error(e.data.error));
+          else job.resolve(e.data.url);
+        };
+        worker.onerror = () => {
+          worker = null; // later frames use the canvas; these fail once
+          waiting.forEach((job) => job.reject(new Error("encode worker failed")));
+          waiting.clear();
+        };
+      } catch (_err) {
+        worker = null;
+      }
     }
-    return canvas.toDataURL("image/jpeg", quality);
+
+    function onCanvas(pixels, w, h, quality) {
+      const canvas = makeCanvas ? makeCanvas() : document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      const image = ctx.createImageData(w, h);
+      const row = w * 4;
+      for (let y = 0; y < h; y++) image.data.set(pixels.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+      ctx.putImageData(image, 0, 0);
+      return canvas.toDataURL("image/jpeg", quality);
+    }
+
+    return {
+      encode(pixels, w, h, quality) {
+        if (!worker) return Promise.resolve(onCanvas(pixels, w, h, quality));
+        const id = ++next;
+        return new Promise((resolve, reject) => {
+          waiting.set(id, { resolve, reject });
+          worker.postMessage({ id: id, w: w, h: h, q: quality, buf: pixels.buffer }, [pixels.buffer]);
+        });
+      },
+    };
   }
 
-  return { readPixels: readPixels, encodeJpeg: encodeJpeg };
+  return { readPixels: readPixels, createEncoder: createEncoder };
 });

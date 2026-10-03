@@ -1458,13 +1458,17 @@
 
   window.SEMIF_GRAB_FRAME = grabFrame;
 
+  // JPEGs are encoded in a worker (semif-encode-worker.js); see semif-capture.js.
+  let encoder = null;
+
   // Front, right, rear and left (and the narrow camera in Vision mode). Every view renders now, in
   // one instant of the world, and queues its pixel read on the GPU at once (semif-capture.js); the
-  // waiting and the JPEG encoding happen after, off the main thread's critical path. The front view
-  // is painted into the PIP canvas, so the preview shows what Vision was sent.
+  // waiting and the JPEG encoding happen after, off the main thread. The front view is also painted
+  // into the PIP canvas, so the preview shows what Vision was sent.
   async function grabSurround() {
     const world = window.SEMIF_WORLD;
     const capture = window.SEMIF_CAPTURE;
+    encoder = encoder || capture.createEncoder("/jevpilot/semif-encode-worker.js?v=20261003s1");
     const views = [["front", 0, FRONT_W, FRONT_H, ONBOARD_VFOV, FRONT_JPEG]].concat(
       SURROUND_SIDES.map(([name, yaw]) => [name, yaw, PIP_W, PIP_H, ONBOARD_VFOV, 0.55])
     );
@@ -1480,9 +1484,10 @@
     const frames = {};
     const encodes = [];
     for (const read of reads) {
-      const canvas = read.name === "front" && pipCanvas ? pipCanvas : surroundCanvas(read.name, read.w, read.h);
-      paintOnboardPixels(await read.pixels, canvas, read.w, read.h);
-      encodes.push(capture.encodeJpeg(canvas, read.quality).then((url) => (frames[read.name] = url)));
+      const pixels = await read.pixels;
+      if (read.name === "front" && pipCanvas) paintOnboardPixels(pixels, pipCanvas, read.w, read.h);
+      // The encoder takes the pixels by transfer: nothing may read them after this line.
+      encodes.push(encoder.encode(pixels, read.w, read.h, read.quality).then((url) => (frames[read.name] = url)));
     }
     await Promise.all(encodes);
     return frames;

@@ -1082,7 +1082,8 @@ def test_each_display_frame_posts_four_surround_jpegs():
     body = pumped["bodies"][0]
     assert body["keys"] == ["frames", "t_ms"], "frames carry the moment they were grabbed (#18)"
     assert body["frames"] == ["front", "right", "rear", "left"]
-    assert body["front"] == "data:image/jpeg;base64,ONBOARD"
+    # the front is encoded from the captured pixels (a worker in Chrome; a canvas here), not the PIP (#42)
+    assert body["front"] == "data:image/jpeg;base64,AAAA"
     # heading pi/2 faces +x; right, rear and left turn clockwise from there
     looks = pumped["yaws"][1:5]  # render 0 is the PIP repaint
     directions = [(round(look["dx"]), round(look["dz"])) for look in looks]
