@@ -1090,7 +1090,7 @@ def test_each_display_frame_posts_four_surround_jpegs():
     assert all(abs(value - 100.0) < 0.5 for value in hfov)
     assert pumped["postTimes"] == pumped["tickTimes"]
     assert 700 not in pumped["intervals"]
-    assert pumped["fps"] == "60 FPS"
+    assert pumped["fps"] == "15 FPS", "the PIP is a 15 Hz preview (#42 item 3)"
     # #18: the front camera, which perception reads, renders at 640x360; the other three at 320x180.
     assert pumped["readSizes"][:4] == [[640, 360], [320, 180], [320, 180], [320, 180]]
 
@@ -1385,3 +1385,18 @@ def test_the_page_counts_classifier_successes_and_failures_for_the_evaluation():
 def test_issue19_review_the_minimal_view_does_not_bring_back_a_fan_it_has_no_button_for():
     out = _run({"cmd": "candidates", "minimal": "1", "storage": {"semif.candidates": "1"}})
     assert out["restored"] == "false" and out["restoreClicks"] == 0
+
+
+def test_issue42_the_onboard_pip_repaints_at_15_hz_not_every_frame():
+    """#42 item 3: the PIP is a 15 Hz preview; Vision does not wait for it (see the next test)."""
+    pumped = _run({"cmd": "upload", "vision": "0", "frames": 120})
+    # 120 frames at 60 Hz are 2 s; one repaint every 66 ms is 31 at most.
+    assert 25 <= pumped["renders"] <= 31, pumped["renders"]
+    assert pumped["posts"] == 0
+
+
+def test_issue42_vision_grabs_on_any_frame_the_server_can_take_not_only_on_pip_frames():
+    """Between PIP repaints, a free vision slot still grabs at once: the front frame then comes
+    from grabFrame(), so the 15 Hz preview never delays the evidence."""
+    pumped = _run({"cmd": "upload", "vision": "1", "frames": 120})
+    assert pumped["posts"] == 120, "the harness's server answers at once, so every frame can grab"

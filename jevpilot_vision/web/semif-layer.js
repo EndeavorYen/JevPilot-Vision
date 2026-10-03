@@ -1127,6 +1127,9 @@
   const CAMERA_VIEWS = ["front", "left", "right", "rear", "all"];
   const CAMERA_LABELS = { front: "FRONT", left: "LEFT", right: "RIGHT", rear: "REAR", all: "SURROUND" };
   const VIEW_PERIOD_MS = 66;
+  // The front PIP repaints at the same 15 Hz as the other views (#42 item 3).
+  const PIP_PERIOD_MS = VIEW_PERIOD_MS;
+  let pipNextAt = 0;
   const cameraView = document.getElementById("fsd-camera-view");
   const cameraLabel = document.getElementById("fsd-camera-label");
   const pipView = { name: "front", nextAt: 0 };
@@ -1418,15 +1421,23 @@
       if (seed != null && document.activeElement !== seedInput) seedInput.value = String(seed);
       drawBoxes(sim, world);
     }
+    // The PIP is a 15 Hz preview (#42 item 3): a whole-scene render plus a pixel read every display
+    // frame cost the drive more than the preview is worth. Vision does not wait for it: on the frames
+    // between repaints, a free vision slot grabs at once and paints the front camera itself.
     let painted = false;
+    const pipDue = performance.now() >= pipNextAt;
     try {
-      painted = !!renderOnboard(world);
+      if (pipDue) {
+        painted = !!renderOnboard(world);
+        if (painted) pipNextAt = performance.now() + PIP_PERIOD_MS;
+      }
       if (painted && pipFps) pipFps.textContent = pipFpsText(performance.now());
       if (painted) paintCameraView(world, performance.now());
     } catch (_err) {
       /* The onboard view must not kill the drive loop */
     }
     if (painted) visionTick(true);
+    else if (!pipDue) visionTick(false);
     if (window.SEMIF_DRIVE_MODE === "vision") updateSeenSignal();
     wireStrategy();
     try {
