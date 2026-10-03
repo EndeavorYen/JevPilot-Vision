@@ -1049,34 +1049,85 @@
     sim._fsdAgents = sim._fsdAgents.filter((a) => dist2(a, player) < 80);
   }
 
+  // Camera-relative perception (perception.py: ahead_m / right_m from the onboard camera, which sits
+  // CAMERA_AHEAD_M ahead of the car's centre) to world x / z.
+  const CAMERA_AHEAD_M = 0.15;
+  const SEEN_HEIGHT_M = { pedestrian: 1.7, car: 1.5, motorcycle: 1.6 }; // perception.HEIGHT_M
+  const SEEN_STALE_MS = 1500; // vision_mode.STALE_MS: older evidence is no evidence
+
+  function seenToWorld(player, ahead, right) {
+    const h = player.heading || 0;
+    const fwd = ahead + CAMERA_AHEAD_M;
+    return {
+      x: player.x + Math.sin(h) * fwd + Math.cos(h) * right,
+      z: player.z - Math.cos(h) * fwd + Math.sin(h) * right,
+    };
+  }
+
+  // What the boxes show (#54). Vision mode: only what the camera reported, never the simulator's
+  // objects. Privileged and Heuristic: the simulator's truth, labelled as such.
+  function boxTargets(sim) {
+    if (window.SEMIF_DRIVE_MODE === "vision") {
+      const vis = window.SEMIF_VISION;
+      const objects = vis && vis.perception && Array.isArray(vis.perception.objects) ? vis.perception.objects : [];
+      const age = performance.now() - Number(window.SEMIF_VISION_AT);
+      if (!(age >= 0 && age <= SEEN_STALE_MS)) return [];
+      const out = [];
+      for (const o of objects) {
+        const ahead = Number(o && o.ahead_m);
+        const right = Number(o && o.right_m);
+        if (!(o.kind in SEEN_HEIGHT_M) || !Number.isFinite(ahead) || !Number.isFinite(right)) continue;
+        const at = seenToWorld(sim.player, ahead, right);
+        out.push({
+          x: at.x,
+          z: at.z,
+          height: SEEN_HEIGHT_M[o.kind],
+          d: Math.hypot(ahead, right),
+          tag: o.kind === "pedestrian" ? "PED" : "VEH",
+          source: "CAM",
+          hazard: false,
+        });
+      }
+      return out;
+    }
+    const player = sim.player;
+    return []
+      .concat(sim.pedestrians || [])
+      .concat((sim.traffic || []).filter((v) => v.hazardLights))
+      .map((obj) => ({
+        x: obj.x,
+        z: obj.z,
+        height: obj.height || 1.6,
+        d: dist2(obj, player),
+        tag: obj.type === "pedestrian" ? "PED" : "VEH",
+        source: "TRUTH",
+        hazard: !!obj.hazardLights,
+      }));
+  }
+
   function drawBoxes(sim, world) {
     boxes.innerHTML = "";
     if (!sim || !world || !world.camera || !world.canvas) return;
     const w = world.canvas.clientWidth;
     const h = world.canvas.clientHeight;
     const camera = world.camera;
-    const player = sim.player;
-    const targets = []
-      .concat(sim.pedestrians || [])
-      .concat((sim.traffic || []).filter((v) => v.hazardLights));
     let nearest = Infinity;
-    for (const obj of targets) {
-      const d = dist2(obj, player);
+    for (const obj of boxTargets(sim)) {
+      const d = obj.d;
       if (d < nearest) nearest = d;
       if (d > 55) continue;
-      const top = project(camera, obj.x, (obj.height || 1.6), obj.z, w, h);
+      const top = project(camera, obj.x, obj.height, obj.z, w, h);
       const bot = project(camera, obj.x, 0.05, obj.z, w, h);
       if (!top || !bot) continue;
       const height = Math.max(18, Math.abs(bot.y - top.y));
       const width = Math.max(16, height * 0.45);
       const el = document.createElement("div");
-      el.className = "fsd-box" + (obj.hazardLights ? " is-hazard" : "");
+      el.className = "fsd-box" + (obj.hazard ? " is-hazard" : "");
       el.style.left = `${top.x - width / 2}px`;
       el.style.top = `${Math.min(top.y, bot.y)}px`;
       el.style.width = `${width}px`;
       el.style.height = `${height}px`;
-      const label = obj.type === "pedestrian" ? `PED ${d.toFixed(0)}m` : `VEH ${d.toFixed(0)}m`;
-      el.innerHTML = `<span>${label}</span><i class="fsd-vec"></i>`;
+      el.innerHTML = `<span>${obj.source} ${obj.tag} ${d.toFixed(0)}m</span><i class="fsd-vec"></i>`;
       boxes.appendChild(el);
     }
     // Styled by state in semif-layer.css (#fsd-halo[data-level]).
