@@ -496,6 +496,17 @@ if (spec.cmd === "cstats") {
   window.SEMIF_MODE.refresh();
   said.push(document.getElementById("sol-mode-announce").textContent);
   steps.push({ at: "announcements", said });
+  // #78 review: Vision (map) speaks its own name, and comes back after a trip through Heuristic.
+  window.SEMIF_MODE.set("vision-map");
+  window.SEMIF_MODE.refresh();
+  const mapSaid = document.getElementById("sol-mode-announce").textContent;
+  strategy.value = "heuristic";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  const viaHeuristic = window.SEMIF_MODE_ID;
+  strategy.value = "semif";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  steps.push({ at: "vision-map round trip", mapSaid, viaHeuristic, mode: window.SEMIF_MODE_ID, drive: window.SEMIF_DRIVE_MODE,
+    stage: window.SEMIF_VISION_STAGE });
   const h = window.SEMIF_MODE.health;
   const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
   const health = {
@@ -1321,6 +1332,13 @@ def test_the_mode_comes_from_the_address_then_the_browser_then_privileged():
     assert _run({"cmd": "mode", "storage": {"semif.driveMode": "vision"}})["steps"][0]["mode"] == "vision"
     assert _run({"cmd": "mode", "mode": "heuristic", "storage": {"semif.driveMode": "vision"}})["steps"][0]["mode"] == "heuristic"
     assert _run({"cmd": "mode", "storage": {"semif.driveMode": "nonsense"}})["steps"][0]["mode"] == "privileged"
+
+
+def test_issue78_review_vision_map_names_itself_and_survives_a_trip_through_heuristic():
+    trip = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["vision-map round trip"]
+    assert trip["mapSaid"] == "Vision (map) mode, detector failed, holding to a crawl"
+    assert trip["viaHeuristic"] == "heuristic"
+    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 0)
 
 
 def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():

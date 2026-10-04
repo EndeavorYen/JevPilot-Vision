@@ -37,7 +37,7 @@ MODES = ("privileged", "vision", "vision-map", "heuristic")
 # #78: "vision-map" is the old Vision kept as a baseline (cameras, map privileged); "vision" is the
 # Vision losing its map and localization privilege stage by stage. Its runs record the stage; a
 # "vision" row without one predates the split and is reported as Vision (map).
-VISION_STAGE = 0
+VISION_STAGE = 0  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's
 DEFAULT_ROUTES = ("festival", "harbour", "pass")
 DEFAULT_MODES = ("privileged", "vision")
 GFX = ("medium", "high")  # docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3
@@ -330,7 +330,7 @@ _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
     " const c = window.SEMIF_CLASSIFIER_STATS || {}, c0 = window.__eval.c0;"
     " const classifier = {}; for (const k of Object.keys(c)) classifier[k] = c[k] - (c0[k] || 0);"
-    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_MODE_ID || window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
+    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_MODE_ID || window.SEMIF_DRIVE_MODE, vision_stage_seen: window.SEMIF_VISION_STAGE ?? null, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -487,6 +487,8 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return "tab hidden (the simulation does not step)"
     if got.get("mode_seen") != run["mode"]:
         return f"drove mode {got.get('mode_seen')!r}"
+    if "vision_stage" in run and got.get("vision_stage_seen") != run["vision_stage"]:
+        return f"page at Vision stage {got.get('vision_stage_seen')!r}"  # another branch's page (#78)
     if got.get("world_seen") != f"coast:{run['route']}":
         return f"drove route {got.get('world_seen')!r}"
     if int(got.get("lag_seen") or 0) != int(run.get("lag_ms") or 0):
