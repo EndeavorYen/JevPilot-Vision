@@ -200,6 +200,8 @@ def perceive(
     backend: str = "detector",
     tracker: Optional["Tracker"] = None,
     t: Optional[float] = None,
+    yaw_rps: float = 0.0,
+    speed_mps: float = 0.0,
 ) -> Dict[str, Any]:
     """Objects on the road with range, and the state of the light ahead."""
     if detections is None:
@@ -229,10 +231,11 @@ def perceive(
             "right_m": round(right, 2),
             "width_m": round((x1 - x0) * ahead / camera.fx, 2),
             "conf": round(float(det["conf"]), 3),
+            **box_flow_fields(det["box"], camera, kind),
         })
     objects.sort(key=lambda o: o["ahead_m"])
     if tracker is not None:
-        objects = tracker.update(objects, time.monotonic() if t is None else t)
+        objects = tracker.update(objects, time.monotonic() if t is None else t, yaw_rps, speed_mps)
 
     # The light that governs us is ahead, above the horizon, near the middle of the view; the
     # biggest such box is the nearest. Readable lights that disagree give no answer at all.
@@ -266,6 +269,73 @@ def perceive(
     return {"backend": backend, "objects": objects, "signal": signal}
 
 
+# Optical flow B (#75): how a tracked box moves. Chosen, not measured; the TTC error they give is
+# measured by benchmarks/eval_perception.py on tuning-seed captures (see #75).
+FLOW_WINDOW_S = 1.5  # = Tracker.MAX_GAP_S: a track's samples older than one allowed gap are dropped
+FLOW_MIN_SAMPLES = 3  # a line through two points fits their noise exactly
+FLOW_MIN_SPAN_S = 0.25  # captures run at 3-20 frames/s (one request at a time); tracks often last < 0.5 s
+FLOW_MAX_TTC_S = 20.0  # slower expansion is under the jitter of a +-1 px box at 15 m (tests/test_perception.py)
+FLOW_EDGE_PX = 2.0  # a box this close to the frame's edge is cut off: its size is not the object's
+
+
+def box_flow_fields(box: Sequence[float], camera: "CameraModel", kind: str = "car") -> Dict[str, Any]:
+    """The pixel box, the size its expansion is read from and its bearing from the optical axis:
+    what the tracker's flow reads. A walker's width swings with its stride, so its height. A box
+    cut by the frame's edge has no size (None): entering the view, it would read as closing."""
+    x0, y0, x1, y1 = (float(v) for v in box)
+    if kind == "pedestrian":  # sized by height: only the top and bottom edges cut it
+        cut = y0 <= FLOW_EDGE_PX or y1 >= camera.height - FLOW_EDGE_PX
+    else:  # sized by width
+        cut = x0 <= FLOW_EDGE_PX or x1 >= camera.width - FLOW_EDGE_PX
+    return {
+        "box_px": [round(float(v), 1) for v in box],
+        "scale_px": None if cut else round(y1 - y0 if kind == "pedestrian" else x1 - x0, 2),
+        "bearing_rad": round(math.atan2((x0 + x1) / 2.0 - camera.cx, camera.fx), 5),
+    }
+
+
+def _slope(samples: List[tuple[float, float]]) -> tuple[float, float]:
+    """Least-squares (slope, value at the last sample's time)."""
+    n = len(samples)
+    mt = sum(t for t, _ in samples) / n
+    mv = sum(v for _, v in samples) / n
+    var = sum((t - mt) ** 2 for t, _ in samples)
+    slope = sum((t - mt) * (v - mv) for t, v in samples) / var if var > 0 else 0.0
+    return slope, mv + slope * (samples[-1][0] - mt)
+
+
+def _enough(samples: List[tuple[float, float]]) -> bool:
+    return len(samples) >= FLOW_MIN_SAMPLES and samples[-1][0] - samples[0][0] >= FLOW_MIN_SPAN_S
+
+
+def box_flow(history: List[tuple[float, Optional[float], float, float, float, float]], ahead_m: float, right_m: float) -> Dict[str, Optional[float]]:
+    """TTC from the box's expansion and the speed toward our lane's line, over (t, scale_px or
+    None, right_m, ahead_m, ego yaw rate, ego speed) samples.
+
+    Expansion: at a constant closing speed 1/size falls linearly in time, so
+    TTC = (1/s) / -(d(1/s)/dt) holds without knowing the range. Sideways: the fitted rate of the
+    box centre's ground position (ahead * tan(bearing): both its change of range and of bearing),
+    less what the bend adds. On a bend of curvature k = yaw / speed, anything keeping to its lane
+    `a` m ahead sits k * a^2 / 2 further right in our frame than its lane's offset, so the fit runs
+    over right - k * a^2 / 2: a parked car's slide as we close on it around the bend, and a car
+    taking the bend with us, both come out as no sideways motion. None: not enough of the track
+    yet, or not closing."""
+    out: Dict[str, Optional[float]] = {"ttc_s": None, "toward_center_mps": None}
+    sized = [(t, 1.0 / s) for t, s, _r, _a, _w, _v in history if s]
+    if _enough(sized):
+        slope, inv_now = _slope(sized)
+        if slope < 0 and inv_now > 0 and inv_now / -slope <= FLOW_MAX_TTC_S:
+            out["ttc_s"] = round(inv_now / -slope, 2)
+    bends = [w / v for _t, _s, _r, _a, w, v in history if v > 0.5]  # standing still: no bend to take out
+    curvature = sum(bends) / len(bends) if bends else 0.0
+    placed = [(t, r - curvature * a * a / 2.0) for t, _s, r, a, _w, _v in history]
+    if _enough(placed):
+        lateral, _now = _slope(placed)  # right positive, the bend taken out
+        side = 1.0 if right_m > 0 else -1.0 if right_m < 0 else 0.0
+        out["toward_center_mps"] = round(-side * lateral, 2)
+    return out
+
+
 class Tracker:
     """Matches each object to the same kind nearby in the previous frame, for a closing speed.
 
@@ -273,6 +343,11 @@ class Tracker:
     objects. After a gap of more than 1.5 s (one perception cycle can take most of a second), or if
     time runs backwards (a reload), nothing is matched. An unmatched object's closing speed is
     None: unknown, not zero (zero would mean it drives away at our own speed).
+
+    Objects with a pixel box (`box_flow_fields`) also carry their box flow (#75): `ttc_s` and
+    `toward_center_mps`, from the matched track's recent boxes. `yaw_rps` and `speed_mps` are the
+    car's own gyro and odometer when the frame was taken (yaw positive turning right): with them a
+    bend is not read as the others moving sideways.
     """
 
     MAX_GAP_S = 1.5
@@ -282,10 +357,12 @@ class Tracker:
         self.gate_m = gate_m
         self.prev: List[Dict[str, Any]] = []
         self.prev_t: Optional[float] = None
+        self.history: List[List[tuple[float, Optional[float], float, float, float, float]]] = []  # per entry of prev
 
-    def update(self, objects: List[Dict[str, Any]], t: float) -> List[Dict[str, Any]]:
+    def update(self, objects: List[Dict[str, Any]], t: float, yaw_rps: float = 0.0, speed_mps: float = 0.0) -> List[Dict[str, Any]]:
         dt = None if self.prev_t is None else t - self.prev_t
         closing: List[Optional[float]] = [None] * len(objects)
+        matched: List[Optional[int]] = [None] * len(objects)
         if dt is not None and 0 < dt <= self.MAX_GAP_S:
             pairs = []
             for i, obj in enumerate(objects):
@@ -303,8 +380,19 @@ class Tracker:
                 used_i.add(i)
                 used_j.add(j)
                 closing[i] = (self.prev[j]["ahead_m"] - objects[i]["ahead_m"]) / dt
-        out = [{**obj, "closing_mps": None if c is None else round(c, 2)} for obj, c in zip(objects, closing)]
-        self.prev, self.prev_t = out, t
+                matched[i] = j
+        out, history = [], []
+        for obj, c, j in zip(objects, closing, matched):
+            row = {**obj, "closing_mps": None if c is None else round(c, 2)}
+            past = [h for h in self.history[j] if t - h[0] <= FLOW_WINDOW_S] if j is not None else []
+            if "box_px" in obj:
+                scale = obj.get("scale_px")
+                past = past + [(t, float(scale) if scale and scale > 0 else None, float(obj["right_m"]), float(obj["ahead_m"]),
+                                float(yaw_rps or 0.0), float(speed_mps or 0.0))]
+                row.update(box_flow(past, float(obj["ahead_m"]), float(obj["right_m"])))
+            out.append(row)
+            history.append(past)
+        self.prev, self.prev_t, self.history = out, t, history
         return out
 
 
@@ -436,7 +524,8 @@ class Perception:
         self.detector = detector or Detector()
         self.tracker = Tracker()
 
-    def front(self, image: Any, t: Optional[float] = None, narrow: Any = None) -> Dict[str, Any]:
+    def front(self, image: Any, t: Optional[float] = None, narrow: Any = None, yaw_rps: float = 0.0,
+              speed_mps: float = 0.0) -> Dict[str, Any]:
         """Objects and the light from the wide front camera; with `narrow`, the light comes from the
         narrow camera whenever it can read one (2.5 times the magnification)."""
         t0 = time.perf_counter()
@@ -449,6 +538,8 @@ class Perception:
             backend=self.detector.model_id if detections is not None else "none",
             tracker=self.tracker,
             t=t,
+            yaw_rps=yaw_rps,
+            speed_mps=speed_mps,
         )
         out["signal"]["camera"] = "front"
         if narrow is not None and detections is not None:

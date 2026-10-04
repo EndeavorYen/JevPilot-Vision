@@ -282,3 +282,132 @@ def test_issue65_review_blind_is_not_a_clear_road_and_the_line_fits_the_prompt()
     ]
     event = vision_mode.prepare(_payload(_perception(crowd, signal="unknown"), line=40.0))["state"]["vision"]["event"]
     assert len(event) <= 96 and "motorcycle" in event, event
+
+
+# --- #75: box flow in the new Vision ------------------------------------------------------------
+
+def test_issue75_only_the_expansion_rate_says_danger_and_the_candidate_is_hit():
+    # Ranging says the car ahead keeps its distance; its box says contact in 2 s.
+    car = {"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "closing_mps": 0.0, "ttc_s": 2.0}
+    straight = [8.0, 0.0, 0, 0, False, False]
+    assert vision_mode.sweep_collision(straight, [car], speed=8.0) is False, "ranging alone: no hit"
+    assert vision_mode.sweep_collision(straight, [car], speed=8.0, use_flow=True) is True
+    # the more dangerous of the two wins: a far TTC does not hide a fast range closing
+    near = {"kind": "car", "ahead_m": 9.0, "right_m": 0.0, "closing_mps": 8.0, "ttc_s": 30.0}
+    assert vision_mode.sweep_collision(straight, [near], speed=8.0, use_flow=True) is True
+
+
+def test_issue75_the_ablation_switch_picks_one_closing_source(monkeypatch):
+    straight = [8.0, 0.0, 0, 0, False, False]
+    flow_only = {"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "closing_mps": 0.0, "ttc_s": 2.0}
+    range_only = {"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "closing_mps": 7.0, "ttc_s": None}
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "range")
+    assert vision_mode.sweep_collision(straight, [flow_only], speed=8.0, use_flow=True) is False
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "flow")
+    assert vision_mode.sweep_collision(straight, [flow_only], speed=8.0, use_flow=True) is True
+    # without a TTC, "flow" knows no speed: the car is taken as standing, the cautious reading
+    assert vision_mode.sweep_collision(straight, [range_only], speed=8.0, use_flow=True) is True
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "nonsense")
+    assert vision_mode.closing_source() == "both"
+
+
+def test_issue75_the_new_vision_reads_box_flow_and_vision_map_does_not():
+    def payload(stage):
+        p = _payload(_perception([{"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "closing_mps": 0.0, "ttc_s": 2.0}], signal="green"),
+                     candidates={"keep": [8.0, 0.0, 0.0, 0.0, False, False]}, speed=8.0)
+        if stage is not None:
+            p["vision_stage"] = stage
+        return p
+    assert vision_mode.prepare(payload(None))["state"]["candidates"]["keep"][4] is False
+    assert vision_mode.prepare(payload(1))["state"]["candidates"]["keep"][4] is True
+
+
+def test_issue75_the_event_says_how_a_car_moves_within_the_prompt_cap():
+    objects = [
+        {"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "ttc_s": 2.1, "toward_center_mps": 0.0},
+        {"kind": "pedestrian", "ahead_m": 9.0, "right_m": 4.0},
+        {"kind": "motorcycle", "ahead_m": 22.0, "right_m": 3.6, "toward_center_mps": 1.2},
+    ]
+    text = vision_mode.perception_event("red", objects, flow=True)
+    assert "TTC 2.1 s" in text and len(text) <= 96, text
+    assert text.startswith("RED signal ahead"), "the light is never the clause dropped"
+    cut = vision_mode.perception_event("green", [objects[2]], flow=True)
+    assert "cutting in from right" in cut, cut
+    assert "TTC" not in vision_mode.perception_event("red", objects), "Vision (map) keeps its words"
+
+
+# --- #75 review --------------------------------------------------------------------------------
+
+def test_issue75_review_vision_map_keeps_its_event_words_exactly():
+    objects = [
+        {"kind": "pedestrian", "ahead_m": 30.0, "right_m": 0.0, "ttc_s": 1.0},
+        {"kind": "car", "ahead_m": 10.0, "right_m": 0.0, "ttc_s": 2.0},
+        {"kind": "motorcycle", "ahead_m": 44.4, "right_m": 3.0, "toward_center_mps": 2.0},
+    ]
+    # kind order (pedestrian, vehicle, motorcycle), never ranked, never cut here
+    assert vision_mode.perception_event("red", objects) == (
+        "RED signal ahead, mandatory stop; pedestrian at 30 m; vehicle at 10 m; motorcycle at 44 m")
+    assert vision_mode.perception_event("green", objects, ok=False).endswith("camera evidence unavailable")
+
+
+def test_issue75_review_box_jitter_on_a_parked_car_is_not_a_car_reversing_at_us():
+    parked = {"kind": "car", "ahead_m": 30.0, "right_m": 0.0, "closing_mps": 8.0, "ttc_s": 1.0}  # jitter: 30 m/s
+    assert vision_mode.sweep_collision([8.0, 0.0, 0, 0, False, False], [parked], speed=8.0, use_flow=True) is False
+
+
+def test_issue75_review_the_server_takes_the_pages_gyro_with_the_frames(monkeypatch):
+    import asyncio
+
+    from jevpilot_vision import http
+
+    seen = {}
+    monkeypatch.setattr(http._vision_slot, "submit", lambda image: (seen.setdefault("image", image), None, None) and (0, None, 0))
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 36), (90, 90, 90)).save(buf, format="JPEG")
+    frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    for yaw, kept in ((0.15, 0.15), (float("nan"), None), (9.0, None), (True, None)):
+        seen.clear()
+        try:
+            asyncio.run(http.vision_endpoint({"frames": {"front": frame}, "t_ms": 5.0, "yaw_rps": yaw}))
+        except Exception:
+            pass
+        assert seen["image"].get("_yaw_rps") == kept, (yaw, seen["image"])
+
+
+def test_issue75_review_the_flow_ablation_reads_box_flow_for_cars_in_our_lane(monkeypatch):
+    straight = [8.0, 0.0, 0, 0, False, False]
+    # 14 m ahead; its box says we close at 2 m/s (TTC 7 s), ranging knows nothing
+    slow = {"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "closing_mps": None, "ttc_s": 7.0}
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "flow")
+    assert vision_mode.sweep_collision(straight, [slow], speed=8.0, use_flow=True) is False
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "range")
+    assert vision_mode.sweep_collision(straight, [slow], speed=8.0, use_flow=True) is True, "unknown: standing"
+
+
+def test_issue75_review_the_server_takes_the_pages_odometer_with_the_frames(monkeypatch):
+    import asyncio
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    from jevpilot_vision import http
+
+    seen = {}
+    monkeypatch.setattr(http._vision_slot, "submit", lambda image: (seen.setdefault("image", image), None, None) and (0, None, 0))
+    buf = BytesIO()
+    Image.new("RGB", (64, 36), (90, 90, 90)).save(buf, format="JPEG")
+    frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    for speed, kept in ((9.5, 9.5), (-1.0, None), (float("inf"), None), (None, None)):
+        seen.clear()
+        try:
+            asyncio.run(http.vision_endpoint({"frames": {"front": frame}, "t_ms": 5.0, "speed_mps": speed}))
+        except Exception:
+            pass
+        assert seen["image"].get("_speed_mps") == kept, (speed, seen["image"])
+

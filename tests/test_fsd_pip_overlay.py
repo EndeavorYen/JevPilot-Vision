@@ -308,6 +308,8 @@ if (specEarly.cmd === "upload") {
         keys: Object.keys(sent),
         frames: sent.frames ? Object.keys(sent.frames) : [],
         front: sent.frames ? sent.frames.front : null,
+        yaw: sent.yaw_rps,
+        speed: sent.speed_mps,
       });
     }
     return Promise.resolve({
@@ -437,7 +439,7 @@ if (spec.cmd === "cstats") {
   const DRIVE_MODES_T = ["vision", "vision-map", "privileged", "heuristic"];
   const shape = () => {
     const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
-    return { drive_mode: body.drive_mode || null, mode: body.mode };
+    return { drive_mode: body.drive_mode || null, mode: body.mode, vision_stage: body.vision_stage ?? null };
   };
   const pick = (m) => document.getElementById("sol-mode-" + m).click();
   const strategy = document.getElementById("strategy-select");
@@ -727,17 +729,24 @@ if (spec.cmd === "cstats") {
     return paint.apply(this, arguments);
   };
   nowMs = 0;
+  // #75: a car turning at spec.turn rad/s, its heading crossing +-pi on the way
+  if (spec.turn) window.SEMIF_SIM = { step() {}, traffic: [], pedestrians: [], player: { heading: Math.PI - 0.02, speed: -9 } };
   // A browser runs promise callbacks between frames; the vision post waits on a few (#42 item 2).
   (async () => {
   for (let i = 0; i < frames; i++) {
     nowMs += dt;
     ticks.push(nowMs);
+    if (spec.turn) {
+      const h = window.SEMIF_SIM.player.heading + (spec.turn * dt) / 1000;
+      window.SEMIF_SIM.player.heading = Math.atan2(Math.sin(h), Math.cos(h));
+    }
     window.__raf();
     await new Promise((r) => setImmediate(r));
   }
   process.stdout.write(JSON.stringify({
     posts: visionPosts.length,
     bodies: visionBodies.slice(0, 2),
+    gyro: visionBodies.map((b) => [b.yaw, b.speed]),
     yaws: surroundLooks,
     postTimes: visionPosts,
     tickTimes: ticks,
@@ -1138,7 +1147,7 @@ def test_each_display_frame_posts_four_surround_jpegs():
     # four cameras per capture, plus the 15 Hz PIP repaint (31 in 2 s at most; #42 item 3)
     assert 120 * 4 + 25 <= pumped["renders"] <= 120 * 4 + 31
     body = pumped["bodies"][0]
-    assert body["keys"] == ["frames", "t_ms"], "frames carry the moment they were grabbed (#18)"
+    assert body["keys"] == ["frames", "t_ms", "yaw_rps", "speed_mps"], "frames carry the moment they were grabbed (#18) and the car's gyro and odometer then (#75)"
     assert body["frames"] == ["front", "right", "rear", "left"]
     # the front is encoded from the captured pixels (a worker in Chrome; a canvas here), not the PIP (#42)
     assert body["front"] == "data:image/jpeg;base64,AAAA"
@@ -1338,7 +1347,7 @@ def test_issue78_review_vision_map_names_itself_and_survives_a_trip_through_heur
     trip = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["vision-map round trip"]
     assert trip["mapSaid"] == "Vision (map) mode, detector failed, holding to a crawl"
     assert trip["viaHeuristic"] == "heuristic"
-    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 0)
+    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 1)
 
 
 def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
@@ -1346,14 +1355,16 @@ def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
     The address and the switch name it; it drives "vision", so every planner patch treats it alike."""
     load = _run({"cmd": "mode", "mode": "vision-map"})["steps"][0]
     assert (load["id"], load["mode"]) == ("vision-map", "vision")
-    assert load["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert load["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}, "Vision (map) names no stage"
     stored = _run({"cmd": "mode", "storage": {"semif.driveMode": "vision-map"}})["steps"][0]
     assert (stored["id"], stored["mode"]) == ("vision-map", "vision")
     steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "privileged"})["steps"]}
     click = steps["click vision-map"]
     assert (click["id"], click["mode"], click["checked"]) == ("vision-map", "vision", "true")
-    assert click["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert click["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["id"] == "vision"
+    # #75: the new Vision names its stage, so the server applies that stage's rules
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 1}
 
 
 def test_switching_mode_from_the_indicator_changes_the_decision_request():
@@ -1362,15 +1373,15 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     dropdown follows, the choice is remembered and written into the address."""
     out = _run({"cmd": "mode", "mode": "privileged"})
     steps = {s["at"]: s for s in out["steps"]}
-    assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat"}
-    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
-    assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 1}
+    assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["checked"] == "true"
     # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
     # bundle then decides locally and asks no server); nothing in the request is rewritten.
     assert steps["click heuristic"]["select"] == "heuristic"
-    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "flat"}
-    assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
+    assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
     assert steps["click privileged"]["select"] == "semif"
     assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
     last = [s["mode"] for s in out["steps"] if "mode" in s][-1]
@@ -1383,8 +1394,8 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
 def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
     steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
     assert steps["click vision-map"]["reads"] == "Objects & signals from cameras · map privileged"
-    # #78: until its stages land the new Vision says it still drives as Vision (map)
-    assert steps["click vision"]["reads"] == "Objects & signals from cameras · de-mapping stage 0: drives as Vision (map)"
+    # #78/#75: the new Vision says which stage it is at and what is still privileged
+    assert steps["click vision"]["reads"] == "Objects, signals & box flow from cameras · stage 1 · map privileged"
     assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
     assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
 
@@ -1534,3 +1545,13 @@ def test_issue55_the_page_never_draws_from_the_planners_seeded_random():
     assert out["time"] > 29.9
     assert out["draws"] == 0
     assert out["agents"] is False, "no ghost agents that nothing reads"
+
+
+def test_issue75_review_the_page_sends_its_gyro_and_odometer_across_the_heading_wrap():
+    out = _run({"cmd": "upload", "vision": "1", "frames": 30, "turn": 0.3})
+    gyro = out["gyro"]
+    assert gyro[0][0] is None, "no rate before a second reading"
+    rates = [yaw for yaw, _speed in gyro[1:]]
+    assert rates and all(abs(r - 0.3) < 0.01 for r in rates), rates  # also where heading jumps from pi to -pi
+    assert all(speed == 9 for _yaw, speed in gyro), "the odometer reads how fast, not which way"
+
