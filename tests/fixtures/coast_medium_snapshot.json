@@ -2,105 +2,202 @@
  "cars": [
   {
    "attrs": {
-    "position": 23406
+    "position": 31716
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 37728,
+   "index": 49560,
    "mats": [
     {
-     "clearcoat": 1,
-     "clearcoatRoughness": 0.08,
-     "color": "#d8c7a6",
-     "metalness": 0.45,
+     "clearcoat": 0.2,
+     "clearcoatRoughness": 0.35,
+     "color": "#c9b48a",
+     "metalness": 0.55,
      "physical": true,
-     "roughness": 0.28
+     "roughness": 0.4
     }
    ],
    "path": "car0/semif-hero-cybercab[0]/body[0]/Mesh"
   },
   {
    "attrs": {
-    "position": 1056
+    "position": 3399
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 1296,
+   "index": 6144,
    "mats": [
     {
-     "color": "#55595e",
-     "metalness": 0.2,
-     "roughness": 0.55
+     "clearcoat": 1,
+     "color": "#45525e",
+     "metalness": 0.3,
+     "name": "Glass",
+     "physical": true,
+     "roughness": 0.05
     }
    ],
    "path": "car0/semif-hero-cybercab[0]/body[1]/Mesh"
   },
   {
    "attrs": {
-    "position": 12840
+    "position": 7059
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 8280,
+   "index": 8616,
    "mats": [
     {
-     "clearcoat": 1,
-     "color": "#45525e",
-     "metalness": 0.2,
-     "name": "Glass",
-     "physical": true,
-     "roughness": 0.06
+     "color": "#55595e",
+     "metalness": 0.1,
+     "roughness": 0.62
     }
    ],
    "path": "car0/semif-hero-cybercab[0]/body[2]/Mesh"
   },
   {
    "attrs": {
-    "position": 72
+    "position": 300
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 36,
+   "index": 288,
    "mats": [
     {
-     "color": "#e8ecef",
-     "emissive": "#ffffff",
-     "emissiveIntensity": 0.5,
-     "metalness": 0,
-     "roughness": 0.15
+     "clearcoat": 1,
+     "color": "#45525e",
+     "metalness": 0.35,
+     "physical": true,
+     "roughness": 0.08,
+     "side": 2
     }
    ],
    "path": "car0/semif-hero-cybercab[0]/body[3]/Mesh"
   },
   {
    "attrs": {
-    "position": 72
+    "position": 576
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 36,
+   "index": 552,
    "mats": [
     {
-     "color": "#663046",
+     "color": "#55595e",
      "metalness": 0,
-     "roughness": 0.25
+     "roughness": 0.95,
+     "side": 2
     }
    ],
    "path": "car0/semif-hero-cybercab[0]/body[4]/Mesh"
   },
   {
    "attrs": {
-    "position": 540
+    "position": 282
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 900,
+   "index": 276,
+   "mats": [
+    {
+     "color": "#e8ecef",
+     "emissive": "#e8ecef",
+     "emissiveIntensity": 1.6,
+     "metalness": 0,
+     "roughness": 0.2,
+     "side": 2
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[0]/body[5]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 72
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 36,
+   "mats": [
+    {
+     "clearcoat": 0.2,
+     "clearcoatRoughness": 0.35,
+     "color": "#c9b48a",
+     "metalness": 0.55,
+     "physical": true,
+     "roughness": 0.4
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[1]/details[0]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 216
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 108,
+   "mats": [
+    {
+     "color": "#663046",
+     "emissive": "#663046",
+     "emissiveIntensity": 0.9,
+     "metalness": 0,
+     "roughness": 0.3,
+     "side": 2
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[1]/details[1]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 72
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 36,
+   "mats": [
+    {
+     "color": "#55595e",
+     "metalness": 0.1,
+     "roughness": 0.62
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[1]/details[2]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 456
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 432,
+   "mats": [
+    {
+     "color": "#55595e",
+     "metalness": 0,
+     "roughness": 0.95,
+     "side": 2
+    }
+   ],
+   "path": "car0/semif-hero-cybercab[1]/details[3]/Mesh"
+  },
+  {
+   "attrs": {
+    "position": 864
+   },
+   "colours": null,
+   "count": null,
+   "geo": "Geo",
+   "index": 1440,
    "mats": [
     {
      "color": "#4c4d50",
@@ -109,86 +206,37 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/wheel_fl[0]/wheel_fl_spin[0]/Mesh"
+   "path": "car0/semif-hero-cybercab[2]/wheel_fl[0]/wheel_fl_spin[0]/Mesh"
   },
   {
    "attrs": {
-    "position": 756
+    "position": 1500
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 888,
+   "index": 2556,
    "mats": [
     {
-     "color": "#a9adb2",
-     "metalness": 0.85,
-     "roughness": 0.3,
+     "clearcoat": 0.1,
+     "clearcoatRoughness": 0.4,
+     "color": "#c9b48a",
+     "metalness": 0.5,
+     "physical": true,
+     "roughness": 0.46,
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/wheel_fl[0]/wheel_fl_spin[1]/Mesh"
+   "path": "car0/semif-hero-cybercab[2]/wheel_fl[0]/wheel_fl_spin[1]/Mesh"
   },
   {
    "attrs": {
-    "position": 576
+    "position": 864
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 288,
-   "mats": [
-    {
-     "color": "#55595e",
-     "metalness": 0.2,
-     "roughness": 0.55
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[1]/wheel_fl[0]/wheel_fl_spin[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 264
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 396,
-   "mats": [
-    {
-     "color": "#7d8085",
-     "metalness": 0.7,
-     "roughness": 0.45,
-     "side": 2
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[1]/wheel_fl[1]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 72
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 36,
-   "mats": [
-    {
-     "color": "#8a8f96",
-     "metalness": 0.4,
-     "roughness": 0.5
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[1]/wheel_fl[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 540
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 900,
+   "index": 1440,
    "mats": [
     {
      "color": "#4c4d50",
@@ -197,86 +245,37 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[2]/wheel_fr[0]/wheel_fr_spin[0]/Mesh"
+   "path": "car0/semif-hero-cybercab[3]/wheel_fr[0]/wheel_fr_spin[0]/Mesh"
   },
   {
    "attrs": {
-    "position": 756
+    "position": 1500
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 888,
+   "index": 2556,
    "mats": [
     {
-     "color": "#a9adb2",
-     "metalness": 0.85,
-     "roughness": 0.3,
+     "clearcoat": 0.1,
+     "clearcoatRoughness": 0.4,
+     "color": "#c9b48a",
+     "metalness": 0.5,
+     "physical": true,
+     "roughness": 0.46,
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[2]/wheel_fr[0]/wheel_fr_spin[1]/Mesh"
+   "path": "car0/semif-hero-cybercab[3]/wheel_fr[0]/wheel_fr_spin[1]/Mesh"
   },
   {
    "attrs": {
-    "position": 576
+    "position": 864
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 288,
-   "mats": [
-    {
-     "color": "#55595e",
-     "metalness": 0.2,
-     "roughness": 0.55
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[2]/wheel_fr[0]/wheel_fr_spin[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 264
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 396,
-   "mats": [
-    {
-     "color": "#7d8085",
-     "metalness": 0.7,
-     "roughness": 0.45,
-     "side": 2
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[2]/wheel_fr[1]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 72
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 36,
-   "mats": [
-    {
-     "color": "#8a8f96",
-     "metalness": 0.4,
-     "roughness": 0.5
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[2]/wheel_fr[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 540
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 900,
+   "index": 1440,
    "mats": [
     {
      "color": "#4c4d50",
@@ -285,86 +284,37 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[3]/wheel_rl[0]/wheel_rl_spin[0]/Mesh"
+   "path": "car0/semif-hero-cybercab[4]/wheel_rl[0]/wheel_rl_spin[0]/Mesh"
   },
   {
    "attrs": {
-    "position": 756
+    "position": 1500
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 888,
+   "index": 2556,
    "mats": [
     {
-     "color": "#a9adb2",
-     "metalness": 0.85,
-     "roughness": 0.3,
+     "clearcoat": 0.1,
+     "clearcoatRoughness": 0.4,
+     "color": "#c9b48a",
+     "metalness": 0.5,
+     "physical": true,
+     "roughness": 0.46,
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[3]/wheel_rl[0]/wheel_rl_spin[1]/Mesh"
+   "path": "car0/semif-hero-cybercab[4]/wheel_rl[0]/wheel_rl_spin[1]/Mesh"
   },
   {
    "attrs": {
-    "position": 576
+    "position": 864
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 288,
-   "mats": [
-    {
-     "color": "#55595e",
-     "metalness": 0.2,
-     "roughness": 0.55
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[3]/wheel_rl[0]/wheel_rl_spin[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 264
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 396,
-   "mats": [
-    {
-     "color": "#7d8085",
-     "metalness": 0.7,
-     "roughness": 0.45,
-     "side": 2
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[3]/wheel_rl[1]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 72
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 36,
-   "mats": [
-    {
-     "color": "#8a8f96",
-     "metalness": 0.4,
-     "roughness": 0.5
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[3]/wheel_rl[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 540
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 900,
+   "index": 1440,
    "mats": [
     {
      "color": "#4c4d50",
@@ -373,94 +323,28 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[4]/wheel_rr[0]/wheel_rr_spin[0]/Mesh"
+   "path": "car0/semif-hero-cybercab[5]/wheel_rr[0]/wheel_rr_spin[0]/Mesh"
   },
   {
    "attrs": {
-    "position": 756
+    "position": 1500
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 888,
+   "index": 2556,
    "mats": [
     {
-     "color": "#a9adb2",
-     "metalness": 0.85,
-     "roughness": 0.3,
+     "clearcoat": 0.1,
+     "clearcoatRoughness": 0.4,
+     "color": "#c9b48a",
+     "metalness": 0.5,
+     "physical": true,
+     "roughness": 0.46,
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[4]/wheel_rr[0]/wheel_rr_spin[1]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 576
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 288,
-   "mats": [
-    {
-     "color": "#55595e",
-     "metalness": 0.2,
-     "roughness": 0.55
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[4]/wheel_rr[0]/wheel_rr_spin[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 264
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 396,
-   "mats": [
-    {
-     "color": "#7d8085",
-     "metalness": 0.7,
-     "roughness": 0.45,
-     "side": 2
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[4]/wheel_rr[1]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 72
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 36,
-   "mats": [
-    {
-     "color": "#8a8f96",
-     "metalness": 0.4,
-     "roughness": 0.5
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[4]/wheel_rr[2]/Mesh"
-  },
-  {
-   "attrs": {
-    "position": 72
-   },
-   "colours": null,
-   "count": null,
-   "geo": "Geo",
-   "index": 36,
-   "mats": [
-    {
-     "color": "#55595e",
-     "metalness": 0.2,
-     "roughness": 0.55
-    }
-   ],
-   "path": "car0/semif-hero-cybercab[5]/details[0]/Mesh"
+   "path": "car0/semif-hero-cybercab[5]/wheel_rr[0]/wheel_rr_spin[1]/Mesh"
   },
   {
    "attrs": {

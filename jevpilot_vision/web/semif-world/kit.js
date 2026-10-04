@@ -51,6 +51,9 @@ export const PALETTE = {
     leather: "#7a6458",
     chrome: "#c9cdd2",
     plate: "#e7e4dc",
+    // The Cybercab (#90): satin champagne paint. Its glass and cladding use `glass` and `trim`:
+    // darker reads as a pedestrian in the camera masks until #30 retires them.
+    champagne: "#c9b48a",
   },
   // People. `silhouette` is the sim pedestrians' lower body and the only colour allowed in the
   // camera's pedestrian mask; crowds never wear it. Skin, hair and leather lean pink or grey: warm
