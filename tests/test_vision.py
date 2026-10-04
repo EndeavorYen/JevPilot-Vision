@@ -311,3 +311,50 @@ def test_issue70_siglip_text_needs_sentencepiece_in_the_neural_extra():
 
     project = tomllib.loads(pathlib.Path(__file__).resolve().parents[1].joinpath("pyproject.toml").read_text(encoding="utf-8"))
     assert any(dep.startswith("sentencepiece") for dep in project["project"]["optional-dependencies"]["neural"])
+
+
+def test_issue70_review_one_failed_call_does_not_switch_the_classifier_off():
+    pytest.importorskip("PIL")
+    pytest.importorskip("torch")
+    from PIL import Image
+
+    enc = _fake_siglip_encoder([])
+    good = enc._processor
+    frame = Image.new("RGB", (224, 224), (80, 80, 80))
+    enc._processor = None
+    rows = enc._score_batch([frame])
+    assert enc.scoring_error and rows[0]["clear"] == 0.0 and not any(rows[0].values())
+    enc._processor = good  # e.g. a passing CUDA OOM
+    out = enc.infer_pil(frame)
+    assert enc.scoring_error is None and "scoring_error" not in out
+    assert out["signal"] == "green"
+
+
+def test_issue70_review_a_text_side_missing_at_load_stays_reported_and_is_not_retried():
+    pytest.importorskip("PIL")
+    pytest.importorskip("torch")
+    from PIL import Image
+
+    calls = []
+    enc = _fake_siglip_encoder(calls)
+    enc.text_error = "SigLIP text side did not load (ImportError: no sentencepiece)"
+    out = enc.infer_pil(Image.new("RGB", (224, 224), (80, 80, 80)))
+    assert calls == [], "a known-missing text side is not tried on every frame"
+    assert out["scoring_error"] == enc.text_error and out["signal"] == "unknown"
+
+
+def test_issue70_review_a_stub_encoder_does_not_report_a_clear_road():
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    from jevpilot_vision.vision import VisionEncoder
+
+    enc = VisionEncoder.__new__(VisionEncoder)
+    enc._model = None
+    enc.backend = "stub"
+    enc.last_patches = None
+    enc.encode_patches = lambda _image: None
+    frame = Image.new("RGB", (224, 224), (80, 80, 80))
+    for out in (enc.infer_pil(frame), enc.infer_surround({"front": frame})):
+        assert "clear" not in out["event"] and out.get("scoring_error"), out
+
