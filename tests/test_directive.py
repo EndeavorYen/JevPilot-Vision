@@ -76,3 +76,12 @@ def test_issue84_the_intersection_wins_over_a_different_camera_colour_but_a_red_
     assert plan_directive(state["vision"], state["intersection"])["intent"] == "CRUISE"
     cautious = _privileged("green", "unknown", event="RED signal ahead, mandatory stop")
     assert _signal(cautious) == "red", "the conservative red-in-event override is kept"
+
+
+def test_issue84_review_a_vehicle_that_appeared_is_not_a_red_light():
+    """'appeared' contains 'red': the conservative override must read the word, not the letters."""
+    from jevpilot_vision.drive import _signal
+
+    state = _privileged("green", "unknown", event="a vehicle appeared in frame")
+    assert _signal(state) == "green"
+    assert _signal(_privileged("green", "unknown", event="RED signal ahead, mandatory stop")) == "red"
