@@ -381,6 +381,7 @@ global.cancelAnimationFrame = window.cancelAnimationFrame;
 
 // The page loads semif-capture.js before the layer (index.html); so does the harness.
 window.SEMIF_CAPTURE = require(require("path").join(require("path").dirname(process.argv[1]), "semif-capture.js"));
+window.SEMIF_DECISION = require(require("path").join(require("path").dirname(process.argv[1]), "semif-decision.js"));  // as index.html loads it
 const code = fs.readFileSync(process.argv[1], "utf8");
 vm.runInThisContext(code, { filename: process.argv[1] });
 

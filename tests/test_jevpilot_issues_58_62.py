@@ -102,10 +102,7 @@ def test_fsd_overlay_assets_present():
     assert "Raw decision" not in js
     assert "fillJevAnswers" in js
     assert "answers.motion" in js
-    assert "lateral_offset_m" in js
-    assert "lastDecisionState" in js
-    assert "lane.offset_m" in js
-    assert "lateral_offset_m = player.x" not in js
+    # the lane offset the request carries: tests/test_decision.py drives semif-decision.js (#63)
     assert "_steerEma" not in js
     assert "fsd-seed-apply" in js
     assert "reloadWithSeed" in js
