@@ -12,7 +12,8 @@
   const DRIVE_MODES = ["vision", "vision-map", "privileged", "heuristic"];
   // De-mapping stages landed in ?mode=vision (#85). benchmarks/closed_loop.py VISION_STAGE records
   // the same number and checks it against this one on every run.
-  window.SEMIF_VISION_STAGE = 2; // 1: box flow (#75); 2: localization error (#79)
+  window.SEMIF_VISION_STAGE = 3; // 1: box flow (#75); 2: localization error (#79); 3: lamp cells (#76)
+  const LIGHT_STAGE = 3; // from here the new Vision reads perception's signal_read
   const driveOf = (id) => (id === "vision-map" ? "vision" : id);
   const MODE_KEY = "semif.driveMode";
   const modeParam = params.get("mode");
@@ -84,7 +85,7 @@
   // Always on screen (also in the minimal view): which mode drives, what it reads, and in Vision
   // whether perception is healthy. It says what each mode reads, not which is "better".
   const MODE_INFO = {
-    vision: { label: "Vision", reads: `Cameras & box flow · noisy localization · stage ${window.SEMIF_VISION_STAGE} · map privileged` },
+    vision: { label: "Vision", reads: `Cameras, flow & lamp cells · noisy pose · stage ${window.SEMIF_VISION_STAGE} · map privileged` },
     "vision-map": { label: "Vision (map)", reads: "Objects & signals from cameras · map privileged" },
     privileged: { label: "Privileged", reads: "Simulator state · the ablation for a decision model" },
     heuristic: { label: "Heuristic", reads: "Geometric rules · no model" },
@@ -918,7 +919,11 @@
     const taken = window.SEMIF_VISION_AT;
     const fresh = Number.isFinite(taken) && now >= taken && now - taken <= 1500;
     const ok = fresh && p && p.backend && p.backend !== "none" && (p.status || "ready") === "ready";
-    const state = ok && p.signal && p.signal.state;
+    // The new Vision reads which lamp cell is lit next to the hue threshold (#76); a server without
+    // that reading leaves the hue threshold's.
+    const lamp = window.SEMIF_MODE_ID === "vision" && window.SEMIF_VISION_STAGE >= LIGHT_STAGE && p && p.signal_read;
+    const reading = lamp || (p && p.signal);
+    const state = ok && reading && reading.state;
     if (["red", "amber", "green"].includes(state) && !(lastSeen && lastSeen.at > taken)) lastSeen = { state, at: taken };
     const held = ok && lastSeen && now >= lastSeen.at && now - lastSeen.at <= SEEN_MEMORY_MS[lastSeen.state] ? lastSeen.state : null;
     window.SEMIF_SEEN_SENT = held;

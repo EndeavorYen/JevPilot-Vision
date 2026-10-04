@@ -576,3 +576,83 @@ def test_issue75_review_a_box_cut_by_the_frames_edge_gives_no_ttc():
         out = tracker.update([{"kind": "car", "ahead_m": 15.0, "right_m": 6.0, **box_flow_fields(box, CAM)}], t=k * 0.25)
     assert out[0]["scale_px"] is None and out[0]["ttc_s"] is None
 
+
+# --- #76: which lamp cell is lit -----------------------------------------------------------------
+
+def _head(lit, colour=(235, 205, 170), size=(36, 14)):
+    """A head's crop: dark housing, three lamps top to bottom, `lit` (0-2 or None) glowing pastel."""
+    h, w = size
+    crop = np.full((h, w, 3), (35, 42, 38), dtype=np.uint8)
+    for k in range(3):
+        y0, y1 = k * h // 3 + 2, (k + 1) * h // 3 - 2
+        crop[y0:y1, 4 : w - 4] = colour if k == lit else (70, 78, 72)
+    return crop
+
+
+def test_issue76_the_lit_cell_names_the_light_whatever_its_colour():
+    from jevpilot_vision.perception import read_lamp_cells
+
+    for lit, state in ((0, "red"), (1, "amber"), (2, "green")):
+        # one pale colour for all three: only the position says which lamp it is
+        assert read_lamp_cells(_head(lit))[0] == state
+    assert read_lamp_cells(_head(None))[0] == "unknown", "nothing lit"
+    assert read_lamp_cells(_head(1, size=(4, 3)))[0] == "unknown", "too small to split"
+    faint = _head(0, colour=(80, 88, 82))
+    assert read_lamp_cells(faint)[0] == "unknown", "a cell barely brighter than the others is not lit"
+
+
+def test_issue76_the_reading_joins_the_hue_threshold_and_only_ever_errs_toward_caution(monkeypatch):
+    from jevpilot_vision import perception as pc
+
+    cam = CameraModel(width=320, height=180, hfov_deg=100.0, height_m=1.45)
+    image = np.zeros((180, 320, 3), dtype=np.uint8)
+    head = {"kind": "traffic_light", "conf": 0.8, "box": [150.0, 30.0, 164.0, 66.0]}
+    hue = {"state": "unknown", "conf": 0.0}
+
+    def read(hue_state, cells):
+        monkeypatch.setattr(pc, "classify_light", lambda crop: hue_state)
+        monkeypatch.setattr(pc, "read_lamp_cells", lambda crop: cells)
+        return pc.read_governing_light([head], image, cam, hue)
+
+    assert read("red", ("red", 3.0))["state"] == "red"
+    disagree = read("red", ("green", 3.0))
+    assert disagree["state"] == "unknown" and disagree["conflict"] == ["green", "red"]
+    assert read("unknown", ("red", 1.4))["state"] == "red", "a lone red only makes the car more careful"
+    assert read("unknown", ("green", 1.6))["state"] == "unknown", "a lone faint green is not enough"
+    assert read("unknown", ("green", 2.5))["state"] == "green"
+    assert read("green", ("unknown", 1.0))["state"] == "green", "the hue threshold alone still counts"
+    # no boxed head ahead: the hue path's own reading (it may come from lamps found in the pixels)
+    lamp = {"state": "red", "conf": 0.5, "source": "lamp"}
+    assert pc.read_governing_light([], image, cam, lamp)["state"] == "red"
+
+
+def test_issue76_review_the_hue_paths_own_conflicts_and_lamps_still_count(monkeypatch):
+    from jevpilot_vision import perception as pc
+
+    cam = CameraModel(width=320, height=180, hfov_deg=100.0, height_m=1.45)
+    image = np.zeros((180, 320, 3), dtype=np.uint8)
+    near = {"kind": "traffic_light", "conf": 0.8, "box": [150.0, 30.0, 164.0, 66.0]}
+    monkeypatch.setattr(pc, "classify_light", lambda crop: "green")
+    monkeypatch.setattr(pc, "read_lamp_cells", lambda crop: ("green", 3.0))
+    # two heads that disagree are an assumed red, even when the biggest reads green
+    conflict = pc.read_governing_light([near], image, cam, {"state": "unknown", "conf": 0.0, "conflict": ["green", "red"]})
+    assert conflict["state"] == "unknown" and conflict["conflict"] == ["green", "red"]
+    # the heads' reading differs from the governing head's: unknown
+    assert pc.read_governing_light([near], image, cam, {"state": "red", "conf": 0.8})["state"] == "unknown"
+    # nothing read on the box, a lamp found in the pixels reads red: that stands
+    monkeypatch.setattr(pc, "classify_light", lambda crop: "unknown")
+    monkeypatch.setattr(pc, "read_lamp_cells", lambda crop: ("unknown", 1.0))
+    lamp = pc.read_governing_light([near], image, cam, {"state": "red", "conf": 0.5, "source": "lamp"})
+    assert lamp["state"] == "red"
+    elsewhere = pc.read_governing_light([near], image, cam, {"state": "green", "conf": 0.5, "source": "lamp"})
+    assert elsewhere["state"] == "unknown", "a green read off another head alone does not drive the car"
+
+
+def test_issue76_review_the_narrow_camera_merge_applies_to_the_lamp_reading_too():
+    from jevpilot_vision.perception import _merge_narrow
+
+    assert _merge_narrow({"state": "unknown", "conf": 0.0}, {"state": "red", "conf": 0.7})["camera"] == "narrow"
+    both = _merge_narrow({"state": "green", "conf": 0.8}, {"state": "red", "conf": 0.7})
+    assert both["state"] == "unknown" and both["conflict"] == ["green", "red"]
+    assert _merge_narrow({"state": "green", "conf": 0.8}, {"state": "unknown"})["state"] == "green"
+
