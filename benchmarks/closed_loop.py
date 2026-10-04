@@ -33,7 +33,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 HERE = Path(__file__).resolve().parent
 SEEDS_FILE = HERE / "closed_loop_seeds.json"
 ROUTES = ("festival", "harbour", "pass", "coast", "highway")  # the coast map's start points
-MODES = ("privileged", "vision", "heuristic")
+MODES = ("privileged", "vision", "vision-map", "heuristic")
+# #78: "vision-map" is the old Vision kept as a baseline (cameras, map privileged); "vision" is the
+# Vision losing its map and localization privilege stage by stage. Its runs record the stage; a
+# "vision" row without one predates the split and is reported as Vision (map).
+VISION_STAGE = 0
 DEFAULT_ROUTES = ("festival", "harbour", "pass")
 DEFAULT_MODES = ("privileged", "vision")
 GFX = ("medium", "high")  # docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3
@@ -85,15 +89,27 @@ def current_rows(rows: List[Dict[str, Any]], seeds: Dict[str, Any]) -> Tuple[Lis
 def plan_runs(seeds: Iterable[int], routes: Iterable[str], modes: Iterable[str], seconds: int, lag_ms: int,
               gfx: str = "medium") -> List[Dict[str, Any]]:
     return [
-        {"seed": int(seed), "route": route, "mode": mode, "seconds": int(seconds), "lag_ms": int(lag_ms), "gfx": gfx}
+        {"seed": int(seed), "route": route, "mode": mode, "seconds": int(seconds), "lag_ms": int(lag_ms), "gfx": gfx,
+         **({"vision_stage": VISION_STAGE} if mode == "vision" else {})}
         for seed in seeds
         for route in routes
         for mode in modes
     ]
 
 
+def report_mode(row: Dict[str, Any]) -> Any:
+    """The mode a run counts under (#78): old "vision" rows are Vision (map); the new Vision's rows
+    from an earlier stage keep their stage, so they never pool with the current one."""
+    mode = row.get("mode")
+    if mode != "vision":
+        return mode
+    if "vision_stage" not in row:
+        return "vision-map"
+    return "vision" if row["vision_stage"] == VISION_STAGE else f"vision (stage {row['vision_stage']})"
+
+
 def _key(row: Dict[str, Any]) -> Tuple[Any, ...]:
-    return (row.get("seed"), row.get("route"), row.get("mode"), row.get("seconds"), row.get("lag_ms", 0), row.get("gfx", "medium"))
+    return (row.get("seed"), row.get("route"), report_mode(row), row.get("seconds"), row.get("lag_ms", 0), row.get("gfx", "medium"))
 
 
 def read_rows(path: Path) -> List[Dict[str, Any]]:
@@ -173,7 +189,7 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[Group, Dict[str, Any]]:
     out: Dict[Group, Dict[str, Any]] = {}
 
     def group_of(row: Dict[str, Any]) -> Group:
-        return (row.get("set", "?"), row.get("mode", "?"), int(row.get("seconds") or 0), int(row.get("lag_ms") or 0),
+        return (row.get("set", "?"), report_mode(row) or "?", int(row.get("seconds") or 0), int(row.get("lag_ms") or 0),
                 row.get("gfx", "medium"))
 
     def new() -> Dict[str, Any]:
@@ -314,7 +330,7 @@ _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
     " const c = window.SEMIF_CLASSIFIER_STATS || {}, c0 = window.__eval.c0;"
     " const classifier = {}; for (const k of Object.keys(c)) classifier[k] = c[k] - (c0[k] || 0);"
-    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
+    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_MODE_ID || window.SEMIF_DRIVE_MODE, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"

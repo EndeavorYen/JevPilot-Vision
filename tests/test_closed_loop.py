@@ -39,8 +39,33 @@ def _row(mode, seed, route, **kw):
             "crash": False, "collisions": 0, "vehicle_collisions": 0, "pedestrian_casualties": 0, "red_light": 0,
             "violations": 0, "min_gap_m": 4.0, "events": [], "ok": True, "disengaged": False, "stalled": False,
             "broke": False, "unreadable": False, "fmt": cl.ROW_FORMAT}
+    if mode == "vision":
+        base["vision_stage"] = cl.VISION_STAGE  # as plan_runs writes it (#78)
     base.update(kw)
     return base
+
+
+def test_issue78_old_vision_rows_are_reported_as_vision_map_never_pooled_with_the_new_vision():
+    old = {k: v for k, v in _row("vision", 1, "festival").items() if k != "vision_stage"}
+    new = _row("vision", 1, "festival")
+    summary = cl.summarize([old, new, _row("vision-map", 2, "festival")])
+    assert summary[("held_out", "vision-map", 150, 0, "medium")]["runs"] == 2
+    assert summary[("held_out", "vision", 150, 0, "medium")]["runs"] == 1
+    # an old row stands for a Vision (map) run already made, not for a new Vision run
+    plan = cl.plan_runs([1], ["festival"], ["vision", "vision-map"], seconds=150, lag_ms=0)
+    assert [r["mode"] for r in cl.pending(plan, [old])] == ["vision"]
+    assert plan[0]["vision_stage"] == cl.VISION_STAGE and "vision_stage" not in plan[1]
+    # a row from an earlier stage of the new Vision is not pooled with the current stage
+    earlier = _row("vision", 3, "festival", vision_stage=cl.VISION_STAGE - 1)
+    assert cl.report_mode(earlier) == f"vision (stage {cl.VISION_STAGE - 1})"
+
+
+def test_issue78_both_visions_are_modes_the_page_honours():
+    assert {"vision", "vision-map"} <= set(cl.MODES)
+    url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision-map", "lag_ms": 0})
+    assert "&mode=vision-map&" in url
+    # the page reports the switch's choice, so a Vision (map) run is not taken for a Vision one
+    assert "mode_seen: window.SEMIF_MODE_ID" in cl._READ
 
 
 def test_the_summary_reports_counts_and_rates_per_mode_never_clean():
