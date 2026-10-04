@@ -2,11 +2,12 @@
 // docs/visual/cybercab/README.md) with the img2threejs workflow: analysis, spec, passes reviewed
 // against the references. No Tesla emblems or lettering.
 //
-// One lofted shell carries the whole body: every section is a custom outline (sill, near-vertical
-// side, shoulder, then either the hood -- raised fenders, a valley between -- or a narrower glass
-// house with tumblehome), so the canopy, the hood valley and the shoulder line are one surface.
-// Quads take their material from where they sit: paint, canopy glass, the dark rear-quarter
-// window, dark cladding along the sills, chin and rear bumper.
+// One lofted shell carries the whole body: every section is a custom outline (sill, a side drawn in
+// toward the shoulder, then either the hood -- round fender crests, a valley between -- or a
+// narrower glass house), so the canopy, the hood and the shoulder line are one surface. Quads take
+// their material from where they sit: paint, glass (windscreen and side windows), or dark cladding
+// along the sills, chin and rear bumper. The rear-quarter window, the door lines and the light bar
+// are thin pieces laid on that surface.
 //
 // Host contract (vehicles.js): outer box 4.75 x 1.9 m, nose toward -z, wheel pivots
 // wheel_fl/fr/rl/rr with userData.radius/front and a spinning children[0], the canopy in the
@@ -40,7 +41,7 @@ function spline(keys) {
 const C = PALETTE.car;
 export const CYBERCAB = {
   L: 4.75,
-  r: 0.42, // wheel radius: big wheels pushed out to the corners (overhangs 0.74 and 0.85 wheel diameters)
+  r: 0.42, // wheel radius: big wheels pushed out to the corners (overhangs 0.80 and 0.90 wheel diameters)
   w: 0.26,
   front: -1.7,
   rear: 1.62,
@@ -56,8 +57,8 @@ const sill = spline([[-L2, 0.31], [-2.35, 0.25], [-2.29, 0.215], [-2.15, 0.19], 
 // The nose stands tall and the hood rises in one sweep into the windscreen (no flat deck).
 const shoulder = spline([[-L2, 0.67], [-2.33, 0.735], [-2.22, 0.8], [-2.05, 0.855], [-1.82, 0.905], [-1.55, 0.945], [-1.3, 0.972], [-0.9, 0.988], [0.5, 0.99], [1.5, 1.0], [1.9, 1.0], [2.25, 0.975], [L2, 0.94]]);
 // The hood's centre sits in a shallow valley between the fenders: none at the nose (the fenders
-// must not end in points), 5 cm at the windscreen base.
-const valley = spline([[-L2, 0.0], [-2.2, 0.015], [-1.8, 0.035], [-1.35, 0.045]]);
+// must not end in points), deepest mid-hood, shallow again where the windscreen begins.
+const valley = spline([[-L2, 0.0], [-2.2, 0.018], [-1.85, 0.035], [-1.55, 0.03], [-1.35, 0.012]]); // shallow again at the windscreen, which must not dent
 const hood = (z) => shoulder(z) - valley(z);
 const roof = spline([[-1.35, 0.972], [-0.95, 1.13], [-0.45, 1.3], [0.05, 1.42], [0.5, 1.47], [0.95, 1.45], [1.5, 1.32], [2.0, 1.13], [L2, 0.97]]);
 const house = spline([[-1.45, 0.8], [-0.6, 0.8], [0.6, 0.8], [1.4, 0.775], [2.0, 0.72], [L2, 0.68]]); // glass-house half width at the belt
@@ -70,7 +71,11 @@ const TAIL = L2 - 0.06; // the tail face, set back under the duckbill lip that r
 
 // The right half of a section, from the bottom centre up to the top centre: [x, y] pairs.
 function halfOutline(z, bottom) {
-  const hb = half(z), yb = bottom, ys = shoulder(z);
+  const hb = half(z), ys = shoulder(z);
+  const yc = z < CANOPY_FROM ? hood(z) : hood(CANOPY_FROM);
+  // Over the front axle the arch's top reaches the hood valley: keep the floor under the hood so the
+  // section never turns inside out.
+  const yb = Math.min(bottom, yc - 0.03);
   // Over a wheel the side runs straight down to the arch's edge (a clean cut through a vertical
   // side); elsewhere the sill rolls under. The blend keeps the arch's ends smooth.
   const arch = Math.min(1, Math.max(0, (bottom - sill(z)) / 0.08));
@@ -84,7 +89,6 @@ function halfOutline(z, bottom) {
     [hb, (y3 + y5) / 2], [hb - 0.022, y5], [hb - 0.06, y6], [hb - 0.12, y7],
   ];
   // The hood: raised fenders, a shallow valley in the middle.
-  const yc = z < CANOPY_FROM ? hood(z) : hood(CANOPY_FROM);
   // Round fenders: the crest sits inboard (about 0.6 m out) and rolls down to the side; the hood's
   // centre lies in a valley between the two crests.
   const crest = Math.min(0.62, hb - 0.2);
@@ -92,7 +96,8 @@ function halfOutline(z, bottom) {
   if (z >= CANOPY_FROM) {
     // The glass house, blended in from the windscreen base so the surface stays continuous.
     const yr = roof(z), hg = Math.min(house(z), hb - 0.1);
-    const g = Math.min(1, Math.max(0, (yr - ys) / 0.12));
+    const t = Math.min(1, Math.max(0, (yr - ys) / 0.22));
+    const g = t * t * (3 - 2 * t); // a long, smooth hand-over from hood to windscreen
     const cab = [[hg, ys + 0.015], [hg - 0.04, ys + 0.27 * (yr - ys)], [hg - 0.13, ys + 0.62 * (yr - ys)], [hg * 0.6, yr - 0.03], [0, yr]];
     for (let i = 0; i < top.length; i++) top[i] = [top[i][0] + (cab[i][0] - top[i][0]) * g, top[i][1] + (cab[i][1] - top[i][1]) * g];
   }
@@ -122,7 +127,6 @@ function classify(z, u, n, y, axles, R) {
   if (v >= GH - 0.15 && z >= CANOPY_FROM + 0.03) {
     if (z < ROOF_FROM) return "glass"; // the windscreen
     if (z < GLASS_TO && v < GH + 2.75) return "glass"; // the side windows, up to the roof rail
-    const qTop = 1.33 - (0.31 * (z - QUARTER[0])) / (QUARTER[1] - QUARTER[0]);
     return "paint";
   }
   if (y < 0.38 && !inArch && z > -1.95 && z < 1.95) return "clad"; // rockers
@@ -148,6 +152,7 @@ function shell(m) {
   for (const az of axles) for (let k = 0; k <= 16; k++) zs.push(az - R + (k * 2 * R) / 16);
   for (const z of [CANOPY_FROM, GLASS_TO, ...QUARTER, -1.95, 1.95]) zs.push(z);
   zs.sort((a, b) => a - b);
+  for (let i = zs.length - 1; i > 0; i--) if (zs[i] - zs[i - 1] < 1e-6) zs.splice(i, 1); // no zero-width bands
   const SUB = 3;
   const rings = zs.map((z) => {
     const right = halfOutline(z, bottom(z));
@@ -176,50 +181,106 @@ function shell(m) {
     const ring = rings[i], z0 = zs[i];
     let cy = 0;
     for (const [, y] of ring) cy += y / around;
-    const rows = [ring.map(([x, y]) => [x, y, z0]), ring.map(([x, y]) => [x * 0.62, cy + (y - cy) * 0.62, z0 + sign * dz * 0.0 + (sign < 0 ? dz * 0.7 : dz * 0.6)])];
-    const centre = [0, cy, z0 + (sign < 0 ? dz : dz)];
+    // Rings shrinking toward the centre along a quarter circle, so the dome (or dish) is smooth.
+    const rows = [1, 0.88, 0.7, 0.45].map((k) => {
+      const depth = Math.sqrt(Math.max(0, 1 - k * k));
+      return ring.map(([x, y]) => [x * k, cy + (y - cy) * k, z0 + dz * depth]);
+    });
+    const centre = [0, cy, z0 + dz];
+    const emit = (key, poly) => {
+      // A convex polygon as a fan, wound to face out of the cap.
+      const p = caps[key];
+      for (let j = 1; j < poly.length - 1; j++) {
+        const base = p.positions.length / 3;
+        p.positions.push(...poly[0], ...poly[j], ...poly[j + 1]);
+        if (sign < 0) p.index.push(base, base + 2, base + 1);
+        else p.index.push(base, base + 1, base + 2);
+      }
+    };
+    // Each triangle is cut along y = cladBelow, so the chin / bumper edge is a straight line.
     const tri = (a, b, c) => {
-      const key = (a[1] + b[1] + c[1]) / 3 < cladBelow ? "clad" : "paint";
-      const p = caps[key], base = p.positions.length / 3;
-      p.positions.push(...a, ...b, ...c);
-      if (sign < 0) p.index.push(base, base + 2, base + 1);
-      else p.index.push(base, base + 1, base + 2);
+      const below = [], above = [], pts = [a, b, c];
+      for (let j = 0; j < 3; j++) {
+        const p = pts[j], q = pts[(j + 1) % 3];
+        (p[1] < cladBelow ? below : above).push(p);
+        if ((p[1] < cladBelow) !== (q[1] < cladBelow)) {
+          const t = (cladBelow - p[1]) / (q[1] - p[1]);
+          const cut = [p[0] + (q[0] - p[0]) * t, cladBelow, p[2] + (q[2] - p[2]) * t];
+          below.push(cut);
+          above.push(cut);
+        }
+      }
+      if (below.length >= 3) emit("clad", below);
+      if (above.length >= 3) emit("paint", above);
     };
     for (let k = 0; k < around; k++) {
       const k1 = (k + 1) % around;
-      tri(rows[0][k], rows[0][k1], rows[1][k]);
-      tri(rows[0][k1], rows[1][k1], rows[1][k]);
-      tri(rows[1][k], rows[1][k1], centre);
+      for (let r = 0; r < rows.length - 1; r++) {
+        tri(rows[r][k], rows[r][k1], rows[r + 1][k]);
+        tri(rows[r][k1], rows[r + 1][k1], rows[r + 1][k]);
+      }
+      tri(rows[rows.length - 1][k], rows[rows.length - 1][k1], centre);
     }
   }
   const parts = new Parts();
   for (const [key, mat] of [["paint", m.paint], ["glass", m.glass], ["clad", m.clad]]) {
-    if (lists[key].length) parts.add(mat, { positions: positions.slice(), index: lists[key] });
+    if (lists[key].length) parts.add(mat, compact(positions, lists[key]));
   }
   parts.add(m.paint, caps.paint);
   parts.add(m.clad, caps.clad);
-  parts.add(m.quarter, quarterWindow(rings, zs, positions));
+  parts.add(m.quarter, quarterWindow(rings, zs));
   parts.add(m.well, doorLines(rings, zs));
+  parts.add(m.lens, frontLightBar(rings, zs));
   return parts;
 }
 
-// The dark rear-quarter window: a patch laid 4 mm off the house's side between the shoulder and a
-// top edge that falls toward the tail, on both sides. Its edges follow lines, not quad steps.
+// Only the vertices an index uses, renumbered: each material's mesh carries its own part of the shell.
+function compact(positions, index) {
+  const map = new Map(), out = [];
+  const remapped = index.map((v) => {
+    if (!map.has(v)) {
+      map.set(v, out.length / 3);
+      out.push(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]);
+    }
+    return map.get(v);
+  });
+  return { positions: out, index: remapped };
+}
+
+// The outermost x of a ring's right half at height y (null where the ring does not reach y).
+function outerAt(ring, y, limit = Infinity) {
+  let best = null;
+  for (let k = 0; k < ring.length - 1; k++) {
+    const [x0, y0] = ring[k], [x1, y1] = ring[k + 1];
+    if (x0 < 0 || x1 < 0 || x0 > limit || x1 > limit || (y0 - y) * (y1 - y) > 0 || y0 === y1) continue;
+    const x = x0 + ((x1 - x0) * (y - y0)) / (y1 - y0);
+    if (best === null || x > best) best = x;
+  }
+  return best;
+}
+
+// The front light bar, laid on the shell: just under the hood's leading edge across the domed nose
+// and along each fender's side as the edge rises toward the windscreen.
+function frontLightBar(rings, zs) {
+  const barY = (z) => shoulder(z) - 0.03;
+  const right = [];
+  for (let i = 0; i < zs.length && zs[i] < -1.95; i++) {
+    const x = outerAt(rings[i], barY(zs[i]));
+    if (x !== null) right.push([x + 0.007, barY(zs[i]), zs[i]]);
+  }
+  if (!right.length) return { positions: [], index: [] };
+  const [x0, y0] = right[0];
+  const across = [];
+  for (let s = 1; s > -1; s -= 0.1) across.push([s * x0, y0, NOSE0 - 0.012]);
+  const left = right.map(([x, y, z]) => [-x, y, z]);
+  return strip([...right.slice().reverse(), ...across, ...left], 0.035);
+}
+
 // The door shut lines: a 6 mm dark band on each side, at the door's front edge (leaning back at
 // its foot) and rear edge, from the rocker to the belt.
 function doorLines(rings, zs) {
   const positions = [], index = [];
-  const outer = (i, y) => {
-    let best = null;
-    const ring = rings[i];
-    for (let k = 0; k < ring.length - 1; k++) {
-      const [x0, y0] = ring[k], [x1, y1] = ring[k + 1];
-      if (x0 < 0 || x1 < 0 || (y0 - y) * (y1 - y) > 0 || y0 === y1) continue;
-      const x = x0 + ((x1 - x0) * (y - y0)) / (y1 - y0);
-      if (best === null || x > best) best = x;
-    }
-    return best;
-  };
+  const outer = (i, y) => outerAt(rings[i], y);
   const xAt = (z, y) => {
     let i = 0;
     while (i < zs.length - 2 && zs[i + 1] < z) i++;
@@ -255,23 +316,12 @@ function doorLines(rings, zs) {
   return { positions, index };
 }
 
+// The dark rear-quarter window: a patch laid 12 mm off the house's side between the shoulder and a
+// top edge that falls toward the tail, on both sides. Its edges follow lines, not quad steps.
 function quarterWindow(rings, zs) {
   const positions = [], index = [];
   const [q0, q1] = QUARTER;
   const top = (z) => 1.34 - (0.33 * (z - q0)) / (q1 - q0);
-  const sideAt = (ring, y, limit) => {
-    // The outermost point of the right half at height y, from the house's side polyline.
-    let best = null;
-    for (let k = 0; k < ring.length - 1; k++) {
-      const [x0, y0] = ring[k], [x1, y1] = ring[k + 1];
-      if (x0 < 0 || x1 < 0 || x0 > limit || x1 > limit) continue; // the house's side, not the body below it
-      if ((y0 - y) * (y1 - y) <= 0 && y0 !== y1) {
-        const x = x0 + ((x1 - x0) * (y - y0)) / (y1 - y0);
-        if (!best || x > best) best = x;
-      }
-    }
-    return best;
-  };
   for (const side of [1, -1]) {
     const base = positions.length / 3;
     let rows = 0;
@@ -281,7 +331,7 @@ function quarterWindow(rings, zs) {
       const lo = shoulder(z) + 0.04, hi = Math.max(lo, top(z));
       const ring = rings[i];
       const limit = house(z) + 0.02;
-      const xl = sideAt(ring, lo, limit), xh = sideAt(ring, hi, limit);
+      const xl = outerAt(ring, lo, limit), xh = outerAt(ring, hi, limit);
       if (xl === null || xh === null) continue;
       positions.push(side * (xl + 0.012), lo, z, side * (xh + 0.012), hi, z);
       rows++;
@@ -295,34 +345,17 @@ function quarterWindow(rings, zs) {
   return { positions, index };
 }
 
-// A thin strip of quads through points [x, y, z], `h` tall and pushed `out` along `n(p)`.
-function strip(points, h, normal) {
+// A thin vertical strip of quads through points [x, y, z], `h` tall.
+function strip(points, h) {
   const positions = [], index = [];
   points.forEach(([x, y, z], i) => {
-    const [nx, nz] = normal([x, y, z]);
-    positions.push(x + nx * 0.006, y - h / 2, z + nz * 0.006, x + nx * 0.006, y + h / 2, z + nz * 0.006);
+    positions.push(x, y - h / 2, z, x, y + h / 2, z);
     if (i) {
       const a = (i - 1) * 2, b = i * 2;
       index.push(a, b, a + 1, b, b + 1, a + 1);
     }
   });
   return { positions, index };
-}
-
-// The front light bar follows the hood's leading edge across the nose and rises up both fenders.
-function frontLightBar() {
-  const pts = [];
-  for (let s = -1; s <= 1.0001; s += 0.025) {
-    const x = s * 0.88;
-    // Walk back from the nose until the plan outline reaches |x|.
-    let z = -L2;
-    while (z < -1.9 && half(z) < Math.abs(x)) z += 0.004;
-    pts.push([x, shoulder(z) - 0.022, z]);
-  }
-  return strip(pts, 0.03, ([x, , z]) => {
-    const d = Math.hypot(x, z + 1.9) || 1;
-    return [x / d, (z + 1.9) / d];
-  });
 }
 
 function well(side, az) {
@@ -390,7 +423,6 @@ export function buildCybercab() {
   group.add(body);
 
   const details = new Parts();
-  details.add(m.lens, frontLightBar());
   // The tail: a duckbill lip over the vertical tail plane, a full-width red bar under it, two lower
   // lamps at the bumper corners and the dark bumper itself.
   const lipY = Math.max(shoulder(TAIL), roof(TAIL)) - 0.012;

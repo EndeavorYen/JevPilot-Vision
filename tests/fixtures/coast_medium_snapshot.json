@@ -2,12 +2,12 @@
  "cars": [
   {
    "attrs": {
-    "position": 34596
+    "position": 32652
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 49368,
+   "index": 49872,
    "mats": [
     {
      "clearcoat": 0.2,
@@ -22,7 +22,7 @@
   },
   {
    "attrs": {
-    "position": 31320
+    "position": 3399
    },
    "colours": null,
    "count": null,
@@ -42,12 +42,12 @@
   },
   {
    "attrs": {
-    "position": 31932
+    "position": 6555
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 7992,
+   "index": 8448,
    "mats": [
     {
      "color": "#55595e",
@@ -59,12 +59,12 @@
   },
   {
    "attrs": {
-    "position": 324
+    "position": 300
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 312,
+   "index": 288,
    "mats": [
     {
      "clearcoat": 1,
@@ -97,12 +97,12 @@
   },
   {
    "attrs": {
-    "position": 486
+    "position": 282
    },
    "colours": null,
    "count": null,
    "geo": "Geo",
-   "index": 480,
+   "index": 276,
    "mats": [
     {
      "color": "#e8ecef",
@@ -113,7 +113,7 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/details[0]/Mesh"
+   "path": "car0/semif-hero-cybercab[0]/body[5]/Mesh"
   },
   {
    "attrs": {
@@ -133,7 +133,7 @@
      "roughness": 0.4
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/details[1]/Mesh"
+   "path": "car0/semif-hero-cybercab[1]/details[0]/Mesh"
   },
   {
    "attrs": {
@@ -153,7 +153,7 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/details[2]/Mesh"
+   "path": "car0/semif-hero-cybercab[1]/details[1]/Mesh"
   },
   {
    "attrs": {
@@ -170,7 +170,7 @@
      "roughness": 0.62
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/details[3]/Mesh"
+   "path": "car0/semif-hero-cybercab[1]/details[2]/Mesh"
   },
   {
    "attrs": {
@@ -188,7 +188,7 @@
      "side": 2
     }
    ],
-   "path": "car0/semif-hero-cybercab[1]/details[4]/Mesh"
+   "path": "car0/semif-hero-cybercab[1]/details[3]/Mesh"
   },
   {
    "attrs": {
