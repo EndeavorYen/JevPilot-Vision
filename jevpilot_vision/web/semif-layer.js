@@ -742,15 +742,19 @@
   // From stage 2 the new Vision's decision request carries a localization with a real one's error,
   // not the simulator's perfect pose: the lane offset and the stop-line distance each drift by
   // loc_sigma m (correlation time loc_tau s). First-order Markov (Ornstein-Uhlenbeck) drift on the
-  // sim clock, from its own seeded generator: the planner's planRandom is never drawn (#55). The
+  // sim clock, from its own seeded generator: the planner's random stream is never drawn (#55). The
   // defaults are chosen at the issue's scale (0.2-0.5 m), not measured; benchmarks/closed_loop.py
   // --loc-sigma sweeps them. The position along the route is not in the request: the bundle's own
   // planner (route following, candidate paths, route error, off-road) still runs on the true pose,
-  // which only patching the planner can change (#82, #83).
+  // which only patching the planner can change (#82, #83). Each candidate's end offset from the lane
+  // centre (vector column 2) moves with the lane-offset error: a real car measures both from one
+  // estimate, so "is this path centering?" stays a fair question. Still true: on_road, stop_reasons,
+  // the stop column and the intersection's stop_completed / already_entered flags.
   const LOC_STAGE = 2;
   function locParam(name, fallback, lo, hi) {
-    const v = Number(params.get(name));
-    return params.has(name) && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+    const raw = params.get(name);
+    const v = Number(raw);
+    return raw !== null && raw.trim() !== "" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
   }
   const LOC = {
     sigma: locParam("loc_sigma", 0.3, 0, 5),
@@ -807,6 +811,13 @@
     const e = localizationError(sim);
     const moved = (v, by, digits) => +(v + by).toFixed(digits);
     if (Number.isFinite(state.lateral_offset_m)) state.lateral_offset_m = moved(state.lateral_offset_m, e.lateral, 2);
+    if (state.candidates && typeof state.candidates === "object") {
+      const moving = {};
+      for (const [id, vec] of Object.entries(state.candidates)) {
+        moving[id] = Array.isArray(vec) && Number.isFinite(vec[2]) ? [...vec.slice(0, 2), moved(vec[2], e.lateral, 2), ...vec.slice(3)] : vec;
+      }
+      state.candidates = moving;
+    }
     const inter = state.intersection;
     if (inter && Number.isFinite(inter.distance_to_line_m)) {
       state.intersection = { ...inter, distance_to_line_m: moved(inter.distance_to_line_m, e.along, 2) };

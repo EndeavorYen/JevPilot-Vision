@@ -777,12 +777,16 @@ if (spec.cmd === "cstats") {
   const shaped = [];
   for (let i = 0; i < 3; i++) {
     window.SEMIF_SIM.time = 12.5 + i * 0.5;
-    shaped.push(window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {}, intersection: inter } }).state);
+    shaped.push(window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: { keep: [8, 0, 0.6, 0, false, false] }, intersection: inter } }).state);
   }
+  const firsts = [];
+  for (let seed = 1; seed <= 4000; seed++) firsts.push(N.makeDrift(seed, 0.5, 5)(0));
+  const back = N.makeDrift(3, 0.5, 5);
+  const restart = [back(10), back(10.1), back(2)];
   process.stdout.write(JSON.stringify({
     params: N.params, stage: window.SEMIF_VISION_STAGE, locStage: N.stage, a,
     same: series(7, 0.5, 5).every((x, i) => x === a[i]), other: series(8, 0.5, 5).slice(0, 5),
-    off: series(7, 0, 5).slice(0, 5), planCalls, shaped, untouched: inter.distance_to_line_m,
+    off: series(7, 0, 5).slice(0, 5), planCalls, shaped, untouched: inter.distance_to_line_m, firsts, restart,
   }));
 } else if (spec.cmd === "vision-order") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
@@ -1612,6 +1616,22 @@ def test_issue79_the_new_vision_drives_on_noisy_localization_and_the_planners_ra
     assert out["untouched"] == 20, "the bundle's own objects are copied, not changed"
     lat = [s["lateral_offset_m"] for s in out["shaped"]]
     assert len(set(lat)) == 3 and max(lat) - min(lat) < 1.0, "it drifts between requests"
+    # review: the lane offset and the stop-line distance drift apart (two processes)
+    assert round(first["lateral_offset_m"] - 0.4, 2) != round(first["intersection"]["distance_to_line_m"] - 20, 2)
+    # review: a path's end offset moves with the car's: one estimate, so "centering" stays fair
+    for s in out["shaped"]:
+        assert s["candidates"]["keep"][2] == pytest.approx(0.6 + (s["lateral_offset_m"] - 0.4), abs=0.011)
+        assert s["candidates"]["keep"][:2] == [8, 0] and s["candidates"]["keep"][3:] == [0, False, False]
+
+
+def test_issue79_review_a_fresh_drift_starts_inside_its_spread_and_restarts_when_time_runs_back():
+    out = _run({"cmd": "locnoise", "mode": "vision"})
+    firsts = out["firsts"]  # the first reading of 4000 seeds, sigma 0.5
+    sd = (sum(x * x for x in firsts) / len(firsts)) ** 0.5
+    assert sd == pytest.approx(0.5, rel=0.06), "a start is a draw from the stationary spread"
+    at10, at10_1, back = out["restart"]
+    assert abs(at10_1 - at10) < 0.2, "0.1 s later it has barely moved"
+    assert back != at10_1, "time running back (a reload) starts afresh"
 
 
 def test_issue79_vision_map_and_a_zero_spread_keep_the_true_pose():
@@ -1619,4 +1639,7 @@ def test_issue79_vision_map_and_a_zero_spread_keep_the_true_pose():
         first = _run(spec)["shaped"][0]
         assert first["lateral_offset_m"] == 0.4
         assert first["intersection"]["distance_to_line_m"] == 20
+        assert first["candidates"]["keep"][2] == 0.6
+    # review: an empty ?loc_sigma= is no value, not zero
+    assert _run({"cmd": "locnoise", "mode": "vision", "query": "loc_sigma="})["params"]["sigma"] == 0.3
 
