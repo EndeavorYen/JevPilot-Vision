@@ -55,5 +55,5 @@ def test_overlay_replan_is_ego_only_no_forced_reverse():
     assert "requestEgoReplan" in js
     assert "STALL_HOLD_S = 3.0" in js
     assert "p.target = -4" not in js
-    assert "player.x" not in js or "lateral_offset_m = player.x" not in js
+    # the lane offset is never the car's x: tests/test_decision.py (#63)
     assert "traffic" not in js.split("function requestEgoReplan")[1].split("function applyRawMode")[0]

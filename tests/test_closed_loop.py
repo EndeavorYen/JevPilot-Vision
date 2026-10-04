@@ -667,7 +667,7 @@ def test_issue79_a_localization_sweep_is_planned_driven_and_reported_apart():
     assert cl.report_mode({**run, "loc_sigma": 0.0}) == "vision · loc 0 m"
     # review: 0.25 is not 0.2
     assert cl._key({**run, "loc_sigma": 0.25}) != cl._key({**run, "loc_sigma": 0.2})
-    page = (cl.HERE.parent / "jevpilot_vision" / "web" / "semif-layer.js").read_text(encoding="utf-8")
+    page = (cl.HERE.parent / "jevpilot_vision" / "web" / "semif-decision.js").read_text(encoding="utf-8")
     assert f'locParam("loc_sigma", {cl.LOC_SIGMA_DEFAULT}, ' in page
     # the page reports the spread it drove with; another one is a setup failure
     good = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "loc_sigma_seen": 0.5, "world_seen": "coast:festival",
