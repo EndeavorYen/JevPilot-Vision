@@ -36,7 +36,7 @@ python demo/server.py --mock --port 8000
 - **Vision 模式**需要感知模型，也需要 CUDA：`pip install -e ".[neural]"`（torch、transformers、sentencepiece；第一次執行會下載 RT-DETR 與 SigLIP 權重）。沒有安裝、或沒有 CUDA 時，偵測器不啟動，感知回報 `backend: none`，Vision 模式的車會減速停下，不會假裝看得到。要在 CPU 上跑，設 `SEMIF_PERCEPTION_DEVICE=cpu`（很慢）。SigLIP 的文字分類少了 sentencepiece 就無法運作：載入時會記錄錯誤，`/v1/vision` 回應帶 `scoring_error`，事件文字寫明分類器無法使用，不會回報路面淨空（#70）。
 - **網路與上傳**：伺服器預設只在本機監聽（`127.0.0.1`），也不開 CORS；要讓區網的其他裝置連線，加 `--host 0.0.0.0`；要讓其他網頁呼叫，加 `--cors-origin http://...`（可重複，或設環境變數 `SEMIF_CORS_ORIGINS`，以逗號分隔）。`/v1/vision` 拒絕超過 1.5 MB 字元（413）或超過 1920×1080 像素（422）的影像。
 - **對接 SemArbiter**：先在另一個埠口啟動 SemArbiter，再用 `python demo/server.py --port 8000 --arbiter-url http://localhost:8001`（或設環境變數 `SEMARBITER_URL`）。
-- 常用網址參數：`?mode=vision|privileged|heuristic`、`?start=festival|harbour|coast|pass|highway`、`?time=17:45`、`?gfx=medium|high`、`?traffic=low|med|high&people=low|med|high`、`?minimal=1`。
+- 常用網址參數：`?mode=vision|vision-map|privileged|heuristic`、`?start=festival|harbour|coast|pass|highway`、`?time=17:45`、`?gfx=medium|high`、`?traffic=low|med|high&people=low|med|high`、`?minimal=1`。
 
 ## 架構
 
@@ -80,17 +80,35 @@ flowchart LR
 - 應用不把 JPEG 送到 SemArbiter。SemArbiter 不 import 這一倉。
 - 機率是讀出結果，不是另一套駕駛策略。
 
-## 三種模式，三個問題
+## 四種模式，三個問題
 
 | 模式 | 決策讀什麼 | 它回答的問題 |
 | --- | --- | --- |
 | **Privileged**（預設） | 模擬器狀態表 + 地圖 | 要評**決策模型**時的消融基準：輸入是對的，選得好不好？ |
-| **Vision**（`?mode=vision`） | 車載相機 + 地圖 | 沒有物件與號誌的真值，**閉環還關得起來嗎？** |
+| **Vision**（`?mode=vision`） | 車上感測器 + 手機等級導航（去地圖化進行中） | 只靠車上看得到的東西，**閉環還關得起來嗎？** |
+| **Vision（地圖）**（`?mode=vision-map`） | 車載相機 + 地圖 + 完美定位 | 舊的 Vision，保留當新 Vision 的基準 |
 | **Heuristic** | 瀏覽器端的幾何規則（打包檔內建） | 幾何基準：不用模型能開到哪裡？ |
 
 Vision 不是「比 upstream 更正確」的版本，它問的是另一個問題。Privileged 與 Heuristic 留著當參考，用來學習與調校 Vision。
 
+### Vision 的新定義（[#85](https://github.com/EndeavorYen/JevPilot-Vision/issues/85)）
+
+目標是接近真車：動態物件、號誌、車道、停止線、自車位置都只來自車上的感測器，導航只到手機導航等級（拓樸、轉彎提示、速限、有誤差的 GPS）。這會分階段完成，每一步只改 `?mode=vision`：
+
+| 階段 | 內容 |
+|---|---|
+| 感知 | 光流 B（#75）→ SigLIP 讀燈頭（#76）→ 撤回為感知改過的世界（#30）→ SigLIP 場景語意（#77） |
+| 去地圖化 | 定位誤差（#79）→ 相機看車道線（#80）→ 相機看停止線（#81）→ 手機等級導航（#82）→ 從相機車道產生候選路線（#83） |
+
+**目前是第 0 階段**：兩個 Vision 的行為完全相同，模式指示器會寫「de-mapping stage 0: drives as Vision (map)」。`benchmarks/closed_loop.py` 的結果列會記下階段（`vision_stage`），不同階段不混在一起統計；沒有階段的舊 `vision` 結果列一律算成 Vision（地圖）。
+
+**Vision（地圖）的汰除條件**：新的 Vision 在驗收集上不比 Vision（地圖）差（以 k/n 比較，#46），或擁有者決定時，移除 Vision（地圖）。
+
+![模式指示器：Vision 與 Vision（地圖）](docs/visual/issue-78/indicator.jpg)
+
 ## 限制（請先讀這段）
+
+以下說的是目前的 Vision（第 0 階段，也就是 Vision（地圖））；去地圖化的各階段會逐條拿掉前兩項。
 
 - **地圖仍是特權。** Vision 關掉的是動態物件與號誌的真值，不是整個世界：路網、車道幾何、路線與建築都不是相機看出來的。
 - **自車定位是完美的。** 決策請求裡的車道橫向偏移（`lateral_offset_m`）、到停止線的距離、路線誤差與 `on_road`，都來自模擬器裡車子的真實位置，等於一套沒有誤差的定位。真實車輛要靠 GNSS、IMU 與地圖匹配估計這些值，誤差可達公尺級；Vision 沒有承擔這部分的難度。

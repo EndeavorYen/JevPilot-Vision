@@ -434,7 +434,7 @@ if (spec.cmd === "cstats") {
     process.stdout.write(JSON.stringify({ timers, lag: window.SEMIF_LAG_MS }));
   })();
 } else if (spec.cmd === "mode") {
-  const DRIVE_MODES_T = ["vision", "privileged", "heuristic"];
+  const DRIVE_MODES_T = ["vision", "vision-map", "privileged", "heuristic"];
   const shape = () => {
     const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
     return { drive_mode: body.drive_mode || null, mode: body.mode };
@@ -442,10 +442,10 @@ if (spec.cmd === "cstats") {
   const pick = (m) => document.getElementById("sol-mode-" + m).click();
   const strategy = document.getElementById("strategy-select");
   const reads = () => document.getElementById("sol-mode-reads").textContent;
-  const steps = [{ at: "load", mode: window.SEMIF_DRIVE_MODE, shaped: shape(), reads: reads(), select: strategy.value }];
-  for (const m of ["vision", "heuristic", "privileged"]) {
+  const steps = [{ at: "load", mode: window.SEMIF_DRIVE_MODE, id: window.SEMIF_MODE_ID, shaped: shape(), reads: reads(), select: strategy.value }];
+  for (const m of ["vision-map", "vision", "heuristic", "privileged"]) {
     pick(m);
-    steps.push({ at: "click " + m, mode: window.SEMIF_DRIVE_MODE, shaped: shape(), reads: reads(), select: strategy.value,
+    steps.push({ at: "click " + m, mode: window.SEMIF_DRIVE_MODE, id: window.SEMIF_MODE_ID, shaped: shape(), reads: reads(), select: strategy.value,
       checked: document.getElementById("sol-mode-" + m).getAttribute("aria-checked"),
       intent: document.getElementById("fsd-intent").textContent });
   }
@@ -475,10 +475,10 @@ if (spec.cmd === "cstats") {
   const bundleKeys = [];
   document.addEventListener("keydown", (ev) => bundleKeys.push(ev.key));
   dialog.open = false;
-  const radio = document.getElementById("sol-mode-" + window.SEMIF_DRIVE_MODE);
-  const before = window.SEMIF_DRIVE_MODE;
+  const radio = document.getElementById("sol-mode-" + window.SEMIF_MODE_ID);
+  const before = window.SEMIF_MODE_ID;
   radio.dispatchEvent({ type: "keydown", key: "ArrowRight", code: "ArrowRight", bubbles: true });
-  steps.push({ at: "arrow right on the switch", from: before, mode: window.SEMIF_DRIVE_MODE, reachedBundle: bundleKeys.slice(),
+  steps.push({ at: "arrow right on the switch", from: before, mode: window.SEMIF_MODE_ID, reachedBundle: bundleKeys.slice(),
     tabindex: DRIVE_MODES_T.map((m) => document.getElementById("sol-mode-" + m).getAttribute("tabindex")) });
   const live = document.getElementById("sol-mode-announce");
   const healthEl = document.getElementById("sol-mode-health");
@@ -496,6 +496,17 @@ if (spec.cmd === "cstats") {
   window.SEMIF_MODE.refresh();
   said.push(document.getElementById("sol-mode-announce").textContent);
   steps.push({ at: "announcements", said });
+  // #78 review: Vision (map) speaks its own name, and comes back after a trip through Heuristic.
+  window.SEMIF_MODE.set("vision-map");
+  window.SEMIF_MODE.refresh();
+  const mapSaid = document.getElementById("sol-mode-announce").textContent;
+  strategy.value = "heuristic";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  const viaHeuristic = window.SEMIF_MODE_ID;
+  strategy.value = "semif";
+  strategy.dispatchEvent({ type: "change", bubbles: true });
+  steps.push({ at: "vision-map round trip", mapSaid, viaHeuristic, mode: window.SEMIF_MODE_ID, drive: window.SEMIF_DRIVE_MODE,
+    stage: window.SEMIF_VISION_STAGE });
   const h = window.SEMIF_MODE.health;
   const ready = { backend: "PekingU/rtdetr_r50vd", status: "ready" };
   const health = {
@@ -1323,6 +1334,28 @@ def test_the_mode_comes_from_the_address_then_the_browser_then_privileged():
     assert _run({"cmd": "mode", "storage": {"semif.driveMode": "nonsense"}})["steps"][0]["mode"] == "privileged"
 
 
+def test_issue78_review_vision_map_names_itself_and_survives_a_trip_through_heuristic():
+    trip = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["vision-map round trip"]
+    assert trip["mapSaid"] == "Vision (map) mode, detector failed, holding to a crawl"
+    assert trip["viaHeuristic"] == "heuristic"
+    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 0)
+
+
+def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
+    """#78: the old Vision is kept as Vision (map), the baseline the de-mapped Vision is compared to.
+    The address and the switch name it; it drives "vision", so every planner patch treats it alike."""
+    load = _run({"cmd": "mode", "mode": "vision-map"})["steps"][0]
+    assert (load["id"], load["mode"]) == ("vision-map", "vision")
+    assert load["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    stored = _run({"cmd": "mode", "storage": {"semif.driveMode": "vision-map"}})["steps"][0]
+    assert (stored["id"], stored["mode"]) == ("vision-map", "vision")
+    steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "privileged"})["steps"]}
+    click = steps["click vision-map"]
+    assert (click["id"], click["mode"], click["checked"]) == ("vision-map", "vision", "true")
+    assert click["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert steps["click vision"]["id"] == "vision"
+
+
 def test_switching_mode_from_the_indicator_changes_the_decision_request():
     """#21: each mode is a different decision path: Vision adds drive_mode, Heuristic asks the
     heuristic scorer, Privileged is the SemArbiter on the simulator table. The bundle's strategy
@@ -1331,6 +1364,7 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     steps = {s["at"]: s for s in out["steps"]}
     assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat"}
     assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
     assert steps["click vision"]["checked"] == "true"
     # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
     # bundle then decides locally and asks no server); nothing in the request is rewritten.
@@ -1341,13 +1375,16 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
     last = [s["mode"] for s in out["steps"] if "mode" in s][-1]
     assert out["stored"]["semif.driveMode"] == last, "the last choice is remembered"
-    # The address follows (other parameters kept): vision, heuristic, privileged for the three clicks.
-    assert out["urls"][:3] == ["/jevpilot/?vision=0&mode=vision", "/jevpilot/?vision=0&mode=heuristic", "/jevpilot/?vision=0&mode=privileged"]
+    # The address follows (other parameters kept), one per click.
+    assert out["urls"][:4] == ["/jevpilot/?vision=0&mode=vision-map", "/jevpilot/?vision=0&mode=vision",
+                               "/jevpilot/?vision=0&mode=heuristic", "/jevpilot/?vision=0&mode=privileged"]
 
 
 def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
     steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
-    assert steps["click vision"]["reads"] == "Objects & signals from cameras · map privileged"
+    assert steps["click vision-map"]["reads"] == "Objects & signals from cameras · map privileged"
+    # #78: until its stages land the new Vision says it still drives as Vision (map)
+    assert steps["click vision"]["reads"] == "Objects & signals from cameras · de-mapping stage 0: drives as Vision (map)"
     assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
     assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
 
@@ -1394,8 +1431,8 @@ def test_review2_arrow_keys_on_the_switch_change_the_mode_and_never_reach_the_dr
     moving along the switch must not steer the car. One tab stop: the selected mode."""
     steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "vision"})["steps"]}
     arrow = steps["arrow right on the switch"]
-    order = ["vision", "privileged", "heuristic"]
-    assert arrow["mode"] == order[(order.index(arrow["from"]) + 1) % 3]
+    order = ["vision", "vision-map", "privileged", "heuristic"]
+    assert arrow["mode"] == order[(order.index(arrow["from"]) + 1) % 4]
     assert arrow["reachedBundle"] == []
     assert arrow["tabindex"] == ["0" if m == arrow["mode"] else "-1" for m in order]
 

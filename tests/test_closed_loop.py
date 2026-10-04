@@ -39,8 +39,45 @@ def _row(mode, seed, route, **kw):
             "crash": False, "collisions": 0, "vehicle_collisions": 0, "pedestrian_casualties": 0, "red_light": 0,
             "violations": 0, "min_gap_m": 4.0, "events": [], "ok": True, "disengaged": False, "stalled": False,
             "broke": False, "unreadable": False, "fmt": cl.ROW_FORMAT}
+    if mode == "vision":
+        base["vision_stage"] = cl.VISION_STAGE  # as plan_runs writes it (#78)
     base.update(kw)
     return base
+
+
+def test_issue78_old_vision_rows_are_reported_as_vision_map_never_pooled_with_the_new_vision():
+    old = {k: v for k, v in _row("vision", 1, "festival").items() if k != "vision_stage"}
+    new = _row("vision", 1, "festival")
+    summary = cl.summarize([old, new, _row("vision-map", 2, "festival")])
+    assert summary[("held_out", "vision-map", 150, 0, "medium")]["runs"] == 2
+    assert summary[("held_out", "vision", 150, 0, "medium")]["runs"] == 1
+    # an old row stands for a Vision (map) run already made, not for a new Vision run
+    plan = cl.plan_runs([1], ["festival"], ["vision", "vision-map"], seconds=150, lag_ms=0)
+    assert [r["mode"] for r in cl.pending(plan, [old])] == ["vision"]
+    assert plan[0]["vision_stage"] == cl.VISION_STAGE and "vision_stage" not in plan[1]
+    # a row from an earlier stage of the new Vision is not pooled with the current stage
+    earlier = _row("vision", 3, "festival", vision_stage=cl.VISION_STAGE - 1)
+    assert cl.report_mode(earlier) == f"vision (stage {cl.VISION_STAGE - 1})"
+
+
+def test_issue78_review_a_page_at_another_vision_stage_is_a_setup_failure():
+    run = cl.plan_runs([7], ["harbour"], ["vision"], seconds=150, lag_ms=0)[0]
+    good = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "world_seen": "coast:harbour", "lag_seen": 0,
+            "gfx_seen": "medium", "autopilot": True, "crash": False, "sim_time_s": 150, "hidden": False, "distance_m": 1800}
+    assert cl.validate(run, good) is None
+    assert "Vision stage" in cl.validate(run, dict(good, vision_stage_seen=cl.VISION_STAGE + 1))
+    assert "Vision stage" in cl.validate(run, {k: v for k, v in good.items() if k != "vision_stage_seen"})
+    assert "vision_stage_seen: window.SEMIF_VISION_STAGE" in cl._READ
+    page = (cl.HERE.parent / "jevpilot_vision" / "web" / "semif-layer.js").read_text(encoding="utf-8")
+    assert f"window.SEMIF_VISION_STAGE = {cl.VISION_STAGE};" in page
+
+
+def test_issue78_both_visions_are_modes_the_page_honours():
+    assert {"vision", "vision-map"} <= set(cl.MODES)
+    url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision-map", "lag_ms": 0})
+    assert "&mode=vision-map&" in url
+    # the page reports the switch's choice, so a Vision (map) run is not taken for a Vision one
+    assert "mode_seen: window.SEMIF_MODE_ID" in cl._READ
 
 
 def test_the_summary_reports_counts_and_rates_per_mode_never_clean():
@@ -593,7 +630,7 @@ def test_the_report_keeps_medium_and_high_apart():
 
 def test_a_page_on_the_wrong_quality_is_a_setup_failure():
     run = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0, gfx="high")[0]
-    got = {"mode_seen": "vision", "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500}
+    got = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500}
     assert cl.validate(run, dict(got, gfx_seen="medium")) == "drove graphics 'medium'"
     assert cl.validate(run, dict(got, gfx_seen="high")) is None
     assert cl.validate(run, got) == "drove graphics None", "a coast page always reports its quality"
@@ -610,7 +647,7 @@ def test_issue22_evaluations_drive_todays_density_and_a_page_on_another_is_a_set
     url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision"})
     assert "traffic=low&people=low" in url
     run = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0)[0]
-    got = {"mode_seen": "vision", "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500, "gfx_seen": "medium"}
+    got = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500, "gfx_seen": "medium"}
     assert cl.validate(run, dict(got, density_seen={"traffic": "med", "people": "low"})) == "drove density {'traffic': 'med', 'people': 'low'}"
     assert cl.validate(run, dict(got, density_seen={"traffic": "low", "people": "low"})) is None
     assert cl.validate(run, got) is None, "a page from before #22 drove today's counts"

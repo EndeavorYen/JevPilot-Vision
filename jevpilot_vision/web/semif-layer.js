@@ -3,21 +3,29 @@
   const rawParam = params.get("raw") === "1" || params.get("rawMode") === "1";
   window.SEMIF_RAW_MODE = window.SEMIF_RAW_MODE || rawParam;
   // Driving mode (#18, #21): what the decision reads. Vision: objects and signals from the onboard
-  // cameras, the map still privileged. Privileged: the simulator's state table (the ablation for a
-  // decision model). Heuristic: the bundle's geometric rules. The planner patches read the global.
+  // cameras, with no map or localization privilege once its stages land (#78); until then it drives
+  // as Vision (map), the old Vision kept as its baseline: cameras, the map still privileged.
+  // Privileged: the simulator's state table (the ablation for a decision model). Heuristic: the
+  // bundle's geometric rules. SEMIF_MODE_ID is the switch's choice (address, storage, reports);
+  // SEMIF_DRIVE_MODE is how it drives, which the planner patches read: both Visions drive "vision".
   // ?mode= wins, then the browser's last choice, then privileged.
-  const DRIVE_MODES = ["vision", "privileged", "heuristic"];
+  const DRIVE_MODES = ["vision", "vision-map", "privileged", "heuristic"];
+  // De-mapping stages landed in ?mode=vision (#85). benchmarks/closed_loop.py VISION_STAGE records
+  // the same number and checks it against this one on every run.
+  window.SEMIF_VISION_STAGE = 0;
+  const driveOf = (id) => (id === "vision-map" ? "vision" : id);
   const MODE_KEY = "semif.driveMode";
   const modeParam = params.get("mode");
   let modeSaved = null;
   try {
     modeSaved = localStorage.getItem(MODE_KEY);
   } catch (_) {}
-  window.SEMIF_DRIVE_MODE = DRIVE_MODES.includes(modeParam)
+  window.SEMIF_MODE_ID = DRIVE_MODES.includes(modeParam)
     ? modeParam
     : DRIVE_MODES.includes(modeSaved)
       ? modeSaved
       : "privileged";
+  window.SEMIF_DRIVE_MODE = driveOf(window.SEMIF_MODE_ID);
   // Latency stress (#28, benchmarks/closed_loop.py --lag-ms): every decision request waits this long
   // before it goes out, to see whether a result holds only at one timing. At most 1.2 s: the bundle
   // drops a decision that arrives 1.8 s after it asked, lag included, so more would only park the car.
@@ -76,7 +84,8 @@
   // Always on screen (also in the minimal view): which mode drives, what it reads, and in Vision
   // whether perception is healthy. It says what each mode reads, not which is "better".
   const MODE_INFO = {
-    vision: { label: "Vision", reads: "Objects & signals from cameras · map privileged" },
+    vision: { label: "Vision", reads: `Objects & signals from cameras · de-mapping stage ${window.SEMIF_VISION_STAGE}: drives as Vision (map)` },
+    "vision-map": { label: "Vision (map)", reads: "Objects & signals from cameras · map privileged" },
     privileged: { label: "Privileged", reads: "Simulator state · the ablation for a decision model" },
     heuristic: { label: "Heuristic", reads: "Geometric rules · no model" },
   };
@@ -93,7 +102,7 @@
   const modeReads = document.getElementById("sol-mode-reads");
   const modeHealth = document.getElementById("sol-mode-health");
   document.getElementById("sol-mode-announce").setAttribute("aria-live", "polite");
-  let lastModelMode = window.SEMIF_DRIVE_MODE === "vision" ? "vision" : "privileged";
+  let lastModelMode = window.SEMIF_DRIVE_MODE === "vision" ? window.SEMIF_MODE_ID : "privileged";
   let modeFrames = 0;
 
   // Vision's health: the detector's state, the evidence's age (from frame capture) and the encoder
@@ -119,7 +128,7 @@
   }
 
   function renderMode() {
-    const mode = window.SEMIF_DRIVE_MODE;
+    const mode = window.SEMIF_MODE_ID;
     modeEl.setAttribute("data-mode", mode);
     for (const m of DRIVE_MODES) {
       const btn = document.getElementById(`sol-mode-${m}`);
@@ -131,7 +140,7 @@
     // Until a decision names its intent, the status card names who will decide.
     const intent = document.getElementById("fsd-intent");
     if (intent && /^(SemArbiter|Heuristic)$/.test(intent.textContent)) {
-      intent.textContent = mode === "heuristic" ? "Heuristic" : "SemArbiter";
+      intent.textContent = window.SEMIF_DRIVE_MODE === "heuristic" ? "Heuristic" : "SemArbiter";
     }
     renderModeHealth();
   }
@@ -148,7 +157,7 @@
     if (window.SEMIF_DRIVE_MODE !== "vision") {
       modeEl.setAttribute("data-health", "");
       modeHealth.textContent = "";
-      announce(`${MODE_INFO[window.SEMIF_DRIVE_MODE].label} mode`);
+      announce(`${MODE_INFO[window.SEMIF_MODE_ID].label} mode`);
       return;
     }
     const age = Number.isFinite(window.SEMIF_VISION_AT) ? performance.now() - window.SEMIF_VISION_AT : NaN;
@@ -158,7 +167,8 @@
     modeHealth.setAttribute("title", h.text);
     // Fixed phrases: the evidence age is on screen, not read out on every tick.
     const reason = h.state === "ok" ? "" : h.text.startsWith("Evidence") ? "evidence stale" : h.text.split(" — ")[0].toLowerCase();
-    announce(h.state === "ok" ? "Vision mode, detector ready" : `Vision mode, ${reason}, holding to a crawl`);
+    const label = MODE_INFO[window.SEMIF_MODE_ID].label;
+    announce(h.state === "ok" ? `${label} mode, detector ready` : `${label} mode, ${reason}, holding to a crawl`);
   }
 
   // The bundle's strategy dropdown is the switch for SemArbiter vs the heuristic; it follows the
@@ -172,7 +182,8 @@
   }
   function setDriveMode(mode, fromStrategy) {
     if (!DRIVE_MODES.includes(mode)) return;
-    window.SEMIF_DRIVE_MODE = mode;
+    window.SEMIF_MODE_ID = mode;
+    window.SEMIF_DRIVE_MODE = driveOf(mode);
     if (mode !== "heuristic") lastModelMode = mode;
     try {
       localStorage.setItem(MODE_KEY, mode);
@@ -182,11 +193,11 @@
       q.set("mode", mode);
       history.replaceState(history.state, "", `${location.pathname || ""}?${q.toString()}${location.hash || ""}`);
     } catch (_) {}
-    if (!fromStrategy) syncStrategy(mode);
+    if (!fromStrategy) syncStrategy(window.SEMIF_DRIVE_MODE);
     renderMode();
   }
   const stepMode = (by) =>
-    DRIVE_MODES[(DRIVE_MODES.indexOf(window.SEMIF_DRIVE_MODE) + by + DRIVE_MODES.length) % DRIVE_MODES.length];
+    DRIVE_MODES[(DRIVE_MODES.indexOf(window.SEMIF_MODE_ID) + by + DRIVE_MODES.length) % DRIVE_MODES.length];
   for (const m of DRIVE_MODES) {
     const btn = document.getElementById(`sol-mode-${m}`);
     btn.addEventListener("click", () => setDriveMode(m));
