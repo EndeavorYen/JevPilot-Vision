@@ -73,3 +73,33 @@ def test_issue63_a_change_at_the_bottom_of_the_chain_reaches_every_url_above_it(
     assert b"semif-stats.js" + TOKEN.encode() in stack.served(root / "index.html"), "not copied here"
     (root / "semif-encode-worker.js").unlink()
     assert TOKEN.encode() in stack.served(root / "semif-layer.js")
+
+
+def test_issue63_review_a_filled_file_revalidates_by_its_hash_and_untouched_files_as_before():
+    from demo.server import app
+
+    client = TestClient(app)
+    first = client.get("/jevpilot/assets/main-CvLEeHjW.js")
+    etag = first.headers["etag"]
+    assert etag == f'"{AssetVersions(WEB).digest(WEB / "assets" / "main-CvLEeHjW.js")}"'
+    again = client.get("/jevpilot/assets/main-CvLEeHjW.js", headers={"If-None-Match": etag})
+    assert again.status_code == 304 and not again.content
+    assert client.get("/jevpilot/assets/main-CvLEeHjW.js", headers={"If-None-Match": '"stale"'}).status_code == 200
+    plain = client.get("/jevpilot/semif-stats.js")
+    assert plain.status_code == 200 and "etag" in plain.headers, "StaticFiles' own validator"
+
+
+def test_issue63_review_a_dependency_change_refills_a_file_whose_own_mtime_did_not_move(tmp_path):
+    import os
+
+    (tmp_path / "a.js").write_text('import"/jevpilot/b.js?v=HASH";', encoding="utf-8")
+    (tmp_path / "b.js").write_text("one", encoding="utf-8")
+    (tmp_path / "c.js").write_text('import"/jevpilot/c.js?v=HASH";', encoding="utf-8")  # itself: a cycle
+    stack = AssetVersions(tmp_path)
+    first = stack.served(tmp_path / "a.js")
+    stamp = os.stat(tmp_path / "a.js").st_mtime_ns
+    (tmp_path / "b.js").write_text("two!", encoding="utf-8")
+    assert os.stat(tmp_path / "a.js").st_mtime_ns == stamp
+    assert stack.served(tmp_path / "a.js") != first
+    assert TOKEN.encode() in stack.served(tmp_path / "c.js"), "a cycle keeps the token"
+
