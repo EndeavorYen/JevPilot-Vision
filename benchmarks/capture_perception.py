@@ -11,7 +11,8 @@ the render: the frame's encode time).
 
 Writes <out_dir>/<seed>-<route>/fNNNN.jpg and truth.json:
 [{"file", "t", "grab_ms", "ego_speed", "yaw_rps", "near": [{"type", "id", "ahead", "right", "closing", "depth"}],
-   "light": {"control", "signal", "distance_to_line_m"} or null, "lane": {"offset_m", "half_width_m"} or null}]
+   "light": {"control", "signal", "distance_to_line_m"} or null, "lane": {"offset_m", "half_width_m"} or null,
+   "road": {"kind", "width", "lateral_m"} or null}]
 in the ego frame (metres; closing in m/s along our heading, positive when the gap shrinks).
 Tuning seeds only (benchmarks/closed_loop_seeds.json): this is for looking into perception.
 """
@@ -56,7 +57,24 @@ _HOOK = r"""
         const light = inter && /signal|traffic_light/.test(String(inter.control || ""))
           ? { control: inter.control, signal: inter.signal ?? null, distance_to_line_m: inter.stop_line_ahead_m ?? inter.distance_to_line_m ?? null } : null;
         const lane = d0.lane && Number.isFinite(d0.lane.offset_m) ? { offset_m: d0.lane.offset_m, half_width_m: d0.lane.half_width_m } : null;
-        window.__cap.push({ light, lane, mode: window.SEMIF_DRIVE_MODE, t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
+        // The road under the car (#80): its kind, width and where the car is across it (metres right
+        // of the centreline, facing the way the car drives), for the painted lane's truth.
+        let road = null, bestD = 1e9;
+        for (const rd of (s.world && s.world.connectorRoads) || []) {
+          const pts = rd.points;
+          for (let i = 0; i + 1 < pts.length; i += 2) {
+            const a = pts[i], b = pts[i + 1], dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz || 1;
+            const u = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2));
+            const qx = a.x + dx * u, qz = a.z + dz * u, dd = Math.hypot(p.x - qx, p.z - qz);
+            if (dd < bestD) {
+              const flip = dx * f[0] + dz * f[1] < 0 ? -1 : 1, n = Math.sqrt(len2);
+              const tx = (flip * dx) / n, tz = (flip * dz) / n;  // along the road, the way the car goes
+              bestD = dd;
+              road = { kind: rd.kind, width: rd.width, lateral_m: (p.x - qx) * -tz + (p.z - qz) * tx };
+            }
+          }
+        }
+        window.__cap.push({ light, lane, road, mode: window.SEMIF_DRIVE_MODE, t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
           front: value.frames.front, near });
       }
     } catch (_) {}
