@@ -549,3 +549,23 @@ def test_a_slow_model_y_does_not_replace_the_car_picked_after_it():
     )
     assert got["saved"] == "cybercab"
     assert got["now"] == ["semif-hero-cybercab"], "the car on screen is the one picked last"
+
+
+def test_issue58_the_coasts_static_world_sets_its_matrices_once_and_only_moving_things_update():
+    got = _render(
+        "const scene = new Obj(); api.built({ sim: { world }, scene, _sceneryHooks: [], render() {} });"
+        "const root = scene.children[0]; const all = []; const walk = (n) => { const moving = !!n.userData?.moves;"
+        "  all.push({ name: n.name, frozen: n.matrixAutoUpdate === false, moving }); (n.children || []).forEach(walk); }; walk(root);"
+        "const named = (name) => all.find((n) => n.name === name);"
+        "window.SEMIF_SIM = { world: { type: 'city' } }; const city = new Obj(); city.matrixAutoUpdate = false; api.built({ scene: city });"
+        "out({ scene: scene.matrixAutoUpdate, city: city.matrixAutoUpdate, total: all.length,"
+        "  frozen: all.filter((n) => n.frozen).length, wrong: all.filter((n) => n.frozen === n.moving).length,"
+        "  sky: named('semif-sky'), wheel: named('semif-festival-wheel'), root: named('semif-world') });"
+    )
+    assert got["scene"] is False, "the scene no longer recomputes everything under it"
+    assert got["city"] is True, "an old map's scene updates as before"
+    assert got["wrong"] == 0, "every static node frozen, every moving one not"
+    assert got["root"]["frozen"] and not got["sky"]["frozen"]
+    assert got["wheel"]["frozen"], "the wheel's frame stands still; its rim and gondolas move"
+    assert got["total"] - got["frozen"] <= 30, got  # the sky, about ten boats, the rim and its gondolas
+

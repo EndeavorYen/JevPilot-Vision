@@ -204,6 +204,7 @@ function buildWheel(y0) {
     }
   }
   const rim = new T.Group();
+  rim.userData.moves = true; // turns (updateFestival)
   rim.position.set(0, WHEEL.hub, 0);
   const segments = 32;
   for (let i = 0; i < segments; i++) {
@@ -227,6 +228,7 @@ function buildWheel(y0) {
   for (let i = 0; i < WHEEL.cars; i++) {
     const car = mesh(new T.BoxGeometry(2.2, 2.0, 2.0), material(carColours[i % carColours.length], { roughness: 0.6 }), 0, 0, 0);
     car.userData.angle = (i / WHEEL.cars) * Math.PI * 2;
+    car.userData.moves = true; // swings round with the rim (placeCars)
     cars.push(car);
     group.add(car);
   }

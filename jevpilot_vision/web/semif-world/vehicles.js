@@ -53,12 +53,14 @@ function hash(text) {
 function wheel(name, { x, z, r, w, spokes, front, chrome }, m) {
   const pivot = new T.Group();
   pivot.name = name;
+  pivot.userData.moves = true; // steers and spins (the bundle)
   pivot.position.set(x, r, z);
   pivot.userData.front = front;
   pivot.userData.radius = r;
   const out = x < 0 ? -1 : 1; // the wheel's outer face points away from the car
   const rotor = new T.Group();
   rotor.name = `${name}_spin`;
+  rotor.userData.moves = true; // spins (the bundle)
   const spin = new Parts();
   spin.add(m.tyre, lathe([[r * 0.66, -w / 2], [r * 0.9, -w / 2], [r, -w * 0.34], [r, w * 0.34], [r * 0.9, w / 2], [r * 0.66, w / 2]], { segments: 30 }));
   const rim = chrome ? m.chrome : m.rim;
