@@ -1494,8 +1494,9 @@
     return frames;
   }
 
-  // The car's own yaw rate at a grab (its gyro, an onboard sensor): the tracker takes our turning
-  // out of how the others seem to slide sideways (#75). Positive turning right; null at first.
+  // The car's own yaw rate at a grab (its gyro, an onboard sensor) and, with it, its odometer: the
+  // tracker takes the bend out of how the others seem to slide sideways (#75). Positive turning
+  // right; null at first and after a gap of more than 1.5 s.
   let gyroLast = null;
   function gyro(tMs) {
     const p = window.SEMIF_SIM && window.SEMIF_SIM.player;
@@ -1521,6 +1522,7 @@
       // The moment of the renders; grab_ms runs to when the frames are encoded (#42 item 2).
       const tGrab = performance.now();
       const yawRps = gyro(tGrab);
+      const odometer = window.SEMIF_SIM && window.SEMIF_SIM.player ? Math.abs(Number(window.SEMIF_SIM.player.speed) || 0) : null;
       let frames = null;
       try {
         frames = await grabSurround();
@@ -1539,7 +1541,7 @@
           method: "POST",
           signal: signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames: frames, t_ms: tGrab, yaw_rps: yawRps }),
+          body: JSON.stringify({ frames: frames, t_ms: tGrab, yaw_rps: yawRps, speed_mps: odometer }),
         });
         const data = await res.json();
         const rttMs = performance.now() - tVis;

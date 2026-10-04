@@ -378,3 +378,36 @@ def test_issue75_review_the_server_takes_the_pages_gyro_with_the_frames(monkeypa
             pass
         assert seen["image"].get("_yaw_rps") == kept, (yaw, seen["image"])
 
+
+def test_issue75_review_the_flow_ablation_reads_box_flow_for_cars_in_our_lane(monkeypatch):
+    straight = [8.0, 0.0, 0, 0, False, False]
+    # 14 m ahead; its box says we close at 2 m/s (TTC 7 s), ranging knows nothing
+    slow = {"kind": "car", "ahead_m": 14.0, "right_m": 0.0, "closing_mps": None, "ttc_s": 7.0}
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "flow")
+    assert vision_mode.sweep_collision(straight, [slow], speed=8.0, use_flow=True) is False
+    monkeypatch.setenv("SEMIF_VISION_CLOSING", "range")
+    assert vision_mode.sweep_collision(straight, [slow], speed=8.0, use_flow=True) is True, "unknown: standing"
+
+
+def test_issue75_review_the_server_takes_the_pages_odometer_with_the_frames(monkeypatch):
+    import asyncio
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    from jevpilot_vision import http
+
+    seen = {}
+    monkeypatch.setattr(http._vision_slot, "submit", lambda image: (seen.setdefault("image", image), None, None) and (0, None, 0))
+    buf = BytesIO()
+    Image.new("RGB", (64, 36), (90, 90, 90)).save(buf, format="JPEG")
+    frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    for speed, kept in ((9.5, 9.5), (-1.0, None), (float("inf"), None), (None, None)):
+        seen.clear()
+        try:
+            asyncio.run(http.vision_endpoint({"frames": {"front": frame}, "t_ms": 5.0, "speed_mps": speed}))
+        except Exception:
+            pass
+        assert seen["image"].get("_speed_mps") == kept, (speed, seen["image"])
+

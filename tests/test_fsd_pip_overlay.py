@@ -308,6 +308,8 @@ if (specEarly.cmd === "upload") {
         keys: Object.keys(sent),
         frames: sent.frames ? Object.keys(sent.frames) : [],
         front: sent.frames ? sent.frames.front : null,
+        yaw: sent.yaw_rps,
+        speed: sent.speed_mps,
       });
     }
     return Promise.resolve({
@@ -727,17 +729,24 @@ if (spec.cmd === "cstats") {
     return paint.apply(this, arguments);
   };
   nowMs = 0;
+  // #75: a car turning at spec.turn rad/s, its heading crossing +-pi on the way
+  if (spec.turn) window.SEMIF_SIM = { step() {}, traffic: [], pedestrians: [], player: { heading: Math.PI - 0.02, speed: -9 } };
   // A browser runs promise callbacks between frames; the vision post waits on a few (#42 item 2).
   (async () => {
   for (let i = 0; i < frames; i++) {
     nowMs += dt;
     ticks.push(nowMs);
+    if (spec.turn) {
+      const h = window.SEMIF_SIM.player.heading + (spec.turn * dt) / 1000;
+      window.SEMIF_SIM.player.heading = Math.atan2(Math.sin(h), Math.cos(h));
+    }
     window.__raf();
     await new Promise((r) => setImmediate(r));
   }
   process.stdout.write(JSON.stringify({
     posts: visionPosts.length,
     bodies: visionBodies.slice(0, 2),
+    gyro: visionBodies.map((b) => [b.yaw, b.speed]),
     yaws: surroundLooks,
     postTimes: visionPosts,
     tickTimes: ticks,
@@ -1138,7 +1147,7 @@ def test_each_display_frame_posts_four_surround_jpegs():
     # four cameras per capture, plus the 15 Hz PIP repaint (31 in 2 s at most; #42 item 3)
     assert 120 * 4 + 25 <= pumped["renders"] <= 120 * 4 + 31
     body = pumped["bodies"][0]
-    assert body["keys"] == ["frames", "t_ms", "yaw_rps"], "frames carry the moment they were grabbed (#18) and the car's yaw rate then (#75)"
+    assert body["keys"] == ["frames", "t_ms", "yaw_rps", "speed_mps"], "frames carry the moment they were grabbed (#18) and the car's gyro and odometer then (#75)"
     assert body["frames"] == ["front", "right", "rear", "left"]
     # the front is encoded from the captured pixels (a worker in Chrome; a canvas here), not the PIP (#42)
     assert body["front"] == "data:image/jpeg;base64,AAAA"
@@ -1536,3 +1545,13 @@ def test_issue55_the_page_never_draws_from_the_planners_seeded_random():
     assert out["time"] > 29.9
     assert out["draws"] == 0
     assert out["agents"] is False, "no ghost agents that nothing reads"
+
+
+def test_issue75_review_the_page_sends_its_gyro_and_odometer_across_the_heading_wrap():
+    out = _run({"cmd": "upload", "vision": "1", "frames": 30, "turn": 0.3})
+    gyro = out["gyro"]
+    assert gyro[0][0] is None, "no rate before a second reading"
+    rates = [yaw for yaw, _speed in gyro[1:]]
+    assert rates and all(abs(r - 0.3) < 0.01 for r in rates), rates  # also where heading jumps from pi to -pi
+    assert all(speed == 9 for _yaw, speed in gyro), "the odometer reads how fast, not which way"
+

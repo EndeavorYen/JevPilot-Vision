@@ -153,16 +153,20 @@ def sweep_collision(
         c, s = math.cos(heading), math.sin(heading)
         for obj in objects:
             half = OBJECT_HALF.get(obj.get("kind"), OBJECT_HALF["car"])
-            closing = obj.get("closing_mps") if source != "flow" else None
-            if obj.get("kind") == "pedestrian" or closing is None:
-                closing = speed  # standing still
-            elif abs(obj["right_m"]) <= LANE_HALF_M:
-                closing = min(closing, speed)  # ranging noise, not a car reversing at us
+            in_lane = abs(obj["right_m"]) <= LANE_HALF_M and obj.get("kind") != "pedestrian"
             flow = _flow_closing(obj) if source != "range" else None
-            if flow is not None:
-                closing = max(closing, flow)
-                if abs(obj["right_m"]) <= LANE_HALF_M and obj.get("kind") != "pedestrian":
-                    closing = min(closing, speed)  # box jitter, not a car reversing at us
+            if source == "flow":
+                closing = flow if flow is not None else speed  # no TTC: standing still
+            else:
+                closing = obj.get("closing_mps")
+                if obj.get("kind") == "pedestrian" or closing is None:
+                    closing = speed  # standing still
+                elif in_lane:
+                    closing = min(closing, speed)  # ranging noise, not a car reversing at us
+                if flow is not None:
+                    closing = max(closing, flow)
+            if flow is not None and in_lane:
+                closing = min(closing, speed)  # box jitter, not a car reversing at us
             moving = speed - closing
             oa = obj["ahead_m"] + CAMERA_AHEAD_M - closing * age_s + moving * t
             dx, dy = oa - ahead, obj["right_m"] - right

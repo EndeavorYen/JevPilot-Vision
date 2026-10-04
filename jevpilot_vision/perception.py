@@ -201,6 +201,7 @@ def perceive(
     tracker: Optional["Tracker"] = None,
     t: Optional[float] = None,
     yaw_rps: float = 0.0,
+    speed_mps: float = 0.0,
 ) -> Dict[str, Any]:
     """Objects on the road with range, and the state of the light ahead."""
     if detections is None:
@@ -234,7 +235,7 @@ def perceive(
         })
     objects.sort(key=lambda o: o["ahead_m"])
     if tracker is not None:
-        objects = tracker.update(objects, time.monotonic() if t is None else t, yaw_rps)
+        objects = tracker.update(objects, time.monotonic() if t is None else t, yaw_rps, speed_mps)
 
     # The light that governs us is ahead, above the horizon, near the middle of the view; the
     # biggest such box is the nearest. Readable lights that disagree give no answer at all.
@@ -282,7 +283,10 @@ def box_flow_fields(box: Sequence[float], camera: "CameraModel", kind: str = "ca
     what the tracker's flow reads. A walker's width swings with its stride, so its height. A box
     cut by the frame's edge has no size (None): entering the view, it would read as closing."""
     x0, y0, x1, y1 = (float(v) for v in box)
-    cut = x0 <= FLOW_EDGE_PX or y0 <= FLOW_EDGE_PX or x1 >= camera.width - FLOW_EDGE_PX or y1 >= camera.height - FLOW_EDGE_PX
+    if kind == "pedestrian":  # sized by height: only the top and bottom edges cut it
+        cut = y0 <= FLOW_EDGE_PX or y1 >= camera.height - FLOW_EDGE_PX
+    else:  # sized by width
+        cut = x0 <= FLOW_EDGE_PX or x1 >= camera.width - FLOW_EDGE_PX
     return {
         "box_px": [round(float(v), 1) for v in box],
         "scale_px": None if cut else round(y1 - y0 if kind == "pedestrian" else x1 - x0, 2),
@@ -304,27 +308,29 @@ def _enough(samples: List[tuple[float, float]]) -> bool:
     return len(samples) >= FLOW_MIN_SAMPLES and samples[-1][0] - samples[0][0] >= FLOW_MIN_SPAN_S
 
 
-def box_flow(history: List[tuple[float, Optional[float], float, float]], ahead_m: float, right_m: float) -> Dict[str, Optional[float]]:
-    """TTC from the box's expansion and the speed toward our line, over (t, scale_px or None,
-    right_m, ego yaw rate) samples.
+def box_flow(history: List[tuple[float, Optional[float], float, float, float, float]], ahead_m: float, right_m: float) -> Dict[str, Optional[float]]:
+    """TTC from the box's expansion and the speed toward our lane's line, over (t, scale_px or
+    None, right_m, ahead_m, ego yaw rate, ego speed) samples.
 
     Expansion: at a constant closing speed 1/size falls linearly in time, so
     TTC = (1/s) / -(d(1/s)/dt) holds without knowing the range. Sideways: the fitted rate of the
     box centre's ground position (ahead * tan(bearing): both its change of range and of bearing),
-    plus what our own turning adds to every bearing (a car turning right at w sees a standing
-    point `ahead` m away slide left at w * ahead). None: not enough of the track yet, or not
-    closing."""
+    less what the bend adds. On a bend of curvature k = yaw / speed, anything keeping to its lane
+    `a` m ahead sits k * a^2 / 2 further right in our frame than its lane's offset, so the fit runs
+    over right - k * a^2 / 2: a parked car's slide as we close on it around the bend, and a car
+    taking the bend with us, both come out as no sideways motion. None: not enough of the track
+    yet, or not closing."""
     out: Dict[str, Optional[float]] = {"ttc_s": None, "toward_center_mps": None}
-    sized = [(t, 1.0 / s) for t, s, _r, _w in history if s]
+    sized = [(t, 1.0 / s) for t, s, _r, _a, _w, _v in history if s]
     if _enough(sized):
         slope, inv_now = _slope(sized)
         if slope < 0 and inv_now > 0 and inv_now / -slope <= FLOW_MAX_TTC_S:
             out["ttc_s"] = round(inv_now / -slope, 2)
-    placed = [(t, r) for t, _s, r, _w in history]
+    bends = [w / v for _t, _s, _r, _a, w, v in history if v > 0.5]  # standing still: no bend to take out
+    curvature = sum(bends) / len(bends) if bends else 0.0
+    placed = [(t, r - curvature * a * a / 2.0) for t, _s, r, a, _w, _v in history]
     if _enough(placed):
-        rate, _now = _slope(placed)
-        yaw = sum(w for _t, _s, _r, w in history) / len(history)
-        lateral = rate + yaw * ahead_m  # right positive, our turning taken out
+        lateral, _now = _slope(placed)  # right positive, the bend taken out
         side = 1.0 if right_m > 0 else -1.0 if right_m < 0 else 0.0
         out["toward_center_mps"] = round(-side * lateral, 2)
     return out
@@ -339,9 +345,9 @@ class Tracker:
     None: unknown, not zero (zero would mean it drives away at our own speed).
 
     Objects with a pixel box (`box_flow_fields`) also carry their box flow (#75): `ttc_s` and
-    `toward_center_mps`, from the matched track's recent boxes. `yaw_rps` is the car's own yaw
-    rate when the frame was taken (its gyro; positive turning right), so our turning is not read
-    as the others moving sideways.
+    `toward_center_mps`, from the matched track's recent boxes. `yaw_rps` and `speed_mps` are the
+    car's own gyro and odometer when the frame was taken (yaw positive turning right): with them a
+    bend is not read as the others moving sideways.
     """
 
     MAX_GAP_S = 1.5
@@ -351,9 +357,9 @@ class Tracker:
         self.gate_m = gate_m
         self.prev: List[Dict[str, Any]] = []
         self.prev_t: Optional[float] = None
-        self.history: List[List[tuple[float, Optional[float], float, float]]] = []  # per entry of prev
+        self.history: List[List[tuple[float, Optional[float], float, float, float, float]]] = []  # per entry of prev
 
-    def update(self, objects: List[Dict[str, Any]], t: float, yaw_rps: float = 0.0) -> List[Dict[str, Any]]:
+    def update(self, objects: List[Dict[str, Any]], t: float, yaw_rps: float = 0.0, speed_mps: float = 0.0) -> List[Dict[str, Any]]:
         dt = None if self.prev_t is None else t - self.prev_t
         closing: List[Optional[float]] = [None] * len(objects)
         matched: List[Optional[int]] = [None] * len(objects)
@@ -381,7 +387,8 @@ class Tracker:
             past = [h for h in self.history[j] if t - h[0] <= FLOW_WINDOW_S] if j is not None else []
             if "box_px" in obj:
                 scale = obj.get("scale_px")
-                past = past + [(t, float(scale) if scale and scale > 0 else None, float(obj["right_m"]), float(yaw_rps or 0.0))]
+                past = past + [(t, float(scale) if scale and scale > 0 else None, float(obj["right_m"]), float(obj["ahead_m"]),
+                                float(yaw_rps or 0.0), float(speed_mps or 0.0))]
                 row.update(box_flow(past, float(obj["ahead_m"]), float(obj["right_m"])))
             out.append(row)
             history.append(past)
@@ -517,7 +524,8 @@ class Perception:
         self.detector = detector or Detector()
         self.tracker = Tracker()
 
-    def front(self, image: Any, t: Optional[float] = None, narrow: Any = None, yaw_rps: float = 0.0) -> Dict[str, Any]:
+    def front(self, image: Any, t: Optional[float] = None, narrow: Any = None, yaw_rps: float = 0.0,
+              speed_mps: float = 0.0) -> Dict[str, Any]:
         """Objects and the light from the wide front camera; with `narrow`, the light comes from the
         narrow camera whenever it can read one (2.5 times the magnification)."""
         t0 = time.perf_counter()
@@ -531,6 +539,7 @@ class Perception:
             tracker=self.tracker,
             t=t,
             yaw_rps=yaw_rps,
+            speed_mps=speed_mps,
         )
         out["signal"]["camera"] = "front"
         if narrow is not None and detections is not None:

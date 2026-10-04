@@ -145,7 +145,7 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     seen = {}
 
     class Fake:
-        def front(self, image, t=None, narrow=None, yaw_rps=0.0):
+        def front(self, image, t=None, narrow=None, yaw_rps=0.0, speed_mps=0.0):
             seen["size"] = image.size
             return {"backend": "fake", "objects": [{"kind": "car", "ahead_m": 12.0}], "signal": {"state": "red", "conf": 0.8}}
 
@@ -159,7 +159,7 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     assert evidence["perception"]["signal"]["state"] == "red"
 
     class Broken:
-        def front(self, image, t=None, narrow=None, yaw_rps=0.0):
+        def front(self, image, t=None, narrow=None, yaw_rps=0.0, speed_mps=0.0):
             raise RuntimeError("CUDA out of memory")
 
     monkeypatch.setattr(perception, "get_perception", lambda: Broken())
@@ -334,7 +334,7 @@ def test_review_h1_evidence_says_when_its_frame_was_grabbed(monkeypatch):
     times = []
 
     class Fake:
-        def front(self, image, t=None, narrow=None, yaw_rps=0.0):
+        def front(self, image, t=None, narrow=None, yaw_rps=0.0, speed_mps=0.0):
             times.append(t)
             return {"backend": "fake", "objects": [], "signal": {"state": "unknown"}}
 
@@ -505,16 +505,32 @@ def test_issue75_the_ttc_evaluation_scores_flow_against_the_true_gap_over_closin
 
 # --- #75 review: sideways motion with the gap changing and the car turning ----------------------
 
-def _flow_track_yaw(path, yaw=0.0, cam=CAM, dt=0.25):
+def _flow_track_yaw(path, yaw=0.0, speed=0.0, cam=CAM, dt=0.25):
     from jevpilot_vision.perception import Tracker, box_flow_fields
 
     tracker = Tracker()
     out = None
     for k, (ahead, right) in enumerate(path):
         obj = {"kind": "car", "ahead_m": ahead, "right_m": right, **box_flow_fields(_box_seen(cam, ahead, right), cam)}
-        out = tracker.update([obj], t=k * dt, yaw_rps=yaw)
+        out = tracker.update([obj], t=k * dt, yaw_rps=yaw, speed_mps=speed)
     return out[0]
 
+
+def _on_a_bend(point_at, yaw=0.2, speed=10.0, n=7, dt=0.25):
+    """(ahead, right) in our frame while we drive a bend (yaw > 0: to the right) at `speed`, of a
+    point whose world position at time t is point_at(t); the world's x is our first heading."""
+    import math
+
+    radius = speed / yaw
+    path = []
+    for k in range(n):
+        t = k * dt
+        th = yaw * t
+        ex, ey = radius * math.sin(th), radius - radius * math.cos(th)  # we, on the circle
+        qx, qy = point_at(t)
+        dx, dy = qx - ex, qy - ey
+        path.append((dx * math.cos(th) + dy * math.sin(th), -dx * math.sin(th) + dy * math.cos(th)))
+    return path
 
 def test_issue75_review_a_car_pulling_away_in_the_next_lane_is_not_cutting_in():
     # left lane, 3.5 m aside, the gap growing at 5 m/s: its bearing shrinks, it does not move over
@@ -528,20 +544,26 @@ def test_issue75_review_a_car_cutting_in_while_we_close_on_it_is_seen():
     assert cut["toward_center_mps"] == pytest.approx(1.0, abs=0.2), cut
 
 
-def test_issue75_review_our_own_turning_is_not_read_as_the_others_moving():
+def test_issue75_review_a_bend_is_not_read_as_cutting_in():
     import math
 
-    # a car standing 20 m ahead, 9 m to the left, while we turn left at 0.2 rad/s: in our frame it
-    # sweeps right; the gyro takes that out
-    yaw, path = -0.2, []
-    for k in range(7):
-        a = -yaw * 0.25 * k  # we have turned this far left
-        x, y = 20.0, -9.0  # where it stood, in the frame we started in
-        path.append((x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)))
-    seen = _flow_track_yaw(path, yaw=yaw)
-    assert abs(seen["toward_center_mps"]) < 0.3, seen
-    blind = _flow_track_yaw(path, yaw=0.0)
-    assert blind["toward_center_mps"] > 2.0, "without the gyro the turn reads as a cut-in"
+    yaw, speed = 0.2, 10.0  # a 50 m right-hand bend
+    radius = speed / yaw
+    kerb = radius + 5.0  # 5 m left of our line, all round the bend
+    at = 25.0 / radius  # parked 25 m on: it closes at our speed and slides across our view
+    parked = _on_a_bend(lambda t: (kerb * math.sin(at), radius - kerb * math.cos(at)), yaw, speed)
+    assert abs(_flow_track_yaw(parked, yaw, speed)["toward_center_mps"]) < 0.3
+    assert abs(_flow_track_yaw(parked)["toward_center_mps"]) > 1.0, "without gyro and odometer the bend reads as sideways motion"
+    # a car in the left lane taking the bend with us, 15 m ahead: it holds its place in our frame
+    lane = radius + 3.5
+    ahead0 = 15.0 / radius
+
+    def follower(t):
+        a = ahead0 + yaw * t
+        return lane * math.sin(a), radius - lane * math.cos(a)
+
+    pacing = _flow_track_yaw(_on_a_bend(follower, yaw, speed), yaw, speed)
+    assert abs(pacing["toward_center_mps"]) < 0.3, pacing
 
 
 def test_issue75_review_a_box_cut_by_the_frames_edge_gives_no_ttc():

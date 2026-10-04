@@ -90,20 +90,20 @@ def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
 
     narrow = None
     captured = None
-    yaw = 0.0
+    yaw = speed = 0.0
     encoder = vision.get_vision_encoder()
     if isinstance(image, dict):
         narrow = image.get("narrow")
         captured = image.get("_captured_ms")
-        yaw = image.get("_yaw_rps", 0.0)
-        cameras = {name: frame for name, frame in image.items() if name not in ("narrow", "_captured_ms", "_yaw_rps")}
+        yaw, speed = image.get("_yaw_rps", 0.0), image.get("_speed_mps", 0.0)
+        cameras = {name: frame for name, frame in image.items() if name not in ("narrow", "_captured_ms", "_yaw_rps", "_speed_mps")}
         evidence = encoder.infer_surround_b64(cameras)
         front = image["front"]
     else:
         evidence = encoder.infer_b64(image)
         front = image
     taken_s = captured / 1000.0 if isinstance(captured, (int, float)) else None
-    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow, taken_s, yaw)
+    evidence["perception"] = _perceive_front(perception, vision.decode_image_bytes, front, narrow, taken_s, yaw, speed)
     # Where each model ran (#57): SigLIP and the detector pick their devices separately.
     # A model that did not load runs nowhere: report None, not the device it was asked for.
     try:
@@ -121,13 +121,15 @@ def _infer_latest_jpeg(image: Any) -> Dict[str, Any]:
 
 
 def _perceive_front(perception: Any, decode: Any, front: str, narrow: Optional[str] = None, t: Optional[float] = None,
-                    yaw_rps: float = 0.0) -> Dict[str, Any]:
+                    yaw_rps: float = 0.0, speed_mps: float = 0.0) -> Dict[str, Any]:
     """Objects with range and the light ahead, from the front camera and, in Vision mode, the
     narrow camera (#18). A detector that fails says so (backend "none"): Vision mode must slow
     down, not read it as an empty road. `t` is when the frames were taken (the page's clock, s):
-    the tracker's closing speeds are timed by it. `yaw_rps`: the car's own yaw rate then (#75)."""
+    the tracker's closing speeds are timed by it. `yaw_rps`, `speed_mps`: the car's own gyro and
+    odometer then (#75)."""
     try:
-        return perception.get_perception().front(decode(front), t=t, narrow=decode(narrow) if narrow else None, yaw_rps=yaw_rps)
+        return perception.get_perception().front(decode(front), t=t, narrow=decode(narrow) if narrow else None,
+                                                 yaw_rps=yaw_rps, speed_mps=speed_mps)
     except Exception as err:
         return {"backend": "none", "objects": [], "signal": {"state": "unknown", "conf": 0.0}, "error": str(err)[:200]}
 
@@ -184,6 +186,9 @@ async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
         yaw = payload.get("yaw_rps")
         if isinstance(yaw, (int, float)) and not isinstance(yaw, bool) and math.isfinite(yaw) and abs(yaw) <= 3.0:
             image["_yaw_rps"] = float(yaw)  # the car's gyro (#75); more than 3 rad/s is not a car
+        speed = payload.get("speed_mps")
+        if isinstance(speed, (int, float)) and not isinstance(speed, bool) and math.isfinite(speed) and 0.0 <= speed <= 80.0:
+            image["_speed_mps"] = float(speed)  # the car's odometer (#75)
     else:
         image = payload.get("image") or payload.get("image_base64")
         if not isinstance(image, str) or len(image) < 64:
