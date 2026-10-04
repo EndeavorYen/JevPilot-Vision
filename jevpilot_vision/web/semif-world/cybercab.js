@@ -379,12 +379,14 @@ function wheel(name, x, z, front, m) {
   const { r, w } = CYBERCAB;
   const pivot = new T.Group();
   pivot.name = name;
+  pivot.userData.moves = true; // steers and spins (the bundle)
   pivot.position.set(x, r, z);
   pivot.userData.front = front;
   pivot.userData.radius = r;
   const out = x < 0 ? -1 : 1;
   const rotor = new T.Group();
   rotor.name = `${name}_spin`;
+  rotor.userData.moves = true; // spins (the bundle)
   const spin = new Parts();
   // A low-profile tyre: the cover hides almost all of the sidewall.
   spin.add(m.tyre, lathe([[r * 0.85, -w / 2], [r * 0.965, -w / 2], [r, -w * 0.4], [r, w * 0.4], [r * 0.965, w / 2], [r * 0.85, w / 2]], { segments: 48 }));

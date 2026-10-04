@@ -106,7 +106,7 @@ export function buildProps(spots) {
       boat.add(part);
     }
     boat.rotation.y = b.heading;
-    boat.userData = { base: SEA_LEVEL + 0.2, phase: b.phase };
+    boat.userData = { base: SEA_LEVEL + 0.2, phase: b.phase, moves: true }; // bobs (updateProps)
     boat.position.set(b.x, boat.userData.base, b.z);
     group.add(boat);
     return boat;

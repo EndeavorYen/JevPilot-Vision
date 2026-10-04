@@ -20,6 +20,7 @@ import { createPost } from "./post.js";
 import { clock, mountClock, showClock, tick } from "./clock.js";
 import { settleQuality } from "./quality.js";
 import "./perf.js";
+import { freezeStatic } from "./freeze.js";
 import { mountGfx, showGfx, gfxTick } from "./gfx-panel.js";
 
 const legacy = window.SEMIF_SCENERY || {};
@@ -135,7 +136,11 @@ function dispose(node) {
 function dress(group, model) {
   for (const child of group.children || []) dispose(child);
   group.clear();
-  for (const child of [...model.children]) group.add(child);
+  for (const child of [...model.children]) {
+    // A car's parts keep their place in it (#58); the bundle moves the group, and the wheels turn.
+    if (!model.userData.limbs) freezeStatic(child);
+    group.add(child);
+  }
   group.name = model.name;
   group.userData.semifDressed = true;
 }
@@ -171,6 +176,7 @@ function dressAgents(view) {
         }
         for (const child of player.children || []) dispose(child);
         player.clear();
+        freezeStatic(hero);
         player.add(hero);
         view.heroCar = hero;
         player.userData.eyeHeight = hero.userData.eyeHeight;
@@ -196,6 +202,7 @@ function buildCoast(view) {
   const root = new T.Group();
   root.name = "semif-world";
   sky = buildSky();
+  sky.userData.moves = true; // follows the camera
   const field = createHeightField(world);
   const grid = groundGrid(world, field);
   const ground = buildTerrain(world, field, grid);
@@ -203,6 +210,11 @@ function buildCoast(view) {
   const plants = buildVegetation(placeVegetation(world, field, grid));
   root.add(sky, ground, sea, buildRoads(world, field), buildBuildings(world, field, grid), plants, buildFestival(world, field, grid), buildProps(placeProps(world, field, grid)), buildCrowds(placeCrowds(world, field, grid)));
   view.scene.add(root);
+  // Matrices set once (#58): the coast's static world, and the scene itself (always the identity):
+  // while the scene updated itself, every node under it was recomputed on every render.
+  freezeStatic(root);
+  view.scene.matrixAutoUpdate = false;
+  view.scene.updateMatrix?.();
   widenShadows(view.sun);
   mountClock();
   showClock(true);
@@ -238,6 +250,7 @@ window.SEMIF_SCENERY = {
   },
   built(view) {
     if (!onCoast()) {
+      if (view?.scene) view.scene.matrixAutoUpdate = true; // old maps render exactly as before (#58)
       setFar(view, BUNDLE_FAR);
       showClock(false);
       showGfx(false);
