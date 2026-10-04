@@ -198,8 +198,8 @@ function addParts(group, build) {
 
 // --- heroes ----------------------------------------------------------------------------------
 
-// The procedural hero is the Cybercab, rebuilt from photos of the show car (#90). Any other name
-// (one from the old line-up, or the glb-only Model Y) builds it too.
+// The procedural hero is the Cybercab, rebuilt from photos of the show car (#90). The model name the
+// caller passes is ignored: any name (one from the old line-up, or the glb-only Model Y) builds it.
 export function buildHero() {
   const car = buildCybercab();
   car.name = "semif-hero-cybercab";

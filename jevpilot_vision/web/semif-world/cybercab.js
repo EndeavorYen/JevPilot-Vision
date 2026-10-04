@@ -73,9 +73,10 @@ const TAIL = L2 - 0.06; // the tail face, set back under the duckbill lip that r
 function halfOutline(z, bottom) {
   const hb = half(z), ys = shoulder(z);
   const yc = z < CANOPY_FROM ? hood(z) : hood(CANOPY_FROM);
-  // Over the front axle the arch's top reaches the hood valley: keep the floor under the hood so the
-  // section never turns inside out.
-  const yb = Math.min(bottom, yc - 0.03);
+  const yb = bottom;
+  // Over the front axle the arch's top reaches the hood valley: only the floor's centre drops under
+  // the hood (so the section never turns inside out); the arch's edges at the sides stay round.
+  const floor = Math.min(yb, yc - 0.03);
   // Over a wheel the side runs straight down to the arch's edge (a clean cut through a vertical
   // side); elsewhere the sill rolls under. The blend keeps the arch's ends smooth.
   const arch = Math.min(1, Math.max(0, (bottom - sill(z)) / 0.08));
@@ -85,7 +86,7 @@ function halfOutline(z, bottom) {
   const y3 = yb + 0.02 + 0.13 * roll;
   const y5 = Math.max(y3 + 0.01, ys - 0.12), y6 = Math.max(y5 + 0.008, ys - 0.035), y7 = Math.max(y6 + 0.006, ys);
   const side = [
-    [0, yb], [hb - 0.02 - 0.1 * roll, yb], [hb - 0.012 - 0.02 * roll, yb + 0.006 + 0.044 * roll], [hb - 0.004, y3],
+    [0, floor], [hb - 0.02 - 0.1 * roll, yb], [hb - 0.012 - 0.02 * roll, yb + 0.006 + 0.044 * roll], [hb - 0.004, y3],
     [hb, (y3 + y5) / 2], [hb - 0.022, y5], [hb - 0.06, y6], [hb - 0.12, y7],
   ];
   // The hood: raised fenders, a shallow valley in the middle.
@@ -179,8 +180,9 @@ function shell(m) {
   const caps = { paint: { positions: [], index: [] }, clad: { positions: [], index: [] } };
   for (const [i, sign, dz, cladBelow] of [[0, -1, -(L2 + NOSE0), 0.37], [zs.length - 1, 1, -0.03, 0.5]]) {
     const ring = rings[i], z0 = zs[i];
-    let cy = 0;
-    for (const [, y] of ring) cy += y / around;
+    // Shrink toward a point 40 % up the section: low enough that the hood valley and fender crests
+    // stay visible from it (the outline is star-shaped about it), so no cap triangle folds back.
+    const ys = ring.map(([, y]) => y), cy = Math.min(...ys) + 0.4 * (Math.max(...ys) - Math.min(...ys));
     // Rings shrinking toward the centre along a quarter circle, so the dome (or dish) is smooth.
     const rows = [1, 0.88, 0.7, 0.45].map((k) => {
       const depth = Math.sqrt(Math.max(0, 1 - k * k));

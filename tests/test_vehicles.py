@@ -177,7 +177,7 @@ def test_issue90_the_cybercab_has_big_wheels_at_the_corners_and_a_painted_roof()
         "  const den = 1 / (va + vb + vc), v = vb * den, w = vc * den; return [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w]; };"
         "const paint = body.children.filter((n) => col(n) === K.PALETTE.car.champagne), shell = paint.flatMap(pts), faces = paint.flatMap(tris);"
         "const bar = body.children.filter((n) => col(n) === K.PALETTE.car.lens).flatMap(pts);"
-        "const gap = Math.max(...bar.map((q) => Math.min(...faces.filter((f) => Math.abs(f[0][2] - q[2]) < 0.2).map((f) => { const c = near(q, f); return Math.hypot(c[0] - q[0], c[1] - q[1], c[2] - q[2]); }))));"
+        "const gap = Math.max(...bar.map((q) => Math.min(...faces.filter((f) => Math.min(f[0][2], f[1][2], f[2][2]) - 0.05 < q[2] && Math.max(f[0][2], f[1][2], f[2][2]) + 0.05 > q[2]).map((f) => { const c = near(q, f); return Math.hypot(c[0] - q[0], c[1] - q[1], c[2] - q[2]); }))));"
         "out({ minZ: b.minZ, maxZ: b.maxZ, r: wheels[0].userData.radius, fz: wheels[0].position.z, rz: wheels[1].position.z, roofGlass,"
         "  shellTail: Math.max(...shell.map((v) => v[2])), bar: bar.length, gap });"
     )
