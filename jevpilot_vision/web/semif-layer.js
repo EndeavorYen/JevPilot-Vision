@@ -1494,6 +1494,19 @@
     return frames;
   }
 
+  // The car's own yaw rate at a grab (its gyro, an onboard sensor): the tracker takes our turning
+  // out of how the others seem to slide sideways (#75). Positive turning right; null at first.
+  let gyroLast = null;
+  function gyro(tMs) {
+    const p = window.SEMIF_SIM && window.SEMIF_SIM.player;
+    if (!p || !Number.isFinite(p.heading)) return null;
+    const last = gyroLast;
+    gyroLast = { t: tMs, h: p.heading };
+    if (!last || tMs - last.t <= 0 || tMs - last.t > 1500) return null;
+    const dh = Math.atan2(Math.sin(p.heading - last.h), Math.cos(p.heading - last.h));
+    return Math.round((dh / ((tMs - last.t) / 1000)) * 1000) / 1000;
+  }
+
   async function visionTick() {
     if (!visionOn) {
       visionEl.textContent = "VISION off";
@@ -1507,6 +1520,7 @@
     try {
       // The moment of the renders; grab_ms runs to when the frames are encoded (#42 item 2).
       const tGrab = performance.now();
+      const yawRps = gyro(tGrab);
       let frames = null;
       try {
         frames = await grabSurround();
@@ -1525,7 +1539,7 @@
           method: "POST",
           signal: signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames: frames, t_ms: tGrab }),
+          body: JSON.stringify({ frames: frames, t_ms: tGrab, yaw_rps: yawRps }),
         });
         const data = await res.json();
         const rttMs = performance.now() - tVis;

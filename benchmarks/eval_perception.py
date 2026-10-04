@@ -90,7 +90,7 @@ def main(folders: list[str]) -> None:
             rows = json.load(fh)
         perception.tracker = Tracker()  # one drive, one track history
         for row in rows:
-            out = perception.front(Image.open(f"{folder}/{row['file']}"), t=row.get("t"))
+            out = perception.front(Image.open(f"{folder}/{row['file']}"), t=row.get("t"), yaw_rps=row.get("yaw_rps") or 0.0)
             if "t" in row:
                 pairs += ttc_pairs(row["near"], out["objects"])
             latency.append(out["latency_ms"])

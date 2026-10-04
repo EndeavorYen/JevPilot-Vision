@@ -145,7 +145,7 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     seen = {}
 
     class Fake:
-        def front(self, image, t=None, narrow=None):
+        def front(self, image, t=None, narrow=None, yaw_rps=0.0):
             seen["size"] = image.size
             return {"backend": "fake", "objects": [{"kind": "car", "ahead_m": 12.0}], "signal": {"state": "red", "conf": 0.8}}
 
@@ -159,7 +159,7 @@ def test_vision_evidence_carries_the_front_cameras_perception(monkeypatch):
     assert evidence["perception"]["signal"]["state"] == "red"
 
     class Broken:
-        def front(self, image, t=None, narrow=None):
+        def front(self, image, t=None, narrow=None, yaw_rps=0.0):
             raise RuntimeError("CUDA out of memory")
 
     monkeypatch.setattr(perception, "get_perception", lambda: Broken())
@@ -334,7 +334,7 @@ def test_review_h1_evidence_says_when_its_frame_was_grabbed(monkeypatch):
     times = []
 
     class Fake:
-        def front(self, image, t=None, narrow=None):
+        def front(self, image, t=None, narrow=None, yaw_rps=0.0):
             times.append(t)
             return {"backend": "fake", "objects": [], "signal": {"state": "unknown"}}
 
@@ -501,4 +501,56 @@ def test_issue75_the_ttc_evaluation_scores_flow_against_the_true_gap_over_closin
     assert lines[0].startswith("TTC box flow: given 1/2") and "missed 0/1" in lines[0]
     assert lines[1].startswith("TTC ranged: given 1/2") and "missed 1/1" in lines[1]
     assert lines[2].startswith("TTC both, worse: given 2/2") and "missed 0/1" in lines[2]
+
+
+# --- #75 review: sideways motion with the gap changing and the car turning ----------------------
+
+def _flow_track_yaw(path, yaw=0.0, cam=CAM, dt=0.25):
+    from jevpilot_vision.perception import Tracker, box_flow_fields
+
+    tracker = Tracker()
+    out = None
+    for k, (ahead, right) in enumerate(path):
+        obj = {"kind": "car", "ahead_m": ahead, "right_m": right, **box_flow_fields(_box_seen(cam, ahead, right), cam)}
+        out = tracker.update([obj], t=k * dt, yaw_rps=yaw)
+    return out[0]
+
+
+def test_issue75_review_a_car_pulling_away_in_the_next_lane_is_not_cutting_in():
+    # left lane, 3.5 m aside, the gap growing at 5 m/s: its bearing shrinks, it does not move over
+    away = _flow_track_yaw([(15.0 + 1.25 * k, -3.5) for k in range(7)])
+    assert abs(away["toward_center_mps"]) < 0.2, away
+
+
+def test_issue75_review_a_car_cutting_in_while_we_close_on_it_is_seen():
+    # we close at 5 m/s while it moves 1 m/s toward our line from the right
+    cut = _flow_track_yaw([(25.0 - 1.25 * k, 3.5 - 0.25 * k) for k in range(7)])
+    assert cut["toward_center_mps"] == pytest.approx(1.0, abs=0.2), cut
+
+
+def test_issue75_review_our_own_turning_is_not_read_as_the_others_moving():
+    import math
+
+    # a car standing 20 m ahead, 9 m to the left, while we turn left at 0.2 rad/s: in our frame it
+    # sweeps right; the gyro takes that out
+    yaw, path = -0.2, []
+    for k in range(7):
+        a = -yaw * 0.25 * k  # we have turned this far left
+        x, y = 20.0, -9.0  # where it stood, in the frame we started in
+        path.append((x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)))
+    seen = _flow_track_yaw(path, yaw=yaw)
+    assert abs(seen["toward_center_mps"]) < 0.3, seen
+    blind = _flow_track_yaw(path, yaw=0.0)
+    assert blind["toward_center_mps"] > 2.0, "without the gyro the turn reads as a cut-in"
+
+
+def test_issue75_review_a_box_cut_by_the_frames_edge_gives_no_ttc():
+    from jevpilot_vision.perception import Tracker, box_flow_fields
+
+    tracker = Tracker()
+    for k in range(8):
+        # entering from the right edge: the visible part widens though the car keeps its distance
+        box = [CAM.width - 10.0 - 4.0 * k, 90.0, float(CAM.width), 120.0]
+        out = tracker.update([{"kind": "car", "ahead_m": 15.0, "right_m": 6.0, **box_flow_fields(box, CAM)}], t=k * 0.25)
+    assert out[0]["scale_px"] is None and out[0]["ttc_s"] is None
 

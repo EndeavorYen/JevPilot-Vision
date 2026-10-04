@@ -58,8 +58,9 @@ STEP_S = 0.1
 # The new Vision's stages (#85) this server knows; a request names the stage its page is at
 # (semif-layer.js SEMIF_VISION_STAGE). Vision (map) and requests without a stage are stage 0.
 FLOW_STAGE = 1  # box flow (#75): TTC from expansion, cut-ins from bearing
-EVENT_TTC_S = 6.0  # a closing car is worth its own words in the event line below this
-CUT_IN_MPS = 0.5  # sliding toward our line at least this fast, from outside our lane
+EVENT_TTC_S = 6.0  # chosen: twice the sweep's 3 s horizon, so the arbiter hears of it first
+CUT_IN_MPS = 0.5  # chosen: a lane change crosses ~3.5 m in 2-7 s, i.e. 0.5-1.75 m/s sideways
+FLOW_DISAGREE_MPS, FLOW_DISAGREE_SHARE = 2.0, 0.5  # chosen: logged only, nothing acts on it
 # For the #75 ablation only: which closing speed the new Vision's sweep reads. "both" (the
 # default) takes the worse of ranging and box flow; "range" and "flow" use one of them.
 CLOSING_SOURCES = ("both", "range", "flow")
@@ -145,13 +146,13 @@ def sweep_collision(
     target, steer = _num(vec[0] if len(vec) > 0 else None), _num(vec[1] if len(vec) > 1 else None)
     if target is None or steer is None:
         return False
+    source = closing_source() if use_flow else "range"
     points = [p for p in (path or []) if isinstance(p, (list, tuple)) and len(p) >= 4 and all(_num(v) is not None for v in p[:4])]
     track = [(float(p[0]), float(p[1]), float(p[2]), float(p[3])) for p in points] or list(_model_path(target, steer, speed))
     for t, ahead, right, heading in track:
         c, s = math.cos(heading), math.sin(heading)
         for obj in objects:
             half = OBJECT_HALF.get(obj.get("kind"), OBJECT_HALF["car"])
-            source = closing_source() if use_flow else "range"
             closing = obj.get("closing_mps") if source != "flow" else None
             if obj.get("kind") == "pedestrian" or closing is None:
                 closing = speed  # standing still
@@ -160,6 +161,8 @@ def sweep_collision(
             flow = _flow_closing(obj) if source != "range" else None
             if flow is not None:
                 closing = max(closing, flow)
+                if abs(obj["right_m"]) <= LANE_HALF_M and obj.get("kind") != "pedestrian":
+                    closing = min(closing, speed)  # box jitter, not a car reversing at us
             moving = speed - closing
             oa = obj["ahead_m"] + CAMERA_AHEAD_M - closing * age_s + moving * t
             dx, dy = oa - ahead, obj["right_m"] - right
@@ -207,6 +210,16 @@ def perception_event(signal: str, objects: List[Dict[str, Any]], ok: bool = True
         clauses.append("AMBER signal ahead")
     elif signal == "green":
         clauses.append("traffic light is green")
+    if not flow:  # Vision (map): its words exactly as before #75
+        for kind, name in _EVENT_NAMES:
+            ahead = [o["ahead_m"] for o in objects if o.get("kind") == kind and o["ahead_m"] > 0]
+            if ahead:
+                clauses.append(f"{name} at {min(ahead):.0f} m")
+        if not ok:
+            clauses.append("camera evidence unavailable")
+        return "; ".join(clauses) if clauses else "road clear ahead, maintain lane"
+    if not ok:
+        clauses.append("camera evidence unavailable")  # before any object: never the clause dropped
     ranked = []
     for kind, name in _EVENT_NAMES:
         ahead = [o for o in objects if o.get("kind") == kind and o["ahead_m"] > 0]
@@ -215,16 +228,15 @@ def perception_event(signal: str, objects: List[Dict[str, Any]], ok: bool = True
         near = min(ahead, key=lambda o: o["ahead_m"])
         text, danger = f"{name} at {near['ahead_m']:.0f} m", 10.0 + near["ahead_m"]
         ttc, toward = _num(near.get("ttc_s")), _num(near.get("toward_center_mps"))
-        if flow and ttc is not None and ttc <= EVENT_TTC_S:
+        if ttc is not None and ttc <= EVENT_TTC_S:
             text, danger = f"{text}, closing (TTC {ttc:.1f} s)", ttc
-        elif flow and toward is not None and toward >= CUT_IN_MPS and abs(near["right_m"]) > LANE_HALF_M:
+        elif toward is not None and toward >= CUT_IN_MPS and abs(near["right_m"]) > LANE_HALF_M:
             side = "right" if near["right_m"] > 0 else "left"
             text, danger = f"{name} cutting in from {side}", EVENT_TTC_S
         ranked.append((danger, text))
+    fixed = len(clauses)
     clauses += [text for _danger, text in sorted(ranked)]
-    if not ok:
-        clauses.append("camera evidence unavailable")
-    while len(clauses) > 1 and len("; ".join(clauses)) > 96:
+    while len(clauses) > max(1, fixed) and len("; ".join(clauses)) > 96:
         clauses.pop()  # the least dangerous object goes first; the light is never dropped
     return "; ".join(clauses) if clauses else "road clear ahead, maintain lane"
 
@@ -266,7 +278,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     if flow:
         # Ranging and box flow far apart: one of them is wrong; the sweep takes the worse (#75).
         apart = [o for o in objects if o.get("closing_mps") is not None and _flow_closing(o) is not None
-                 and abs(o["closing_mps"] - _flow_closing(o)) > max(2.0, 0.5 * max(abs(o["closing_mps"]), _flow_closing(o)))]
+                 and abs(o["closing_mps"] - _flow_closing(o)) > max(FLOW_DISAGREE_MPS, FLOW_DISAGREE_SHARE * max(abs(o["closing_mps"]), _flow_closing(o)))]
         state["flow_disagreements"] = len(apart)
         if apart:
             logger.info("vision: ranging and box flow disagree on %d object(s): %s", len(apart),

@@ -335,3 +335,46 @@ def test_issue75_the_event_says_how_a_car_moves_within_the_prompt_cap():
     assert "cutting in from right" in cut, cut
     assert "TTC" not in vision_mode.perception_event("red", objects), "Vision (map) keeps its words"
 
+
+# --- #75 review --------------------------------------------------------------------------------
+
+def test_issue75_review_vision_map_keeps_its_event_words_exactly():
+    objects = [
+        {"kind": "pedestrian", "ahead_m": 30.0, "right_m": 0.0, "ttc_s": 1.0},
+        {"kind": "car", "ahead_m": 10.0, "right_m": 0.0, "ttc_s": 2.0},
+        {"kind": "motorcycle", "ahead_m": 44.4, "right_m": 3.0, "toward_center_mps": 2.0},
+    ]
+    # kind order (pedestrian, vehicle, motorcycle), never ranked, never cut here
+    assert vision_mode.perception_event("red", objects) == (
+        "RED signal ahead, mandatory stop; pedestrian at 30 m; vehicle at 10 m; motorcycle at 44 m")
+    assert vision_mode.perception_event("green", objects, ok=False).endswith("camera evidence unavailable")
+
+
+def test_issue75_review_box_jitter_on_a_parked_car_is_not_a_car_reversing_at_us():
+    parked = {"kind": "car", "ahead_m": 30.0, "right_m": 0.0, "closing_mps": 8.0, "ttc_s": 1.0}  # jitter: 30 m/s
+    assert vision_mode.sweep_collision([8.0, 0.0, 0, 0, False, False], [parked], speed=8.0, use_flow=True) is False
+
+
+def test_issue75_review_the_server_takes_the_pages_gyro_with_the_frames(monkeypatch):
+    import asyncio
+
+    from jevpilot_vision import http
+
+    seen = {}
+    monkeypatch.setattr(http._vision_slot, "submit", lambda image: (seen.setdefault("image", image), None, None) and (0, None, 0))
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 36), (90, 90, 90)).save(buf, format="JPEG")
+    frame = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    for yaw, kept in ((0.15, 0.15), (float("nan"), None), (9.0, None), (True, None)):
+        seen.clear()
+        try:
+            asyncio.run(http.vision_endpoint({"frames": {"front": frame}, "t_ms": 5.0, "yaw_rps": yaw}))
+        except Exception:
+            pass
+        assert seen["image"].get("_yaw_rps") == kept, (yaw, seen["image"])
+

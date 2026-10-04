@@ -1138,7 +1138,7 @@ def test_each_display_frame_posts_four_surround_jpegs():
     # four cameras per capture, plus the 15 Hz PIP repaint (31 in 2 s at most; #42 item 3)
     assert 120 * 4 + 25 <= pumped["renders"] <= 120 * 4 + 31
     body = pumped["bodies"][0]
-    assert body["keys"] == ["frames", "t_ms"], "frames carry the moment they were grabbed (#18)"
+    assert body["keys"] == ["frames", "t_ms", "yaw_rps"], "frames carry the moment they were grabbed (#18) and the car's yaw rate then (#75)"
     assert body["frames"] == ["front", "right", "rear", "left"]
     # the front is encoded from the captured pixels (a worker in Chrome; a canvas here), not the PIP (#42)
     assert body["front"] == "data:image/jpeg;base64,AAAA"

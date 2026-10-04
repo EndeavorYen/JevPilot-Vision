@@ -9,7 +9,7 @@ the render: the frame's encode time).
         [--seconds 90] [--base http://127.0.0.1:8768]
 
 Writes <out_dir>/<seed>-<route>/fNNNN.jpg and truth.json:
-[{"file", "t", "grab_ms", "ego_speed", "near": [{"type", "id", "ahead", "right", "closing", "depth"}]}]
+[{"file", "t", "grab_ms", "ego_speed", "yaw_rps", "near": [{"type", "id", "ahead", "right", "closing", "depth"}]}]
 in the ego frame (metres; closing in m/s along our heading, positive when the gap shrinks).
 Tuning seeds only (benchmarks/closed_loop_seeds.json): this is for looking into perception.
 """
@@ -48,7 +48,7 @@ _HOOK = r"""
             ahead: dx * f[0] + dz * f[1], right: dx * r[0] + dz * r[1],
             closing: -((vo[0] - ve[0]) * f[0] + (vo[1] - ve[1]) * f[1]), depth: o.depth || 0 });
         }
-        window.__cap.push({ t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed,
+        window.__cap.push({ t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
           front: value.frames.front, near });
       }
     } catch (_) {}
