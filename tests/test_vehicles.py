@@ -140,9 +140,33 @@ def test_the_cybercab_has_no_rear_window_full_width_light_bars_and_champagne_pai
         "const glass = pieces.filter((n) => n.material.name === 'Glass').map(span);"
         "const bars = (hex) => pieces.filter((n) => colour(n) === hex).map(span).filter((s) => s.w >= 1.3);"
         "out({ glassRear: Math.max(...glass.map((g) => g.z1)), front: bars(K.PALETTE.car.lens).map((s) => s.z0), rear: bars(K.PALETTE.car.taillight).map((s) => s.z1),"
-        "  paint: pieces.filter((n) => n.material.clearcoat === 1 && n.material.name !== 'Glass').map(colour), champagne: K.PALETTE.paint[2] });"
+        "  paint: [...new Set(pieces.filter((n) => n.material.metalness >= 0.5 && n.material.roughness >= 0.35).map(colour))],"
+        "  satin: pieces.filter((n) => colour(n) === K.PALETTE.car.champagne).every((n) => n.material.roughness >= 0.35), champagne: K.PALETTE.car.champagne });"
     )
     assert got["glassRear"] < 1.0, "no rear window: the fastback behind the roof is painted"
     assert got["front"] and min(got["front"]) < -2.3, "a full-width light bar across the nose"
     assert got["rear"] and max(got["rear"]) > 2.3, "and across the tail"
-    assert set(got["paint"]) == {got["champagne"]}
+    assert set(got["paint"]) == {got["champagne"]}, "one paint: the champagne"
+    assert got["satin"], "#90: a satin finish, not gloss"
+
+
+# ---- #90: the Cybercab rebuilt from photos -----------------------------------------------------
+
+def test_issue90_the_cybercab_has_big_wheels_at_the_corners_and_a_painted_roof():
+    """From the show-car photos: wheels about a sixth of the length pushed to the corners, glass only
+    in the windscreen and side windows (the roof is champagne), a lip overhanging the tail face."""
+    got = _render(
+        _BOX
+        + "const car = V.buildHero('cybercab'); const b = box(car);"
+        "const wheels = ['wheel_fl', 'wheel_rl'].map((n) => all(car).find((x) => x.name === n));"
+        "const glass = all(car).filter((n) => n.material && n.material.name === 'Glass');"
+        "let roofGlass = 0; for (const g of glass) { const p = g.geometry.attributes.position.array; const idx = g.geometry.index; const ids = Array.from(idx.array || idx);"
+        "  for (let i = 0; i < ids.length; i += 3) { const c = [0, 1, 2].map((k) => [0, 1, 2].reduce((s, j) => s + p[3 * ids[i + j] + k], 0) / 3);"
+        "    if (Math.abs(c[0]) < 0.35 && c[2] > -0.4 && c[1] > 1.3) roofGlass++; } }"
+        "out({ minZ: b.minZ, maxZ: b.maxZ, r: wheels[0].userData.radius, fz: wheels[0].position.z, rz: wheels[1].position.z, roofGlass,"
+        "  model: car.userData.model, cover: all(car).some((n) => n.name === 'wheel_fl_spin') });"
+    )
+    assert got["r"] >= 0.4, "big wheels"
+    assert got["fz"] - got["minZ"] <= 0.75 and got["maxZ"] - got["rz"] <= 0.8, "short overhangs: the wheels sit at the corners"
+    assert got["roofGlass"] == 0, "the roof is painted, not glass"
+

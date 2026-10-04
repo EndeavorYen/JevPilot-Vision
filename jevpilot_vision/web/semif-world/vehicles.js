@@ -10,6 +10,7 @@
 // - every call builds new geometry: the bundle's crash code dents it in place
 import { PALETTE, T, material, physical } from "./kit.js";
 import { curve, loft, lathe, box, rotateX, move, Parts } from "./shapes.js";
+import { buildCybercab, CYBERCAB } from "./cybercab.js";
 
 // The hero is a Tesla (#47): a Cybercab-style car built here, and the bundle's own Model Y glb
 // (coast-hero hands its loader to index.js). No Tesla emblems or lettering.
@@ -241,6 +242,15 @@ const HERO = {
 
 export function buildHero(model = "cybercab") {
   if (!HERO[model]) model = "cybercab"; // a name from the old line-up, or the glb-only Model Y
+  if (model === "cybercab") {
+    // Rebuilt from photos of the show car (#90): its own shell, wheels and lamps.
+    const car = buildCybercab();
+    car.name = "semif-hero-cybercab";
+    car.userData.eyeHeight = CYBERCAB.eye[0];
+    car.userData.eyeForward = CYBERCAB.eye[1];
+    car.userData.model = model;
+    return car;
+  }
   const def = HERO[model];
   const k = carBody(def.spec, def.paint);
   addParts(k.group, (p) => def.details(p, k));
