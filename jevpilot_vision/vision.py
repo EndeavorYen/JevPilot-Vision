@@ -25,7 +25,12 @@ VISION_FIELDS = (
     "vehicle",
     "construction",
     "prefix_tokens",
+    "scoring_error",
 )
+
+# Event text when SigLIP cannot score (#70): it must not read as a clear road.
+CLASSIFIER_DOWN_EVENT = "camera classifier unavailable; signal and hazards unknown"
+STUB_ERROR = "vision encoder did not load; no scores"
 
 SURROUND_ORDER = ("front", "right", "rear", "left")
 HAZARD_FIELDS = ("pedestrian", "vehicle", "construction")
@@ -338,6 +343,8 @@ class VisionEncoder:
         self.last_blobs = None
         self._null_patches = None
         self._scoring_failed = False
+        self.text_error: Optional[str] = None  # set at load: no prompt can ever be scored
+        self.scoring_error: Optional[str] = None  # what the last scoring call reports
         self._load()
 
     def _load(self) -> None:
@@ -354,10 +361,13 @@ class VisionEncoder:
                     if "siglip" in self.model_id.lower():
                         raise
                     self._load_clip()
+            if self._tokenizer is not None:  # the CLIP fallback brings its own text side
+                self.text_error = self.scoring_error = None
             logger.info("vision: %s on %s", self.model_id, self.device)
         except Exception:
             logger.warning("vision: %s did not load on %s; scores are synthetic", self.model_id, self.device, exc_info=True)
             self.backend = "stub"
+            self.text_error = self.scoring_error = None  # the stub path reports STUB_ERROR itself
             self._model = None
             self._processor = None
             self._tokenizer = None
@@ -375,8 +385,13 @@ class VisionEncoder:
             from transformers import AutoProcessor
 
             self._processor = AutoProcessor.from_pretrained(self.model_id)
-        except Exception:
+        except Exception as exc:
             self._processor = None
+            # The patches still work, but no text prompt can be scored (#70).
+            self.text_error = self.scoring_error = (
+                f"SigLIP text side did not load ({type(exc).__name__}: {' '.join(str(exc).split())[:120]}); likely missing sentencepiece"
+            )
+            logger.error("vision: %s; signal and hazard scores are unavailable", self.text_error, exc_info=True)
         self._model = AutoModel.from_pretrained(self.model_id)
         self._model.to(self.device)
         self._model.eval()
@@ -451,6 +466,10 @@ class VisionEncoder:
         """One SigLIP forward over every image. One prompt-score dict per image."""
         torch = self._torch
         texts = [text for _key, text in _PROMPTS]
+        text_error = getattr(self, "text_error", None)
+        if text_error:
+            self.scoring_error = text_error
+            return [{key: 0.0 for key, _prompt in _PROMPTS} for _image in images]
         try:
             if self._processor is not None:
                 inputs = self._processor(text=texts, images=images, padding=True, return_tensors="pt")
@@ -462,14 +481,16 @@ class VisionEncoder:
             with torch.no_grad():
                 out = self._model(**inputs)
                 rows = out.logits_per_image.softmax(dim=-1).tolist()
+            self.scoring_error = None  # a passing failure (e.g. one CUDA OOM) does not stick
+            self._scoring_failed = False
             return [{key: float(prob) for (key, _prompt), prob in zip(_PROMPTS, row)} for row in rows]
-        except Exception:
-            log = logger.debug if getattr(self, "_scoring_failed", False) else logger.warning
-            log("SigLIP scoring failed for %d image(s); reporting a clear road", len(images), exc_info=True)
+        except Exception as exc:
+            log = logger.debug if getattr(self, "_scoring_failed", False) else logger.error
+            log("SigLIP scoring failed for %d image(s); scores are unavailable", len(images), exc_info=True)
             self._scoring_failed = True
-            fallback = {key: 0.0 for key, _prompt in _PROMPTS}
-            fallback["clear"] = 1.0
-            return [dict(fallback) for _image in images]
+            self.scoring_error = f"SigLIP scoring failed ({type(exc).__name__}: {' '.join(str(exc).split())[:120]})"
+            # All zeros, not "clear": a failed classifier has seen nothing either way (#70).
+            return [{key: 0.0 for key, _prompt in _PROMPTS} for _image in images]
 
     def _pack(self, scores: Dict[str, float], image: Any, n_prefix: int) -> Dict[str, Any]:
         signal = "unknown"
@@ -489,8 +510,13 @@ class VisionEncoder:
         }
         blobs = blobs_from_frame(image)
         motion = frame_motion(self.last_blobs, blobs)
+        scoring_error = getattr(self, "scoring_error", None)
+        if scoring_error:
+            packed["scoring_error"] = scoring_error
         if motion:
             packed["event"] = event_from_motion(motion, packed["signal"])
+        elif scoring_error:
+            packed["event"] = CLASSIFIER_DOWN_EVENT
         else:
             packed["event"] = camera_event(packed, self.last_scores)
         self.last_blobs = blobs
@@ -511,6 +537,7 @@ class VisionEncoder:
         if self._model is None:
             ev = synthetic_vision()
             ev["prefix_tokens"] = 0
+            ev["event"], ev["scoring_error"] = CLASSIFIER_DOWN_EVENT, STUB_ERROR
             return ev
         return self._pack(self._score_batch([image])[0], image, n_prefix)
 
@@ -527,6 +554,7 @@ class VisionEncoder:
         if self._model is None:
             ev = synthetic_vision()
             ev["prefix_tokens"] = 0
+            ev["event"], ev["scoring_error"] = CLASSIFIER_DOWN_EVENT, STUB_ERROR
             ev["cameras"] = {name: {key: 0.0 for key in ("red", "green") + HAZARD_FIELDS} for name in names}
             return ev
         rows = self._score_batch([frames[name] for name in names])

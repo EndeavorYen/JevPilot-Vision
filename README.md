@@ -33,7 +33,7 @@ python demo/server.py --mock --port 8000
 # 瀏覽器開 http://localhost:8000/jevpilot/ ，按 J 或「Jev」按鈕開自駕
 ```
 
-- **Vision 模式**需要感知模型，也需要 CUDA：`pip install -e ".[neural]"`（torch、transformers；第一次執行會下載 RT-DETR 與 SigLIP 權重）。沒有安裝、或沒有 CUDA 時，偵測器不啟動，感知回報 `backend: none`，Vision 模式的車會減速停下，不會假裝看得到。要在 CPU 上跑，設 `SEMIF_PERCEPTION_DEVICE=cpu`（很慢）。
+- **Vision 模式**需要感知模型，也需要 CUDA：`pip install -e ".[neural]"`（torch、transformers、sentencepiece；第一次執行會下載 RT-DETR 與 SigLIP 權重）。沒有安裝、或沒有 CUDA 時，偵測器不啟動，感知回報 `backend: none`，Vision 模式的車會減速停下，不會假裝看得到。要在 CPU 上跑，設 `SEMIF_PERCEPTION_DEVICE=cpu`（很慢）。SigLIP 的文字分類少了 sentencepiece 就無法運作：載入時會記錄錯誤，`/v1/vision` 回應帶 `scoring_error`，事件文字寫明分類器無法使用，不會回報路面淨空（#70）。
 - **網路與上傳**：伺服器預設只在本機監聽（`127.0.0.1`），也不開 CORS；要讓區網的其他裝置連線，加 `--host 0.0.0.0`；要讓其他網頁呼叫，加 `--cors-origin http://...`（可重複，或設環境變數 `SEMIF_CORS_ORIGINS`，以逗號分隔）。`/v1/vision` 拒絕超過 1.5 MB 字元（413）或超過 1920×1080 像素（422）的影像。
 - **對接 SemArbiter**：先在另一個埠口啟動 SemArbiter，再用 `python demo/server.py --port 8000 --arbiter-url http://localhost:8001`（或設環境變數 `SEMARBITER_URL`）。
 - 常用網址參數：`?mode=vision|privileged|heuristic`、`?start=festival|harbour|coast|pass|highway`、`?time=17:45`、`?gfx=medium|high`、`?traffic=low|med|high&people=low|med|high`、`?minimal=1`。
