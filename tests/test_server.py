@@ -1178,6 +1178,15 @@ def test_issue62_no_cors_by_default_and_only_the_named_origin_when_asked():
     client = TestClient(other)
     assert client.get("/ping", headers={"Origin": "http://a.test"}).headers.get("access-control-allow-origin") == "http://a.test"
     assert "access-control-allow-origin" not in client.get("/ping", headers={"Origin": "http://evil.example"}).headers
+    # review: the env list and the CLI list end up in one layer, so a preflight from either is allowed
+    merged = FastAPI()
+    merged.post("/ping")(lambda: {"ok": True})
+    server_module.configure_cors(merged, ["http://b.test"])  # SEMIF_CORS_ORIGINS at import
+    server_module.configure_cors(merged, ["http://a.test", "http://b.test"])  # main(), before startup
+    assert sum(m.cls.__name__ == "CORSMiddleware" for m in merged.user_middleware) == 1
+    preflight = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"}
+    for origin in ("http://a.test", "http://b.test"):
+        assert TestClient(merged).options("/ping", headers={"Origin": origin, **preflight}).status_code == 200
 
 
 def _png_data_url(width: int, height: int) -> str:
@@ -1205,5 +1214,11 @@ def test_issue62_oversized_vision_uploads_are_refused_before_decoding(monkeypatc
     assert len(big) < http.MAX_IMAGE_CHARS, "a flat image compresses small: the pixel check must catch it"
     assert client.post("/v1/vision", json={"image": big}).status_code == 422
     assert not decoded, "nothing oversized reached the encoder"
+    # review: a header past PIL's own bomb limit is refused here too, not left for the decoder
+    from PIL import Image
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    assert client.post("/v1/vision", json={"image": _png_data_url(100, 100)}).status_code == 422
+    monkeypatch.undo()
+    monkeypatch.setattr(http, "_infer_latest_jpeg", lambda image: decoded.append(image) or {"signal": "unknown", "event": "", "backend": "stub"})
     ok = client.post("/v1/vision", json={"image": _png_data_url(640, 360)})
     assert ok.status_code == 200

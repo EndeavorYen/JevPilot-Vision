@@ -149,6 +149,8 @@ def _check_upload(images: List[str]) -> None:
         try:
             with Image.open(io.BytesIO(base64.b64decode(image.split(",", 1)[-1]))) as im:
                 width, height = im.size  # the header only; nothing is decoded yet
+        except Image.DecompressionBombError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception:
             continue  # unreadable images take the encoder's own error path
         if width * height > MAX_IMAGE_PIXELS:

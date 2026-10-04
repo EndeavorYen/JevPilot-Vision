@@ -1046,7 +1046,11 @@ def cors_origins(cli: List[str], env: str) -> List[str]:
 
 
 def configure_cors(target: FastAPI, origins: List[str]) -> None:
-    """No CORS unless asked (#62): the page is served by this same server, so it needs none."""
+    """No CORS unless asked (#62): the page is served by this same server, so it needs none.
+
+    Replaces any earlier CORS layer: two stacked layers would each refuse the other's origins.
+    """
+    target.user_middleware = [m for m in target.user_middleware if m.cls is not CORSMiddleware]
     if origins:
         target.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
 
@@ -1216,7 +1220,7 @@ def main():
     global engine
     args = build_parser().parse_args()
     if args.cors_origin:
-        configure_cors(app, cors_origins(args.cors_origin, ""))
+        configure_cors(app, cors_origins(args.cors_origin, os.environ.get("SEMIF_CORS_ORIGINS", "")))
 
     engine = DecisionEngine(
         model_name=args.model,
