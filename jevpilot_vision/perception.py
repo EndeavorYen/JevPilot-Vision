@@ -373,6 +373,9 @@ LANE_MIN_POINTS = 8  # rows a line needs to count
 LANE_WIDTH_M = (2.5, 8.0)  # a lane narrower or wider than this is two lines that are not one lane
 LANE_MAX_SLOPE = 0.3  # a lane line runs within about 17 degrees of the car (crosswalk stripes do not)
 LANE_KERB_M = 0.8  # a kerb: the road turns bright (pavement) and stays bright at least this far
+LANE_PARALLEL = 0.15  # the two lines of a lane run within this slope of each other
+LANE_INNER = 0.7  # a line between the car and a pair's line, this well supported, means the pair is too wide
+LANE_CLUTTER = 0.25  # the lane's two lines hold at least this share of all marking points, or conf falls
 
 
 def _birdseye(image: np.ndarray, camera: "CameraModel") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -421,9 +424,10 @@ def _kerb_points(luma: np.ndarray, ahead: np.ndarray, right: np.ndarray) -> List
     centre = int(np.argmin(np.abs(right)))
     pts = []
     for r, row in enumerate(luma):
-        road = np.nanmedian(row[max(0, centre - 10) : centre + 11])
-        if not np.isfinite(road):
+        near = row[max(0, centre - 10) : centre + 11]
+        if not np.isfinite(near).any():
             continue
+        road = np.nanmedian(near)
         bright = (row - road) > LANE_MARK_MIN
         for step in (1, -1):
             c = centre
@@ -441,7 +445,7 @@ def _fit_lines(pts: List[tuple[float, float]]) -> List[Dict[str, float]]:
     lines = []
     remaining = sorted(pts, key=lambda p: p[1])
     while remaining:
-        # seed with the nearest-ahead points and grow along a straight guess
+        # seed with the leftmost remaining point and grow along a straight guess
         seed = remaining[0][1]
         group = [p for p in remaining if abs(p[1] - seed) <= 0.6 + 0.04 * p[0]]
         first = set(group) | {remaining[0]}  # always taken out: every pass leaves fewer points
@@ -471,15 +475,21 @@ def lane_from_frame(image: np.ndarray, camera: "CameraModel", prior_width: Optio
     of the car, a lane's width apart, best supported, and, with `prior_width` (the lane's width a
     moment ago, LaneTracker), nearest that width. No such pair: conf 0."""
     luma, ahead, right = _birdseye(image, camera)
-    lines = _fit_lines(_mark_points(luma, ahead, right)) + _fit_lines(_kerb_points(luma, ahead, right))
+    marks, kerbs = _mark_points(luma, ahead, right), _kerb_points(luma, ahead, right)
+    lines = _fit_lines(marks) + _fit_lines(kerbs)
     out: Dict[str, Any] = {"conf": 0.0, "lines": len(lines)}
     best = None
     for left in (ln for ln in lines if ln["a"] < -0.5):
         for right_line in (ln for ln in lines if ln["a"] > 0.5):
             width = right_line["a"] - left["a"]
-            if not (LANE_WIDTH_M[0] <= width <= LANE_WIDTH_M[1]):
+            if not (LANE_WIDTH_M[0] <= width <= LANE_WIDTH_M[1]) or abs(left["b"] - right_line["b"]) > LANE_PARALLEL:
                 continue
-            score = min(left["points"], right_line["points"]) - (4.0 * abs(width - prior_width) if prior_width else 0.0)
+            weaker = min(left["points"], right_line["points"])
+            # the lane's own lines are the innermost: a well-supported line between the car and
+            # either of these makes this pair the next lane's
+            inner = sum(ln["points"] for ln in lines
+                        if (left["a"] < ln["a"] < -0.5 or 0.5 < ln["a"] < right_line["a"]) and ln["points"] >= LANE_INNER * weaker)
+            score = weaker - inner - (4.0 * abs(width - prior_width) if prior_width else 0.0)
             if best is None or score > best[0]:
                 best = (score, left, right_line, width)
     if best is None:
@@ -487,7 +497,8 @@ def lane_from_frame(image: np.ndarray, camera: "CameraModel", prior_width: Optio
     _, left, right_line, width = best
     support = min(left["points"], right_line["points"]) / len(ahead)
     spread = max(left["resid"], right_line["resid"])
-    conf = max(0.0, min(1.0, support * 1.5)) * max(0.0, 1.0 - spread / 0.35)
+    share = (left["points"] + right_line["points"]) / max(1, len(marks) + len(kerbs))  # low in clutter or noise
+    conf = max(0.0, min(1.0, support * 1.5)) * max(0.0, 1.0 - spread / 0.35) * min(1.0, share / LANE_CLUTTER)
     return {
         **out,
         "offset_m": round(-(left["a"] + right_line["a"]) / 2.0, 3),

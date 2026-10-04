@@ -2,9 +2,10 @@
 
 Folders come from `benchmarks/capture_perception.py` (any mode): each frame carries the planner's
 own lane offset and half width, from the map and the true pose. Ground truth is used here only, to
-score. Reports, per folder and in all, how often the camera gave a lane (conf >= --min-conf), the
-offset and width errors of those (median, P90), and how often the offset was off by more than 0.5 m,
-plus the time per frame.
+score. Every frame goes through one LaneTracker, as on the server; frames with a truth are scored.
+Reports, per folder and in all, how often the camera read a lane in that frame (conf >= --min-conf,
+not a held one), the offset and width errors of those (median, P90), how often the offset was off
+by more than 0.5 m, how many more frames only held an earlier lane, and the time per frame.
 
     python benchmarks/eval_lanes.py <folder> [<folder> ...] [--min-conf 0.3] [--overlay out.jpg]
 """
@@ -32,10 +33,11 @@ def pick(xs: list[float], q: float) -> float:
 
 def summary(name: str, rows: list[dict]) -> str:
     seen = [r for r in rows if r["got"]]
+    held = sum(1 for r in rows if r.get("held"))
     off = [abs(r["offset"]) for r in seen]
     wid = [abs(r["width"]) for r in seen]
     far = sum(1 for e in off if e > 0.5)
-    return (f"{name}: lane given {len(seen)}/{len(rows)}; offset |error| median {pick(off, 0.5):.2f} m P90 {pick(off, 0.9):.2f} m, "
+    return (f"{name}: lane read {len(seen)}/{len(rows)} (+{held} held); offset |error| median {pick(off, 0.5):.2f} m P90 {pick(off, 0.9):.2f} m, "
             f">0.5 m {far}/{len(seen)}; width |error| median {pick(wid, 0.5):.2f} m P90 {pick(wid, 0.9):.2f} m")
 
 
@@ -65,16 +67,17 @@ def main() -> None:
         rows = []
         lanes = LaneTracker()  # one drive, as the server sees it
         for row in json.loads(Path(folder, "truth.json").read_text(encoding="utf-8")):
-            truth = row.get("lane")
-            if not truth or truth.get("half_width_m") is None:
-                continue
             image = np.asarray(Image.open(Path(folder, row["file"])).convert("RGB"))
             camera = CameraModel(width=image.shape[1], height=image.shape[0])
             t0 = time.perf_counter()
             lane = lanes.update(image, camera, row.get("t", 0.0))
             ms.append((time.perf_counter() - t0) * 1000.0)
-            got = lane["conf"] >= args.min_conf
-            rows.append({"got": got, "offset": (lane.get("offset_m", 0) - truth["offset_m"]) if got else None,
+            truth = row.get("lane")
+            if not truth or truth.get("half_width_m") is None:
+                continue
+            fresh = lane.get("held_s", 0.0) == 0.0
+            got = lane["conf"] >= args.min_conf and fresh
+            rows.append({"held": lane["conf"] > 0 and not fresh, "got": got, "offset": (lane.get("offset_m", 0) - truth["offset_m"]) if got else None,
                          "width": (lane.get("width_m", 0) - 2 * truth["half_width_m"]) if got else None})
             if got and len(shown) < 6 and len(rows) % 40 == 0:
                 shown.append(overlay(Path(folder, row["file"]), lane, camera))

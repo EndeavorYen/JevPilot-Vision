@@ -745,3 +745,22 @@ def test_issue80_the_lane_rides_with_the_front_cameras_perception():
     out = on.front(Image.fromarray(img), t=1.0)
     assert out["lane"]["conf"] > 0.5 and out["lane"]["offset_m"] == pytest.approx(-0.6, abs=0.15)
 
+
+def test_issue80_review_the_lane_is_the_innermost_pair_not_the_next_lanes_lines():
+    from jevpilot_vision.perception import lane_from_frame
+
+    # our lane: dashed -1.75 m, solid +1.75 m; the next lane's far line solid at -5.25 m
+    img, cam = _road_frame(0.0, width=3.5)
+    far, _ = _road_frame(1.75 + 1.75, width=3.5, dashed_left=False)  # draws a solid line at -5.25 m
+    img = np.maximum(img, np.where(far.sum(axis=2, keepdims=True) > 600, far, 0)).astype(np.uint8)
+    lane = lane_from_frame(img, cam)
+    assert lane["width_m"] == pytest.approx(3.5, abs=0.2) and lane["offset_m"] == pytest.approx(0.0, abs=0.15), lane
+
+
+def test_issue80_review_noise_is_not_a_lane():
+    from jevpilot_vision.perception import lane_from_frame
+
+    rnd = np.random.default_rng(5)
+    noise = rnd.integers(0, 256, size=(360, 640, 3), dtype=np.uint8)
+    assert lane_from_frame(noise, CameraModel(width=640, height=360))["conf"] < 0.3
+
