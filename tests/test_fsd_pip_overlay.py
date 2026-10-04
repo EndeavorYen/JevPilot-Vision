@@ -437,7 +437,7 @@ if (spec.cmd === "cstats") {
   const DRIVE_MODES_T = ["vision", "vision-map", "privileged", "heuristic"];
   const shape = () => {
     const body = window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {} } });
-    return { drive_mode: body.drive_mode || null, mode: body.mode };
+    return { drive_mode: body.drive_mode || null, mode: body.mode, vision_stage: body.vision_stage ?? null };
   };
   const pick = (m) => document.getElementById("sol-mode-" + m).click();
   const strategy = document.getElementById("strategy-select");
@@ -1338,7 +1338,7 @@ def test_issue78_review_vision_map_names_itself_and_survives_a_trip_through_heur
     trip = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["vision-map round trip"]
     assert trip["mapSaid"] == "Vision (map) mode, detector failed, holding to a crawl"
     assert trip["viaHeuristic"] == "heuristic"
-    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 0)
+    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 1)
 
 
 def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
@@ -1346,14 +1346,16 @@ def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
     The address and the switch name it; it drives "vision", so every planner patch treats it alike."""
     load = _run({"cmd": "mode", "mode": "vision-map"})["steps"][0]
     assert (load["id"], load["mode"]) == ("vision-map", "vision")
-    assert load["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert load["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}, "Vision (map) names no stage"
     stored = _run({"cmd": "mode", "storage": {"semif.driveMode": "vision-map"}})["steps"][0]
     assert (stored["id"], stored["mode"]) == ("vision-map", "vision")
     steps = {s["at"]: s for s in _run({"cmd": "mode", "mode": "privileged"})["steps"]}
     click = steps["click vision-map"]
     assert (click["id"], click["mode"], click["checked"]) == ("vision-map", "vision", "true")
-    assert click["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert click["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["id"] == "vision"
+    # #75: the new Vision names its stage, so the server applies that stage's rules
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 1}
 
 
 def test_switching_mode_from_the_indicator_changes_the_decision_request():
@@ -1362,15 +1364,15 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     dropdown follows, the choice is remembered and written into the address."""
     out = _run({"cmd": "mode", "mode": "privileged"})
     steps = {s["at"]: s for s in out["steps"]}
-    assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat"}
-    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
-    assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat"}
+    assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 1}
+    assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["checked"] == "true"
     # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
     # bundle then decides locally and asks no server); nothing in the request is rewritten.
     assert steps["click heuristic"]["select"] == "heuristic"
-    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "flat"}
-    assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat"}
+    assert steps["click heuristic"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
+    assert steps["click privileged"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
     assert steps["click privileged"]["select"] == "semif"
     assert out["strategyChanges"][:2] == ["heuristic", "semif"], "the bundle hears the change"
     last = [s["mode"] for s in out["steps"] if "mode" in s][-1]
@@ -1383,8 +1385,8 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
 def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
     steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
     assert steps["click vision-map"]["reads"] == "Objects & signals from cameras · map privileged"
-    # #78: until its stages land the new Vision says it still drives as Vision (map)
-    assert steps["click vision"]["reads"] == "Objects & signals from cameras · de-mapping stage 0: drives as Vision (map)"
+    # #78/#75: the new Vision says which stage it is at and what is still privileged
+    assert steps["click vision"]["reads"] == "Objects, signals & box flow from cameras · stage 1 · map privileged"
     assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
     assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
 

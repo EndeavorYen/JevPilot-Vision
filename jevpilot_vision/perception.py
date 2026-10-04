@@ -229,6 +229,7 @@ def perceive(
             "right_m": round(right, 2),
             "width_m": round((x1 - x0) * ahead / camera.fx, 2),
             "conf": round(float(det["conf"]), 3),
+            **box_flow_fields(det["box"], camera, kind),
         })
     objects.sort(key=lambda o: o["ahead_m"])
     if tracker is not None:
@@ -266,6 +267,53 @@ def perceive(
     return {"backend": backend, "objects": objects, "signal": signal}
 
 
+# Optical flow B (#75): how a tracked box moves, without the flat-ground range. Fitted over the
+# track's samples of the last FLOW_WINDOW_S; an expansion slower than FLOW_MAX_TTC_S is box jitter.
+FLOW_WINDOW_S = 1.5
+FLOW_MIN_SAMPLES = 3
+FLOW_MIN_SPAN_S = 0.25
+FLOW_MAX_TTC_S = 20.0
+
+
+def box_flow_fields(box: Sequence[float], camera: "CameraModel", kind: str = "car") -> Dict[str, Any]:
+    """The pixel box, the size its expansion is read from and its bearing from the optical axis:
+    what the tracker's flow reads. A walker's width swings with its stride, so its height."""
+    x0, y0, x1, y1 = (float(v) for v in box)
+    return {
+        "box_px": [round(float(v), 1) for v in box],
+        "scale_px": round(y1 - y0 if kind == "pedestrian" else x1 - x0, 2),
+        "bearing_rad": round(math.atan2((x0 + x1) / 2.0 - camera.cx, camera.fx), 5),
+    }
+
+
+def _slope(samples: List[tuple[float, float]]) -> tuple[float, float]:
+    """Least-squares (slope, value at the last sample's time)."""
+    n = len(samples)
+    mt = sum(t for t, _ in samples) / n
+    mv = sum(v for _, v in samples) / n
+    var = sum((t - mt) ** 2 for t, _ in samples)
+    slope = sum((t - mt) * (v - mv) for t, v in samples) / var if var > 0 else 0.0
+    return slope, mv + slope * (samples[-1][0] - mt)
+
+
+def box_flow(history: List[tuple[float, float, float]], ahead_m: float, right_m: float) -> Dict[str, Optional[float]]:
+    """TTC from the box's expansion and the speed toward our line from its bearing, over
+    (t, scale_px, bearing_rad) samples. Expansion: at a constant closing speed 1/size falls
+    linearly in time, so TTC = (1/s) / -(d(1/s)/dt) holds without knowing the range. None: not
+    enough of the track yet, or not closing."""
+    out: Dict[str, Optional[float]] = {"ttc_s": None, "toward_center_mps": None}
+    if len(history) < FLOW_MIN_SAMPLES or history[-1][0] - history[0][0] < FLOW_MIN_SPAN_S:
+        return out
+    slope, inv_now = _slope([(t, 1.0 / w) for t, w, _ in history])
+    if slope < 0 and inv_now > 0 and inv_now / -slope <= FLOW_MAX_TTC_S:
+        out["ttc_s"] = round(inv_now / -slope, 2)
+    rate, bearing = _slope([(t, b) for t, _, b in history])
+    lateral = ahead_m * rate / math.cos(bearing) ** 2  # d/dt of ahead * tan(bearing), right positive
+    side = 1.0 if right_m > 0 else -1.0 if right_m < 0 else 0.0
+    out["toward_center_mps"] = round(-side * lateral, 2)
+    return out
+
+
 class Tracker:
     """Matches each object to the same kind nearby in the previous frame, for a closing speed.
 
@@ -273,6 +321,9 @@ class Tracker:
     objects. After a gap of more than 1.5 s (one perception cycle can take most of a second), or if
     time runs backwards (a reload), nothing is matched. An unmatched object's closing speed is
     None: unknown, not zero (zero would mean it drives away at our own speed).
+
+    Objects with a pixel box (`box_flow_fields`) also carry their box flow (#75): `ttc_s` and
+    `toward_center_mps`, from the matched track's recent boxes.
     """
 
     MAX_GAP_S = 1.5
@@ -282,10 +333,12 @@ class Tracker:
         self.gate_m = gate_m
         self.prev: List[Dict[str, Any]] = []
         self.prev_t: Optional[float] = None
+        self.history: List[List[tuple[float, float, float]]] = []  # per entry of prev
 
     def update(self, objects: List[Dict[str, Any]], t: float) -> List[Dict[str, Any]]:
         dt = None if self.prev_t is None else t - self.prev_t
         closing: List[Optional[float]] = [None] * len(objects)
+        matched: List[Optional[int]] = [None] * len(objects)
         if dt is not None and 0 < dt <= self.MAX_GAP_S:
             pairs = []
             for i, obj in enumerate(objects):
@@ -303,8 +356,18 @@ class Tracker:
                 used_i.add(i)
                 used_j.add(j)
                 closing[i] = (self.prev[j]["ahead_m"] - objects[i]["ahead_m"]) / dt
-        out = [{**obj, "closing_mps": None if c is None else round(c, 2)} for obj, c in zip(objects, closing)]
-        self.prev, self.prev_t = out, t
+                matched[i] = j
+        out, history = [], []
+        for obj, c, j in zip(objects, closing, matched):
+            row = {**obj, "closing_mps": None if c is None else round(c, 2)}
+            past = [h for h in self.history[j] if t - h[0] <= FLOW_WINDOW_S] if j is not None else []
+            scale = obj.get("scale_px")
+            if scale and scale > 0 and obj.get("bearing_rad") is not None:
+                past = past + [(t, float(scale), float(obj["bearing_rad"]))]
+                row.update(box_flow(past, float(obj["ahead_m"]), float(obj["right_m"])))
+            out.append(row)
+            history.append(past)
+        self.prev, self.prev_t, self.history = out, t, history
         return out
 
 

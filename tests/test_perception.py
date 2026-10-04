@@ -409,3 +409,96 @@ def test_review3_the_next_junctions_head_100_m_away_is_not_read_by_either_path()
         got = P.Perception(Fake(lamp, None)).front(wide, narrow=lamp)["signal"]
         assert (got["state"] == "green") is readable, (rows, got)
     assert P.NARROW_MAX_RANGE_M <= 75.0
+
+
+# --- #75: optical flow B, from the tracked boxes ------------------------------------------------
+
+def _box_seen(cam, ahead, right, width_m=1.9, height_m=1.5):
+    """The detector's box of a car `ahead` m away and `right` m aside, from the pinhole model."""
+    u = cam.cx + right * cam.fx / ahead
+    v_bottom = cam.cy + cam.height_m * cam.fx / ahead
+    half = width_m * cam.fx / ahead / 2
+    return [u - half, v_bottom - height_m * cam.fx / ahead, u + half, v_bottom]
+
+
+def _flow_track(path, cam=CAM, dt=0.25):
+    from jevpilot_vision.perception import Tracker, box_flow_fields
+
+    tracker = Tracker()
+    out = None
+    for k, (ahead, right) in enumerate(path):
+        obj = {"kind": "car", "ahead_m": ahead, "right_m": right, **box_flow_fields(_box_seen(cam, ahead, right), cam)}
+        out = tracker.update([obj], t=10.0 + k * dt)
+    return out[0]
+
+
+def test_issue75_a_steadily_closing_car_has_the_ttc_its_box_grows_by():
+    # 30 m to 20 m at 5 m/s, a frame every 0.25 s: 4 s to contact at the last frame
+    last = _flow_track([(30.0 - 5.0 * 0.25 * k, 0.0) for k in range(9)])
+    assert last["ttc_s"] == pytest.approx(20.0 / 5.0, rel=0.1)
+
+
+def test_issue75_a_car_holding_its_distance_or_pulling_away_has_no_ttc():
+    assert _flow_track([(15.0, 0.0)] * 6)["ttc_s"] is None
+    assert _flow_track([(15.0 + 0.5 * k, 0.0) for k in range(6)])["ttc_s"] is None
+    first = _flow_track([(20.0, 0.0)])
+    assert first["ttc_s"] is None and first["toward_center_mps"] is None, "one sighting has no motion"
+
+
+def test_issue75_a_car_sliding_toward_our_line_is_seen_cutting_in():
+    # 15 m ahead, from 3.5 m to the right toward the centre at 1 m/s
+    right_side = _flow_track([(15.0, 3.5 - 0.25 * k) for k in range(6)])
+    assert right_side["toward_center_mps"] == pytest.approx(1.0, abs=0.2)
+    left_side = _flow_track([(15.0, -3.5 + 0.25 * k) for k in range(6)])
+    assert left_side["toward_center_mps"] == pytest.approx(1.0, abs=0.2)
+    steady = _flow_track([(15.0, 3.5)] * 6)
+    assert abs(steady["toward_center_mps"]) < 0.1
+
+
+def test_issue75_box_flow_survives_detector_jitter_without_a_false_ttc():
+    import random
+
+    from jevpilot_vision.perception import Tracker, box_flow_fields
+
+    rnd = random.Random(7)
+    tracker = Tracker()
+    for k in range(12):
+        box = [x + rnd.uniform(-1.0, 1.0) for x in _box_seen(CAM, 15.0, 0.0)]
+        out = tracker.update([{"kind": "car", "ahead_m": 15.0, "right_m": 0.0, **box_flow_fields(box, CAM)}], t=k * 0.25)
+    assert out[0]["ttc_s"] is None or out[0]["ttc_s"] > 8.0, out[0]
+
+
+def test_issue75_a_walkers_ttc_comes_from_its_height_not_its_swinging_stride():
+    from jevpilot_vision.perception import Tracker, box_flow_fields
+
+    tracker = Tracker()
+    for k in range(9):
+        ahead = 12.0 - 2.0 * 0.25 * k  # 12 m to 8 m at 2 m/s: 4 s at the last frame
+        x0, y0, x1, y1 = _box_seen(CAM, ahead, 0.0, width_m=0.5, height_m=1.7)
+        stride = 1.0 + 0.35 * (-1) ** k  # legs apart, legs together
+        mid, half = (x0 + x1) / 2, (x1 - x0) / 2 * stride
+        box = [mid - half, y0, mid + half, y1]
+        out = tracker.update([{"kind": "pedestrian", "ahead_m": ahead, "right_m": 0.0, **box_flow_fields(box, CAM, "pedestrian")}], t=k * 0.25)
+    assert out[0]["ttc_s"] == pytest.approx(4.0, rel=0.1)
+
+
+def test_issue75_the_ttc_evaluation_scores_flow_against_the_true_gap_over_closing():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks"))
+    import eval_perception as ev
+
+    near = [{"type": "car", "ahead": 22.15, "right": 0.0, "closing": 5.0, "depth": 4.2},
+            {"type": "car", "ahead": 15.0, "right": 0.0, "closing": -1.0, "depth": 4.2}]
+    # gap to the near face: 22.15 - 2.1 - 0.15 = 19.9 m at 5 m/s
+    assert ev.true_ttc(near[0]) == pytest.approx(3.98)
+    assert ev.true_ttc(near[1]) is None, "a car pulling away has no TTC"
+    objects = [{"kind": "car", "ahead_m": 22.0, "right_m": 0.1, "ttc_s": 4.4, "closing_mps": 4.0}]
+    (want, flow, ranged), = ev.ttc_pairs(near, objects)
+    assert (round(want, 2), flow, ranged) == (3.98, 4.4, 5.5)
+    lines = ev.ttc_report([(2.0, 2.2, None), (4.0, None, 4.0)])
+    assert lines[0].startswith("TTC box flow: given 1/2") and "missed 0/1" in lines[0]
+    assert lines[1].startswith("TTC ranged: given 1/2") and "missed 1/1" in lines[1]
+    assert lines[2].startswith("TTC both, worse: given 2/2") and "missed 0/1" in lines[2]
+

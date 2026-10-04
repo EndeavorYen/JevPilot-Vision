@@ -12,7 +12,7 @@
   const DRIVE_MODES = ["vision", "vision-map", "privileged", "heuristic"];
   // De-mapping stages landed in ?mode=vision (#85). benchmarks/closed_loop.py VISION_STAGE records
   // the same number and checks it against this one on every run.
-  window.SEMIF_VISION_STAGE = 0;
+  window.SEMIF_VISION_STAGE = 1; // 1: box flow (#75)
   const driveOf = (id) => (id === "vision-map" ? "vision" : id);
   const MODE_KEY = "semif.driveMode";
   const modeParam = params.get("mode");
@@ -84,7 +84,7 @@
   // Always on screen (also in the minimal view): which mode drives, what it reads, and in Vision
   // whether perception is healthy. It says what each mode reads, not which is "better".
   const MODE_INFO = {
-    vision: { label: "Vision", reads: `Objects & signals from cameras · de-mapping stage ${window.SEMIF_VISION_STAGE}: drives as Vision (map)` },
+    vision: { label: "Vision", reads: `Objects, signals & box flow from cameras · stage ${window.SEMIF_VISION_STAGE} · map privileged` },
     "vision-map": { label: "Vision (map)", reads: "Objects & signals from cameras · map privileged" },
     privileged: { label: "Privileged", reads: "Simulator state · the ablation for a decision model" },
     heuristic: { label: "Heuristic", reads: "Geometric rules · no model" },
@@ -762,6 +762,8 @@
     }
     if (window.SEMIF_DRIVE_MODE === "vision") {
       body.drive_mode = "vision";
+      // The new Vision names its stage; Vision (map) sends none and the server keeps its old rules.
+      if (window.SEMIF_MODE_ID === "vision") body.vision_stage = window.SEMIF_VISION_STAGE;
       updateSeenSignal();
       body.state = body.state || {};
       body.state.seen_signal = window.SEMIF_SEEN_SENT || null;

@@ -37,7 +37,7 @@ MODES = ("privileged", "vision", "vision-map", "heuristic")
 # #78: "vision-map" is the old Vision kept as a baseline (cameras, map privileged); "vision" is the
 # Vision losing its map and localization privilege stage by stage. Its runs record the stage; a
 # "vision" row without one predates the split and is reported as Vision (map).
-VISION_STAGE = 0  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's
+VISION_STAGE = 1  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's. 1: box flow (#75)
 DEFAULT_ROUTES = ("festival", "harbour", "pass")
 DEFAULT_MODES = ("privileged", "vision")
 GFX = ("medium", "high")  # docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3

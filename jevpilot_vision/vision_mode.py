@@ -17,7 +17,9 @@ Privileged and Heuristic requests pass through untouched.
 from __future__ import annotations
 
 import copy
+import logging
 import math
+import os
 from typing import Any, Dict, Iterable, List, Optional
 
 # Fields the bundle builds from the simulator's objects.
@@ -53,6 +55,21 @@ MARGIN = (0.4, 0.25)
 LANE_HALF_M = 1.75  # traffic this close to our line is in our lane: it moves away or stands
 HORIZON_S = 3.0
 STEP_S = 0.1
+# The new Vision's stages (#85) this server knows; a request names the stage its page is at
+# (semif-layer.js SEMIF_VISION_STAGE). Vision (map) and requests without a stage are stage 0.
+FLOW_STAGE = 1  # box flow (#75): TTC from expansion, cut-ins from bearing
+EVENT_TTC_S = 6.0  # a closing car is worth its own words in the event line below this
+CUT_IN_MPS = 0.5  # sliding toward our line at least this fast, from outside our lane
+# For the #75 ablation only: which closing speed the new Vision's sweep reads. "both" (the
+# default) takes the worse of ranging and box flow; "range" and "flow" use one of them.
+CLOSING_SOURCES = ("both", "range", "flow")
+
+
+def closing_source() -> str:
+    source = os.environ.get("SEMIF_VISION_CLOSING", "both")
+    return source if source in CLOSING_SOURCES else "both"
+
+logger = logging.getLogger(__name__)
 
 
 def is_vision(payload: Dict[str, Any]) -> bool:
@@ -112,8 +129,12 @@ def sweep_collision(
     speed: float,
     path: Optional[List[List[float]]] = None,
     age_s: float = 0.0,
+    use_flow: bool = False,
 ) -> bool:
     """Whether following this candidate for 3 s runs into a perceived object.
+
+    `use_flow` (the new Vision, #75): an object's closing speed is the more dangerous of the
+    ranged one and the one its box's expansion implies (ahead / TTC).
 
     `path` is the planner's own projection of the candidate ([t, ahead, right, heading] in the
     car's frame); without it a constant-steer model stands in. Objects were seen `age_s` ago: they
@@ -130,11 +151,15 @@ def sweep_collision(
         c, s = math.cos(heading), math.sin(heading)
         for obj in objects:
             half = OBJECT_HALF.get(obj.get("kind"), OBJECT_HALF["car"])
-            closing = obj.get("closing_mps")
+            source = closing_source() if use_flow else "range"
+            closing = obj.get("closing_mps") if source != "flow" else None
             if obj.get("kind") == "pedestrian" or closing is None:
                 closing = speed  # standing still
             elif abs(obj["right_m"]) <= LANE_HALF_M:
                 closing = min(closing, speed)  # ranging noise, not a car reversing at us
+            flow = _flow_closing(obj) if source != "range" else None
+            if flow is not None:
+                closing = max(closing, flow)
             moving = speed - closing
             oa = obj["ahead_m"] + CAMERA_AHEAD_M - closing * age_s + moving * t
             dx, dy = oa - ahead, obj["right_m"] - right
@@ -142,6 +167,11 @@ def sweep_collision(
             if abs(along) <= EGO_HALF[0] + half[0] + MARGIN[0] and abs(across) <= EGO_HALF[1] + half[1] + MARGIN[1]:
                 return True
     return False
+
+
+def _flow_closing(obj: Dict[str, Any]) -> Optional[float]:
+    ttc = _num(obj.get("ttc_s"))
+    return obj["ahead_m"] / ttc if ttc is not None and ttc > 0 else None
 
 
 CRAWL_MPS = 1.0  # without perception, only this slow is safe
@@ -155,17 +185,21 @@ def _objects(perception: Dict[str, Any]) -> List[Dict[str, Any]]:
         ahead, right = _num(o.get("ahead_m")), _num(o.get("right_m"))
         if ahead is None or right is None:
             continue
-        out.append({**o, "ahead_m": ahead, "right_m": right, "closing_mps": _num(o.get("closing_mps"))})
+        out.append({**o, "ahead_m": ahead, "right_m": right, "closing_mps": _num(o.get("closing_mps")),
+                    "ttc_s": _num(o.get("ttc_s")), "toward_center_mps": _num(o.get("toward_center_mps"))})
     return out
 
 
 _EVENT_NAMES = (("pedestrian", "pedestrian"), ("car", "vehicle"), ("motorcycle", "motorcycle"))
 
 
-def perception_event(signal: str, objects: List[Dict[str, Any]], ok: bool = True) -> str:
+def perception_event(signal: str, objects: List[Dict[str, Any]], ok: bool = True, flow: bool = False) -> str:
     """The event line from the light Vision mode settled on and the detector's objects ahead.
     One frame has no onset, so nothing here says "appeared". Kept under the prompt's 96 characters
-    (trajectory_sampler.compact_jev_state)."""
+    (trajectory_sampler.compact_jev_state): the light first, then objects most dangerous first.
+
+    `flow` (the new Vision, #75): the nearest of each kind also says how it moves, from its box
+    flow: "closing (TTC 2.1 s)" or "cutting in from right"."""
     clauses: List[str] = []
     if signal == "red":
         clauses.append("RED signal ahead, mandatory stop")
@@ -173,12 +207,25 @@ def perception_event(signal: str, objects: List[Dict[str, Any]], ok: bool = True
         clauses.append("AMBER signal ahead")
     elif signal == "green":
         clauses.append("traffic light is green")
+    ranked = []
     for kind, name in _EVENT_NAMES:
-        ahead = [o["ahead_m"] for o in objects if o.get("kind") == kind and o["ahead_m"] > 0]
-        if ahead:
-            clauses.append(f"{name} at {min(ahead):.0f} m")
+        ahead = [o for o in objects if o.get("kind") == kind and o["ahead_m"] > 0]
+        if not ahead:
+            continue
+        near = min(ahead, key=lambda o: o["ahead_m"])
+        text, danger = f"{name} at {near['ahead_m']:.0f} m", 10.0 + near["ahead_m"]
+        ttc, toward = _num(near.get("ttc_s")), _num(near.get("toward_center_mps"))
+        if flow and ttc is not None and ttc <= EVENT_TTC_S:
+            text, danger = f"{text}, closing (TTC {ttc:.1f} s)", ttc
+        elif flow and toward is not None and toward >= CUT_IN_MPS and abs(near["right_m"]) > LANE_HALF_M:
+            side = "right" if near["right_m"] > 0 else "left"
+            text, danger = f"{name} cutting in from {side}", EVENT_TTC_S
+        ranked.append((danger, text))
+    clauses += [text for _danger, text in sorted(ranked)]
     if not ok:
         clauses.append("camera evidence unavailable")
+    while len(clauses) > 1 and len("; ".join(clauses)) > 96:
+        clauses.pop()  # the least dangerous object goes first; the light is never dropped
     return "; ".join(clauses) if clauses else "road clear ahead, maintain lane"
 
 
@@ -188,6 +235,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
         return payload
     out = copy.deepcopy(payload)
     state = out["state"]
+    flow = (_num(payload.get("vision_stage")) or 0) >= FLOW_STAGE
     for key in PRIVILEGED:
         state.pop(key, None)
     ok, perception = _perception_ok(state)
@@ -212,9 +260,17 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
         vision["signal"] = signal if signalled else (seen or "unknown")
         # The encoder's event text comes from colour masks (vision.py blobs_from_frame) and SigLIP
         # scores; in Vision mode the prompt and the directive read only this perception (#65).
-        vision["event"] = perception_event(vision["signal"], objects, ok)
+        vision["event"] = perception_event(vision["signal"], objects, ok, flow=flow)
     state["perception_ok"] = ok
     state["perceived_objects"] = objects
+    if flow:
+        # Ranging and box flow far apart: one of them is wrong; the sweep takes the worse (#75).
+        apart = [o for o in objects if o.get("closing_mps") is not None and _flow_closing(o) is not None
+                 and abs(o["closing_mps"] - _flow_closing(o)) > max(2.0, 0.5 * max(abs(o["closing_mps"]), _flow_closing(o)))]
+        state["flow_disagreements"] = len(apart)
+        if apart:
+            logger.info("vision: ranging and box flow disagree on %d object(s): %s", len(apart),
+                        [(o.get("kind"), o["ahead_m"], o["closing_mps"], round(_flow_closing(o), 2)) for o in apart])
 
     speed = _num(state.get("speed_mps")) or 0.0
     age_s = max(0.0, (_num(state.get("vision_age_ms")) or 0.0) / 1000.0)
@@ -230,7 +286,7 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
             elif not ok:
                 hit = target is None or target > CRAWL_MPS  # blind: crawl or stop
             else:
-                hit = sweep_collision(vec, objects, speed, paths.get(cid), age_s)
+                hit = sweep_collision(vec, objects, speed, paths.get(cid), age_s, use_flow=flow)
             # The bundle's own flag is computed against the map's buildings in Vision mode.
             vec[4] = bool(vec[4]) or hit
     state["drive_mode"] = "vision"
