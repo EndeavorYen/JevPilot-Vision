@@ -5,6 +5,21 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 INTENTS = ("CRUISE", "RED_LIGHT_STOP", "YIELD_CUT_IN", "CAUTION")
+SETTLED_COLOURS = ("red", "amber", "yellow", "green")
+
+
+def settled_signal(
+    vision: Optional[Dict[str, Any]] = None,
+    intersection: Optional[Dict[str, Any]] = None,
+) -> str:
+    """The light a decision acts on (#84). The intersection's colour when it has one (the simulator's
+    in Privileged; perception's in Vision, written by vision_mode.prepare), else the camera's. An
+    "unknown" never hides a colour the other source knows."""
+    for source in (intersection, vision):
+        colour = str((source or {}).get("signal") or "").lower() if isinstance(source, dict) else ""
+        if colour in SETTLED_COLOURS:
+            return colour
+    return "unknown"
 
 
 def plan_directive(
@@ -15,7 +30,7 @@ def plan_directive(
     vis = vision if isinstance(vision, dict) else {}
     inter = intersection if isinstance(intersection, dict) else {}
     event = str(vis.get("event") or "").lower()
-    signal = str(vis.get("signal") or inter.get("signal") or "").lower()
+    signal = settled_signal(vis, inter)
     if signal == "red" or "mandatory stop" in event or "red signal" in event:
         return {"intent": "RED_LIGHT_STOP", "directive": "prefer halt=yes"}
     if "cut-in" in event or "cutting" in event:

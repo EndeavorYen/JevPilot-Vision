@@ -6,11 +6,12 @@ Six-column candidates are the driving contract. Any other payload is returned un
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Dict, Optional
 
 from jevpilot_vision.action_tree import Branch, Leaf, Node
 
-from jevpilot_vision.directive import fail_safe_choice, plan_directive
+from jevpilot_vision.directive import fail_safe_choice, plan_directive, settled_signal
 from jevpilot_vision.trajectory_sampler import compact_jev_state, partition_ids, vector_option_tag
 
 
@@ -76,8 +77,9 @@ DRIVE_TREE = build_drive_tree(
 def _signal(state: Dict[str, Any]) -> Optional[str]:
     vision = state.get("vision") if isinstance(state.get("vision"), dict) else {}
     intersection = state.get("intersection") if isinstance(state.get("intersection"), dict) else {}
-    signal = str(vision.get("signal") or intersection.get("signal") or "").lower() or None
-    if signal != "red" and "red" in str(vision.get("event") or "").lower():
+    settled = settled_signal(vision, intersection)
+    signal = settled if settled != "unknown" else (str(vision.get("signal") or intersection.get("signal") or "").lower() or None)
+    if signal != "red" and re.search(r"\bred\b", str(vision.get("event") or "").lower()):  # the word: "appeared" is not red (#84)
         signal = "red"
     return signal
 
