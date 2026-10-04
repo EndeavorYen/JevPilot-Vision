@@ -656,3 +656,111 @@ def test_issue76_review_the_narrow_camera_merge_applies_to_the_lamp_reading_too(
     assert both["state"] == "unknown" and both["conflict"] == ["green", "red"]
     assert _merge_narrow({"state": "green", "conf": 0.8}, {"state": "unknown"})["state"] == "green"
 
+
+# --- #80: lane lines from the front camera ---------------------------------------------------------
+
+def _road_frame(offset, width=6.0, w=640, h=360, curve=0.0, dashed_left=True):
+    """A grey road with our lane's two lines, the car `offset` m right of the lane's centre."""
+    cam = CameraModel(width=w, height=h)
+    img = np.full((h, w, 3), (95, 95, 95), dtype=np.uint8)
+    img[: int(cam.cy) + 1] = (150, 190, 230)
+    for v in range(int(cam.cy) + 2, h):
+        ahead = cam.height_m * cam.fx / (v - cam.cy)
+        for line, dashed in ((-width / 2 - offset, dashed_left), (width / 2 - offset, False)):
+            if dashed and int(ahead / 3) % 2:
+                continue
+            x = line + curve * ahead * ahead
+            half_px = max(0.5, 0.075 * cam.fx / ahead)
+            u = cam.cx + x * cam.fx / ahead
+            img[v, max(0, int(u - half_px)) : max(0, int(u + half_px) + 1)] = (235, 235, 235)
+    return img, cam
+
+
+def test_issue80_the_lane_offset_and_width_come_back_from_the_painted_lines():
+    from jevpilot_vision.perception import lane_from_frame
+
+    for offset in (0.0, 0.8, -1.2):
+        img, cam = _road_frame(offset)
+        lane = lane_from_frame(img, cam)
+        assert lane["conf"] > 0.5, lane
+        assert lane["offset_m"] == pytest.approx(offset, abs=0.12)
+        assert lane["width_m"] == pytest.approx(6.0, abs=0.15)
+        assert abs(lane["heading_rad"]) < 0.02
+
+
+def test_issue80_a_bend_shows_as_curvature_and_no_lines_as_no_lane():
+    from jevpilot_vision.perception import lane_from_frame
+
+    img, cam = _road_frame(0.0, curve=0.004)
+    assert lane_from_frame(img, cam)["curvature"] == pytest.approx(0.008, abs=0.003)
+    blank = np.full((360, 640, 3), (95, 95, 95), dtype=np.uint8)
+    assert lane_from_frame(blank, CameraModel(width=640, height=360))["conf"] == 0.0
+    one, cam = _road_frame(0.0)
+    one[:, :320] = (95, 95, 95)  # only the right line
+    assert lane_from_frame(one, cam)["conf"] == 0.0
+
+
+def test_issue80_review_scattered_points_always_finish():
+    """A seed group whose refit keeps none of its own points used to loop for ever."""
+    import random
+
+    from jevpilot_vision.perception import _fit_lines
+
+    rnd = random.Random(3)
+    pts = [(4 + rnd.random() * 20, rnd.uniform(-8, 8)) for _ in range(400)]
+    pts += [(a, 0.3 * a - 2.0) for a in range(4, 24)]  # a steep line plus noise
+    assert isinstance(_fit_lines(pts), list)
+
+
+def test_issue80_a_lost_lane_is_held_briefly_with_falling_confidence_then_dropped():
+    from jevpilot_vision.perception import LaneTracker
+
+    img, cam = _road_frame(0.5)
+    blank = np.full((360, 640, 3), (95, 95, 95), dtype=np.uint8)
+    tr = LaneTracker()
+    seen = tr.update(img, cam, 0.0)
+    held = [tr.update(blank, cam, t) for t in (0.5, 1.0)]
+    gone = tr.update(blank, cam, 2.0)
+    assert seen["conf"] > 0.5 and seen["held_s"] == 0.0
+    assert held[0]["offset_m"] == seen["offset_m"] and held[0]["conf"] == pytest.approx(seen["conf"] / 2, abs=0.002)
+    assert held[1]["conf"] < held[0]["conf"] and held[1]["held_s"] == 1.0
+    assert gone["conf"] == 0.0, "over 1.5 s without the lines: no lane"
+
+
+def test_issue80_the_lane_rides_with_the_front_cameras_perception():
+    from PIL import Image
+
+    from jevpilot_vision.perception import Perception
+
+    class Ready:
+        model_id = "fake"
+
+        def detect_or_status(self, image):
+            return "ready", []
+
+    img, _cam = _road_frame(-0.6)
+    assert "lane" not in Perception(Ready()).front(Image.fromarray(img), t=1.0), "off unless asked (SEMIF_LANES=1)"
+    on = Perception(Ready())
+    on.lanes_on = True
+    out = on.front(Image.fromarray(img), t=1.0)
+    assert out["lane"]["conf"] > 0.5 and out["lane"]["offset_m"] == pytest.approx(-0.6, abs=0.15)
+
+
+def test_issue80_review_the_lane_is_the_innermost_pair_not_the_next_lanes_lines():
+    from jevpilot_vision.perception import lane_from_frame
+
+    # our lane: dashed -1.75 m, solid +1.75 m; the next lane's far line solid at -5.25 m
+    img, cam = _road_frame(0.0, width=3.5)
+    far, _ = _road_frame(1.75 + 1.75, width=3.5, dashed_left=False)  # draws a solid line at -5.25 m
+    img = np.maximum(img, np.where(far.sum(axis=2, keepdims=True) > 600, far, 0)).astype(np.uint8)
+    lane = lane_from_frame(img, cam)
+    assert lane["width_m"] == pytest.approx(3.5, abs=0.2) and lane["offset_m"] == pytest.approx(0.0, abs=0.15), lane
+
+
+def test_issue80_review_noise_is_not_a_lane():
+    from jevpilot_vision.perception import lane_from_frame
+
+    rnd = np.random.default_rng(5)
+    noise = rnd.integers(0, 256, size=(360, 640, 3), dtype=np.uint8)
+    assert lane_from_frame(noise, CameraModel(width=640, height=360))["conf"] < 0.3
+
