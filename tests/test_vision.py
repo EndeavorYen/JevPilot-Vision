@@ -286,3 +286,28 @@ def test_surround_event_speaks_only_for_the_front_camera():
     assert "vehicle" not in out["event"]
     assert "pedestrian" not in out["event"]
     assert enc.last_scores["vehicle"] < 0.1
+
+
+def test_issue70_a_classifier_that_cannot_score_says_so_instead_of_a_clear_road():
+    """Without the text side (no sentencepiece) every score used to fall back to 'clear road'."""
+    pytest.importorskip("PIL")
+    torch = pytest.importorskip("torch")
+    from PIL import Image
+
+    enc = _fake_siglip_encoder([])
+    enc._processor = None  # AutoProcessor failed and no tokenizer was set: the #70 state
+    enc.scoring_error = None
+    out = enc.infer_pil(Image.new("RGB", (224, 224), (80, 80, 80)))
+    assert out["signal"] == "unknown"
+    assert "clear" not in out["event"], out["event"]
+    assert "classifier" in out["event"] and len(out["event"]) <= 96
+    assert enc.scoring_error and "scoring_error" in out
+    assert compact_vision(out)["scoring_error"] == enc.scoring_error
+
+
+def test_issue70_siglip_text_needs_sentencepiece_in_the_neural_extra():
+    import pathlib
+    import tomllib
+
+    project = tomllib.loads(pathlib.Path(__file__).resolve().parents[1].joinpath("pyproject.toml").read_text(encoding="utf-8"))
+    assert any(dep.startswith("sentencepiece") for dep in project["project"]["optional-dependencies"]["neural"])
