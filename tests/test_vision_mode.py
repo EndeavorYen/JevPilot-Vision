@@ -411,3 +411,16 @@ def test_issue75_review_the_server_takes_the_pages_odometer_with_the_frames(monk
             pass
         assert seen["image"].get("_speed_mps") == kept, (speed, seen["image"])
 
+
+def test_issue76_the_new_vision_reads_the_lamp_cells_and_vision_map_the_hue_threshold():
+    def payload(stage):
+        p = _payload({**_perception(signal="unknown"), "signal_read": {"state": "green", "conf": 0.8}})
+        if stage is not None:
+            p["vision_stage"] = stage
+        return p
+    lamp = vision_mode.prepare(payload(3))["state"]["intersection"]
+    assert (lamp["signal"], lamp["signal_source"]) == ("green", "perception")
+    for stage in (None, 2):
+        hue = vision_mode.prepare(payload(stage))["state"]["intersection"]
+        assert (hue["signal"], hue["signal_source"]) == ("red", "assumed"), stage
+

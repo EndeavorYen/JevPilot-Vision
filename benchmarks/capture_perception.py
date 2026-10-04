@@ -1,7 +1,8 @@
 """Capture onboard front frames with simulator ground truth, for benchmarks/eval_perception.py (#75).
 
 Ground truth is read only here, to score perception; nothing that drives reads it. The page is
-driven by its own autopilot in Vision (map) on the mock arbiter. Each frame the page sends to
+driven by its own autopilot on the mock arbiter, in Vision (map) or, with --mode privileged, on the
+simulator's table: there the bundle's own state holds the true light of the junction ahead (#76). Each frame the page sends to
 /v1/vision is kept with the truth read the moment the request is built (a few tens of ms after
 the render: the frame's encode time).
 
@@ -9,7 +10,8 @@ the render: the frame's encode time).
         [--seconds 90] [--base http://127.0.0.1:8768]
 
 Writes <out_dir>/<seed>-<route>/fNNNN.jpg and truth.json:
-[{"file", "t", "grab_ms", "ego_speed", "yaw_rps", "near": [{"type", "id", "ahead", "right", "closing", "depth"}]}]
+[{"file", "t", "grab_ms", "ego_speed", "yaw_rps", "near": [{"type", "id", "ahead", "right", "closing", "depth"}],
+   "light": {"control", "signal", "distance_to_line_m"} or null}]
 in the ego frame (metres; closing in m/s along our heading, positive when the gap shrinks).
 Tuning seeds only (benchmarks/closed_loop_seeds.json): this is for looking into perception.
 """
@@ -19,6 +21,8 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -48,7 +52,10 @@ _HOOK = r"""
             ahead: dx * f[0] + dz * f[1], right: dx * r[0] + dz * r[1],
             closing: -((vo[0] - ve[0]) * f[0] + (vo[1] - ve[1]) * f[1]), depth: o.depth || 0 });
         }
-        window.__cap.push({ t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
+        const d0 = s.lastDecisionState || {}, inter = (d0.scene && d0.scene.intersection) || d0.intersection;
+        const light = inter && /signal|traffic_light/.test(String(inter.control || ""))
+          ? { control: inter.control, signal: inter.signal ?? null, distance_to_line_m: inter.stop_line_ahead_m ?? inter.distance_to_line_m ?? null } : null;
+        window.__cap.push({ light, mode: window.SEMIF_DRIVE_MODE, t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
           front: value.frames.front, near });
       }
     } catch (_) {}
@@ -60,15 +67,19 @@ _HOOK = r"""
 _TAKE = "(() => { const out = window.__cap.splice(0, window.__cap.length); return JSON.stringify(out); })()"
 
 
-def capture(base: str, seed: int, route: str, seconds: int, out: Path) -> int:
+def capture(base: str, seed: int, route: str, seconds: int, out: Path, mode: str = "vision-map") -> int:
     out.mkdir(parents=True, exist_ok=True)
     tab = cl.open_tab(base)
     rows, n = [], 0
     try:
-        url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed={seed}&world=coast:{route}&mode=vision-map&gfx=medium"
+        url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed={seed}&world=coast:{route}&mode={mode}&gfx=medium"
         cl._js(tab["target"], f"(location.href = {json.dumps(url)}, 1)", timeout=30)
         time.sleep(2)
-        cl._js(tab["target"], "(async () => { " + cl._READY + "; return 1; })()", timeout=120)
+        ready = "!!(window.SEMIF_SIM && window.SEMIF_SIM.player && window.SEMIF_SIM.player.route && document.getElementById('scene-loader') && document.getElementById('scene-loader').hidden)"
+        for _ in range(120):  # a slow load outlasts one eval's 15 s
+            if cl._js(tab["target"], ready, timeout=30) is True:
+                break
+            time.sleep(1)
         cl._js(tab["target"], _HOOK, timeout=30)
         cl._js(tab["target"], "(() => { if (!window.SEMIF_SIM.autopilot) document.querySelector('#autopilot').click(); return 1; })()", timeout=30)
         end = time.time() + seconds
@@ -94,14 +105,21 @@ def main() -> None:
     ap.add_argument("--routes", nargs="+", default=["festival", "harbour"], choices=cl.ROUTES)
     ap.add_argument("--seconds", type=int, default=90)
     ap.add_argument("--base", default="http://127.0.0.1:8768")
+    ap.add_argument("--mode", default="vision-map", choices=["vision-map", "privileged"],
+                    help="privileged: the bundle's state holds the true light (#76)")
     args = ap.parse_args()
     bad = [s for s in args.seeds if s not in seeds]
     if bad:
         raise SystemExit(f"tuning seeds only (benchmarks/closed_loop_seeds.json): {bad}")
+    try:
+        cl._devtools_pages()
+    except Exception:  # the debug browser is gone (it quits when idle): start one in the background
+        subprocess.run(["node", cl.CDP, "spawn-debug-browser", "--port", os.environ.get("CDP_PORT", "9222"), "--format", "json"],
+                       env={**os.environ, "CDP_BACKGROUND": "1"}, capture_output=True, timeout=90)
     cl.ensure_anchor(args.base)
     for seed in args.seeds:
         for route in args.routes:
-            n = capture(args.base, seed, route, args.seconds, Path(args.out).resolve() / f"{seed}-{route}")
+            n = capture(args.base, seed, route, args.seconds, Path(args.out).resolve() / f"{seed}-{route}", args.mode)
             print(f"seed {seed} {route}: {n} frames")
 
 

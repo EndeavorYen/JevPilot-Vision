@@ -203,7 +203,11 @@ def perceive(
     yaw_rps: float = 0.0,
     speed_mps: float = 0.0,
 ) -> Dict[str, Any]:
-    """Objects on the road with range, and the state of the light ahead."""
+    """Objects on the road with range, and the state of the light ahead.
+
+    `signal` is the hue threshold's reading, as before (Vision (map) reads it). `signal_read` (#76)
+    reads the governing head by which of its three lamp cells is lit, next to the hue threshold:
+    where both read a colour and they differ it is unknown (logged); else whichever read one."""
     if detections is None:
         return {"backend": "none", "objects": [], "signal": {"state": "unknown", "conf": 0.0}}
     objects = []
@@ -266,7 +270,95 @@ def perceive(
             signal = {"state": state, "conf": round(float(det["conf"]), 3), "box": [round(v, 1) for v in det["box"]], "source": det.get("source", "detector")}
         else:
             signal = {"state": "unknown", "conf": 0.0, "conflict": sorted(states)}
-    return {"backend": backend, "objects": objects, "signal": signal}
+    out = {"backend": backend, "objects": objects, "signal": signal}
+    out["signal_read"] = read_governing_light(lights, image, camera, signal)
+    return out
+
+
+# Reading which lamp is lit (#76, the owner's choice of 2026-10-04): a head's lamps stand red, amber,
+# green from the top (semif-scenery.js, the bundle's signal heads), so the lit one is the brightest
+# of three cells, whatever colour the renderer gives it. Thresholds picked on tuning-seed captures
+# (benchmarks/eval_lights.py --sweep), in both the current world and a #30 retraction preview.
+CELL_STATES = ("red", "amber", "green")
+CELL_COLUMNS = 0.6  # the middle of the box's width: the lamps, not the backplate's edges
+CELL_PERCENTILE = 90.0  # a lit lamp is a few bright pixels, not the cell's mean
+CELL_MIN_CONTRAST = 1.3  # the lit cell is at least this much brighter than the next
+CELL_MIN_LUMA = 0.25  # and bright at all (0..1); 0.15-0.4 read the same on the captures
+# Any one source may only make the car more careful (#85): a green the hue threshold does not also
+# read must stand out further. At 2.0 the lamp cells misread 1-3 of 210-286 tuning frames.
+CELL_GREEN_ALONE_CONTRAST = 2.0
+
+
+def read_lamp_cells(crop: np.ndarray, min_contrast: float = CELL_MIN_CONTRAST, min_luma: float = CELL_MIN_LUMA) -> tuple[str, float]:
+    """(state, contrast) from a head's crop: which third, top to bottom, is lit. Unknown when no
+    cell stands out (a head seen side-on, too small to split, or between phases)."""
+    h, w = crop.shape[0], crop.shape[1]
+    if h < 6 or w < 2:
+        return "unknown", 0.0
+    rgb = crop[..., :3].astype(np.float32) / 255.0
+    luma = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
+    c0 = int(round(w * (1.0 - CELL_COLUMNS) / 2.0))
+    middle = luma[:, c0 : max(c0 + 1, w - c0)]
+    cells = [float(np.percentile(band, CELL_PERCENTILE)) for band in np.array_split(middle, 3, axis=0)]
+    order = sorted(range(3), key=lambda k: -cells[k])
+    best, second = cells[order[0]], cells[order[1]]
+    if best < min_luma:
+        return "unknown", 0.0  # nothing lit
+    contrast = best / max(second, 1e-3)
+    if contrast < min_contrast:
+        return "unknown", round(contrast, 2)
+    return CELL_STATES[order[0]], round(contrast, 2)
+
+
+def read_governing_light(lights: List[Dict[str, Any]], image: np.ndarray, camera: "CameraModel",
+                         hue_signal: Dict[str, Any]) -> Dict[str, Any]:
+    """The light that governs us (ahead, above the horizon, near the middle; the biggest) read by
+    its lamp cells and by the hue threshold (#76), then held against the hue path's own reading of
+    every head (`hue_signal`): its conflicts stand (two heads that disagree are an assumed red), a
+    colour it read that differs is unknown, and with nothing read here its red or amber (a lamp found
+    in the pixels) stands; a green from elsewhere alone does not. No boxed head: the hue path's reading stands."""
+    out = _read_head(lights, image, camera, hue_signal)
+    if out.get("source") == "hue":
+        return out
+    if hue_signal.get("conflict"):
+        return {**out, "state": "unknown", "conf": 0.0, "conflict": hue_signal["conflict"]}
+    path = hue_signal.get("state")
+    if path in CELL_STATES and out["state"] in CELL_STATES and path != out["state"]:
+        logger.info("traffic light: heads read %s, governing head reads %s: unknown", path, out["state"])
+        return {**out, "state": "unknown", "conf": 0.0, "conflict": sorted({path, out["state"]})}
+    if out["state"] == "unknown" and path in ("red", "amber") and not out.get("conflict"):  # only toward caution (#85)
+        return {**out, "state": path, "conf": hue_signal.get("conf", 0.0)}
+    return out
+
+
+def _read_head(lights: List[Dict[str, Any]], image: np.ndarray, camera: "CameraModel",
+               hue_signal: Dict[str, Any]) -> Dict[str, Any]:
+    h, w = image.shape[0], image.shape[1]
+    heads = []
+    for det in lights:
+        x0, y0, x1, y1 = det["box"]
+        off = abs((x0 + x1) / 2.0 - camera.cx) / (0.35 * camera.width)
+        if off > 1.0 or (y0 + y1) / 2.0 > camera.cy:
+            continue
+        heads.append(((x1 - x0) * (y1 - y0) * (1.0 - 0.5 * off), det))
+    if not heads:
+        return {**hue_signal, "hue": hue_signal.get("state", "unknown"), "cells": None, "source": "hue"}
+    _, det = max(heads, key=lambda r: r[0])
+    x0, y0, x1, y1 = det["box"]
+    crop = image[max(0, int(y0)) : min(h, int(math.ceil(y1))), max(0, int(x0)) : min(w, int(math.ceil(x1)))]
+    hue = classify_light(crop) if crop.size else "unknown"
+    cells, contrast = read_lamp_cells(crop) if crop.size else ("unknown", 0.0)
+    out = {"box": [round(v, 1) for v in det["box"]], "hue": hue, "cells": cells, "contrast": contrast}
+    if cells == "green" and hue != "green" and contrast < CELL_GREEN_ALONE_CONTRAST:
+        cells = "unknown"  # a lone, faint green: not enough to drive on
+        out["cells"] = cells
+    readable = {s for s in (hue, cells) if s in CELL_STATES}
+    if len(readable) > 1:
+        logger.info("traffic light: hue reads %s, lamp cells read %s: unknown", hue, cells)
+        return {**out, "state": "unknown", "conf": 0.0, "conflict": sorted(readable)}
+    if readable:
+        return {**out, "state": readable.pop(), "conf": round(float(det["conf"]), 3)}
+    return {**out, "state": "unknown", "conf": 0.0}
 
 
 # Optical flow B (#75): how a tracked box moves. Chosen, not measured; the TTC error they give is
@@ -542,25 +634,33 @@ class Perception:
             speed_mps=speed_mps,
         )
         out["signal"]["camera"] = "front"
+        if "signal_read" in out:
+            out["signal_read"]["camera"] = "front"
         if narrow is not None and detections is not None:
             _, far = self.detector.detect_or_status(narrow)
             if far is not None:
                 lights = [d for d in far if d["kind"] == "traffic_light"]
                 nw, nh = narrow.size
                 narrow_cam = CameraModel(width=nw, height=nh, hfov_deg=NARROW_HFOV_DEG)
-                seen = perceive(lights, np.asarray(narrow.convert("RGB")), narrow_cam)["signal"]
-                seen = _within_narrow_range(seen, narrow_cam)
-                wide = out["signal"]
-                if wide["state"] == "unknown" and not wide.get("conflict"):
-                    if seen["state"] != "unknown" or seen.get("conflict"):
-                        out["signal"] = {**seen, "camera": "narrow"}
-                elif seen["state"] != "unknown" and seen["state"] != wide["state"]:
-                    # The narrow camera may be reading the next junction: two readings that
-                    # disagree give no answer.
-                    out["signal"] = {"state": "unknown", "conf": 0.0, "conflict": sorted({seen["state"], wide["state"]}), "camera": "both"}
+                seen = perceive(lights, np.asarray(narrow.convert("RGB")), narrow_cam)
+                out["signal"] = _merge_narrow(out["signal"], _within_narrow_range(seen["signal"], narrow_cam))
+                if "signal_read" in out and "signal_read" in seen:
+                    out["signal_read"] = _merge_narrow(out["signal_read"], _within_narrow_range(seen["signal_read"], narrow_cam))
         out["status"] = status  # loading / failed / ready: why a frame has no detections
         out["latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
         return out
+
+
+def _merge_narrow(wide: Dict[str, Any], seen: Dict[str, Any]) -> Dict[str, Any]:
+    """The wide camera's reading, or the narrow one's when the wide one has none. The narrow
+    camera may be reading the next junction: two readings that disagree give no answer."""
+    if wide["state"] == "unknown" and not wide.get("conflict"):
+        if seen["state"] != "unknown" or seen.get("conflict"):
+            return {**seen, "camera": "narrow"}
+        return wide
+    if seen["state"] != "unknown" and seen["state"] != wide["state"]:
+        return {"state": "unknown", "conf": 0.0, "conflict": sorted({seen["state"], wide["state"]}), "camera": "both"}
+    return wide
 
 
 _perception: Optional[Perception] = None

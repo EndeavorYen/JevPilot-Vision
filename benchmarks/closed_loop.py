@@ -37,7 +37,7 @@ MODES = ("privileged", "vision", "vision-map", "heuristic")
 # #78: "vision-map" is the old Vision kept as a baseline (cameras, map privileged); "vision" is the
 # Vision losing its map and localization privilege stage by stage. Its runs record the stage; a
 # "vision" row without one predates the split and is reported as Vision (map).
-VISION_STAGE = 2  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's. 1: box flow (#75); 2: localization error (#79)
+VISION_STAGE = 3  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's. 1: box flow (#75); 2: localization error (#79); 3: lamp cells (#76)
 LOC_SIGMA_DEFAULT = 0.3  # = semif-layer.js LOC.sigma's default; every new-Vision run names its sigma
 DEFAULT_ROUTES = ("festival", "harbour", "pass")
 DEFAULT_MODES = ("privileged", "vision")

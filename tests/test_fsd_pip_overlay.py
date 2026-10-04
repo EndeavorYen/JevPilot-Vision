@@ -549,7 +549,18 @@ if (spec.cmd === "cstats") {
   at("green", 700);     // a green taken 0.7 s ago
   nowMs += 200; at("unknown", 100);    // 0.9 s after it was taken: no longer trusted
   at("green", -500);    // evidence from the future (another page's clock) is not fresh
-  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen, sent }));
+  // #76: the new Vision reads which lamp cell is lit (signal_read); Vision (map) the hue threshold
+  nowMs += 5000;
+  window.SEMIF_VISION = { perception: { backend: "rtdetr", status: "ready", signal: { state: "unknown" }, signal_read: { state: "green" } } };
+  window.SEMIF_VISION_AT = nowMs - 100;
+  window.SEMIF_UPDATE_SEEN();
+  const lampSent = window.SEMIF_SEEN_SENT;
+  nowMs += 5000;  // a server without signal_read: the hue threshold's reading
+  window.SEMIF_VISION = { perception: { backend: "rtdetr", status: "ready", signal: { state: "red" } } };
+  window.SEMIF_VISION_AT = nowMs - 100;
+  window.SEMIF_UPDATE_SEEN();
+  const fallbackSent = window.SEMIF_SEEN_SENT;
+  process.stdout.write(JSON.stringify({ mode: window.SEMIF_DRIVE_MODE, body: shaped, seen, sent, lampSent, fallbackSent }));
 } else if (spec.cmd === "dom") {
   process.stdout.write(JSON.stringify(out));
 } else if (spec.cmd === "project") {
@@ -1379,7 +1390,7 @@ def test_issue78_review_vision_map_names_itself_and_survives_a_trip_through_heur
     trip = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["vision-map round trip"]
     assert trip["mapSaid"] == "Vision (map) mode, detector failed, holding to a crawl"
     assert trip["viaHeuristic"] == "heuristic"
-    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 2)
+    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 3)
 
 
 def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
@@ -1396,7 +1407,7 @@ def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
     assert click["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["id"] == "vision"
     # #75: the new Vision names its stage, so the server applies that stage's rules
-    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 2}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 3}
 
 
 def test_switching_mode_from_the_indicator_changes_the_decision_request():
@@ -1406,7 +1417,7 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     out = _run({"cmd": "mode", "mode": "privileged"})
     steps = {s["at"]: s for s in out["steps"]}
     assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
-    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 2}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 3}
     assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["checked"] == "true"
     # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
@@ -1427,7 +1438,7 @@ def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
     steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
     assert steps["click vision-map"]["reads"] == "Objects & signals from cameras · map privileged"
     # #78/#75: the new Vision says which stage it is at and what is still privileged
-    assert steps["click vision"]["reads"] == "Cameras & box flow · noisy localization · stage 2 · map privileged"
+    assert steps["click vision"]["reads"] == "Cameras, flow & lamp cells · noisy pose · stage 3 · map privileged"
     assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
     assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
 
@@ -1642,4 +1653,11 @@ def test_issue79_vision_map_and_a_zero_spread_keep_the_true_pose():
         assert first["candidates"]["keep"][2] == 0.6
     # review: an empty ?loc_sigma= is no value, not zero
     assert _run({"cmd": "locnoise", "mode": "vision", "query": "loc_sigma="})["params"]["sigma"] == 0.3
+
+
+def test_issue76_the_new_vision_remembers_the_lamp_cells_reading_and_vision_map_the_hue_one():
+    out = _run({"cmd": "shape", "vision": "1", "mode": "vision"})
+    assert out["lampSent"] == "green"
+    assert out["fallbackSent"] == "red", "no signal_read: the hue reading"
+    assert _run({"cmd": "shape", "vision": "1", "mode": "vision-map"})["lampSent"] is None
 

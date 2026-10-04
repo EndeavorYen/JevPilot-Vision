@@ -58,6 +58,7 @@ STEP_S = 0.1
 # The new Vision's stages (#85) this server knows; a request names the stage its page is at
 # (semif-layer.js SEMIF_VISION_STAGE). Vision (map) and requests without a stage are stage 0.
 FLOW_STAGE = 1  # box flow (#75): TTC from expansion, cut-ins from bearing
+LIGHT_STAGE = 3  # lamp cells (#76): the light is perception's signal_read, not the hue threshold alone
 EVENT_TTC_S = 6.0  # chosen: twice the sweep's 3 s horizon, so the arbiter hears of it first
 CUT_IN_MPS = 0.5  # chosen: a lane change crosses ~3.5 m in 2-7 s, i.e. 0.5-1.75 m/s sideways
 FLOW_DISAGREE_MPS, FLOW_DISAGREE_SHARE = 2.0, 0.5  # chosen: logged only, nothing acts on it
@@ -251,7 +252,8 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
         return payload
     out = copy.deepcopy(payload)
     state = out["state"]
-    flow = (_num(payload.get("vision_stage")) or 0) >= FLOW_STAGE
+    stage = _num(payload.get("vision_stage")) or 0
+    flow = stage >= FLOW_STAGE
     for key in PRIVILEGED:
         state.pop(key, None)
     ok, perception = _perception_ok(state)
@@ -259,7 +261,8 @@ def prepare(payload: Dict[str, Any]) -> Dict[str, Any]:
     # The page remembers a light it read (semif-layer.js updateSeenSignal); its memory counts only
     # while the evidence is fresh.
     remembered = state.get("seen_signal") if ok else None
-    reading = (perception.get("signal") or {}).get("state") if ok else None
+    read = perception.get("signal_read") if stage >= LIGHT_STAGE and isinstance(perception.get("signal_read"), dict) else None
+    reading = ((read or perception.get("signal")) or {}).get("state") if ok else None
     if reading == "green" and (_num(state.get("vision_age_ms")) or 0.0) > GREEN_TRUST_MS:
         reading = None  # an amber could have come and gone since (semif-layer.js SEEN_MEMORY_MS)
     seen = remembered if remembered in ("red", "amber", "green") else reading if reading in ("red", "amber", "green") else None
