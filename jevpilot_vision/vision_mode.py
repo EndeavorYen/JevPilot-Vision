@@ -38,10 +38,17 @@ PRIVILEGED = (
 
 STALE_MS = 1500.0  # perception older than this is no perception
 GREEN_TRUST_MS = 800.0  # a green reading, from when its frame was taken
+# The car's own model, from the bundle (tests/test_bundle_consistency.py checks every number, #61).
 WHEELBASE_M = 2.7
+STEER_RATE = 1.8  # rad/s the wheels turn at most (w())
+ACCEL_MPS2, BRAKE_MPS2 = 5.0, 8.0  # speed toward the target (w())
 CAMERA_AHEAD_M = 0.15  # the onboard camera sits this far ahead of the car's centre
-EGO_HALF = (2.375, 0.95)  # half length, half width
-OBJECT_HALF = {"car": (2.1, 0.95), "motorcycle": (1.15, 0.4), "pedestrian": (0.3, 0.3)}
+EGO_HALF = (2.375, 0.95)  # half length, half width: the hero's 4.75 x 1.9 m box
+OBJECT_HALF = {  # the bundle's traffic (4.2 x 1.9, motorcycle 2.3 x 0.8) and walkers (0.6 x 0.6)
+    "car": (2.1, 0.95),
+    "motorcycle": (1.15, 0.4),
+    "pedestrian": (0.3, 0.3),
+}
 MARGIN = (0.4, 0.25)
 LANE_HALF_M = 1.75  # traffic this close to our line is in our lane: it moves away or stands
 HORIZON_S = 3.0
@@ -79,15 +86,20 @@ def _curvature(steer: float, speed: float) -> float:
     return math.tan(steer * x) / WHEELBASE_M
 
 
-def _model_path(target: float, steer: float, speed: float) -> Iterable[tuple[float, float, float, float]]:
+def _model_path(
+    target: float, steer: float, speed: float, wheel: Optional[float] = None
+) -> Iterable[tuple[float, float, float, float]]:
     """(t, ahead, right, heading) of the car's centre at a constant steer, from the bundle's w().
+    `wheel` is where the wheels point now; unknown, they are taken as already at `steer`.
     Only a fallback: the planner re-steers to follow its lane (see `candidate_paths`)."""
     ahead = right = heading = 0.0
     v = speed
+    wheel = steer if wheel is None else wheel
     t = 0.0
     while t < HORIZON_S - 1e-9:
-        v += max(-8.0 * STEP_S, min(5.0 * STEP_S, target - v))
-        heading += v * _curvature(steer, v) * STEP_S
+        v += max(-BRAKE_MPS2 * STEP_S, min(ACCEL_MPS2 * STEP_S, target - v))
+        wheel += max(-STEER_RATE * STEP_S, min(STEER_RATE * STEP_S, steer - wheel))
+        heading += v * _curvature(wheel, v) * STEP_S
         ahead += math.cos(heading) * v * STEP_S
         right += math.sin(heading) * v * STEP_S
         t += STEP_S
