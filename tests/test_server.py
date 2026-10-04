@@ -1152,3 +1152,73 @@ def test_issue64_threads_racing_for_the_first_http_client_share_one(monkeypatch)
     for th in threads:
         th.join()
     assert len(made) == 1 and all(c is made[0] for c in got)
+
+
+# ---- #62: safe defaults ---------------------------------------------------------------------
+
+def test_issue62_the_server_listens_on_this_machine_only_by_default():
+    import demo.server as server_module
+
+    args = server_module.build_parser().parse_args([])
+    assert args.host == "127.0.0.1"
+    assert server_module.build_parser().parse_args(["--host", "0.0.0.0"]).host == "0.0.0.0"
+
+
+def test_issue62_no_cors_by_default_and_only_the_named_origin_when_asked():
+    import demo.server as server_module
+    from fastapi import FastAPI
+
+    plain = TestClient(app).get("/health", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in plain.headers
+    assert server_module.cors_origins([], "") == []
+    assert server_module.cors_origins(["http://a.test"], "http://b.test, http://c.test") == ["http://a.test", "http://b.test", "http://c.test"]
+    other = FastAPI()
+    other.get("/ping")(lambda: {"ok": True})
+    server_module.configure_cors(other, ["http://a.test"])
+    client = TestClient(other)
+    assert client.get("/ping", headers={"Origin": "http://a.test"}).headers.get("access-control-allow-origin") == "http://a.test"
+    assert "access-control-allow-origin" not in client.get("/ping", headers={"Origin": "http://evil.example"}).headers
+    # review: the env list and the CLI list end up in one layer, so a preflight from either is allowed
+    merged = FastAPI()
+    merged.post("/ping")(lambda: {"ok": True})
+    server_module.configure_cors(merged, ["http://b.test"])  # SEMIF_CORS_ORIGINS at import
+    server_module.configure_cors(merged, ["http://a.test", "http://b.test"])  # main(), before startup
+    assert sum(m.cls.__name__ == "CORSMiddleware" for m in merged.user_middleware) == 1
+    preflight = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"}
+    for origin in ("http://a.test", "http://b.test"):
+        assert TestClient(merged).options("/ping", headers={"Origin": origin, **preflight}).status_code == 200
+
+
+def _png_data_url(width: int, height: int) -> str:
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (width, height), (90, 90, 90)).save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def test_issue62_oversized_vision_uploads_are_refused_before_decoding(monkeypatch):
+    from jevpilot_vision import http
+
+    reset_vision_slot()
+    decoded = []
+    monkeypatch.setattr(http, "_infer_latest_jpeg", lambda image: decoded.append(image) or {"signal": "unknown", "event": "", "backend": "stub"})
+    client = TestClient(app)
+    huge = "data:image/jpeg;base64," + "A" * (http.MAX_IMAGE_CHARS + 10)
+    assert client.post("/v1/vision", json={"image": huge}).status_code == 413
+    assert client.post("/v1/vision", json={"frames": {"front": _tiny_jpeg_data_url(), "rear": huge}}).status_code == 413
+    big = _png_data_url(4000, 3000)
+    assert len(big) < http.MAX_IMAGE_CHARS, "a flat image compresses small: the pixel check must catch it"
+    assert client.post("/v1/vision", json={"image": big}).status_code == 422
+    assert not decoded, "nothing oversized reached the encoder"
+    # review: a header past PIL's own bomb limit is refused here too, not left for the decoder
+    from PIL import Image
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    assert client.post("/v1/vision", json={"image": _png_data_url(100, 100)}).status_code == 422
+    monkeypatch.undo()
+    monkeypatch.setattr(http, "_infer_latest_jpeg", lambda image: decoded.append(image) or {"signal": "unknown", "event": "", "backend": "stub"})
+    ok = client.post("/v1/vision", json={"image": _png_data_url(640, 360)})
+    assert ok.status_code == 200

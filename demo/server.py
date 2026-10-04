@@ -1040,13 +1040,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def cors_origins(cli: List[str], env: str) -> List[str]:
+    """Origins allowed to call this server from another page: --cors-origin, then SEMIF_CORS_ORIGINS."""
+    return [o for o in [*cli, *(part.strip() for part in (env or "").split(","))] if o]
+
+
+def configure_cors(target: FastAPI, origins: List[str]) -> None:
+    """No CORS unless asked (#62): the page is served by this same server, so it needs none.
+
+    Replaces any earlier CORS layer: two stacked layers would each refuse the other's origins.
+    """
+    target.user_middleware = [m for m in target.user_middleware if m.cls is not CORSMiddleware]
+    if origins:
+        target.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+
+
+configure_cors(app, cors_origins([], os.environ.get("SEMIF_CORS_ORIGINS", "")))
 
 
 @app.middleware("http")
@@ -1193,17 +1202,25 @@ async def root():
     return HTMLResponse("<h1>SemIf Decision Server Online</h1><p>Visit /health or /jevpilot/</p>")
 
 
-def main():
-    global engine
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="JevPilot Decision Server with SemArbiter arbitration")
-    parser.add_argument("--host", default="0.0.0.0", help="Host address to bind")
+    # This machine only by default (#62); pass --host 0.0.0.0 to serve the network.
+    parser.add_argument("--host", default="127.0.0.1", help="Host address to bind (0.0.0.0 to serve the network)")
+    parser.add_argument("--cors-origin", action="append", default=[], help="An origin allowed to call this server from another page (repeatable)")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind")
     parser.add_argument("--arbiter-url", default=DEFAULT_SEMARBITER_URL, help="SemArbiter HTTP URL for live decisions")
     parser.add_argument("--mock", action="store_true", help="Run with mock heuristic engine (zero GPU)")
     parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct", help=argparse.SUPPRESS)
     parser.add_argument("--device", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--no-graph", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    global engine
+    args = build_parser().parse_args()
+    if args.cors_origin:
+        configure_cors(app, cors_origins(args.cors_origin, os.environ.get("SEMIF_CORS_ORIGINS", "")))
 
     engine = DecisionEngine(
         model_name=args.model,

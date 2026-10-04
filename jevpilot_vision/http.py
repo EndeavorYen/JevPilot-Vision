@@ -131,6 +131,32 @@ def _perceive_front(perception: Any, decode: Any, front: str, narrow: Optional[s
 _CAMERA_NAMES = frozenset({"front", "right", "rear", "left", "narrow"})
 
 
+# Upload limits (#62). The page sends at most 640 x 360 JPEGs; anything far past that is refused
+# before a decoder sees it: by size of the text, then by the pixel count in the image's header.
+MAX_IMAGE_CHARS = 1_500_000
+MAX_IMAGE_PIXELS = 1920 * 1080
+
+
+def _check_upload(images: List[str]) -> None:
+    import base64
+    import io
+
+    from PIL import Image
+
+    for image in images:
+        if len(image) > MAX_IMAGE_CHARS:
+            raise HTTPException(status_code=413, detail=f"image larger than {MAX_IMAGE_CHARS} characters")
+        try:
+            with Image.open(io.BytesIO(base64.b64decode(image.split(",", 1)[-1]))) as im:
+                width, height = im.size  # the header only; nothing is decoded yet
+        except Image.DecompressionBombError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception:
+            continue  # unreadable images take the encoder's own error path
+        if width * height > MAX_IMAGE_PIXELS:
+            raise HTTPException(status_code=422, detail=f"image of {width}x{height} exceeds {MAX_IMAGE_PIXELS} pixels")
+
+
 def _surround_frames(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
     frames = payload.get("frames")
     if not isinstance(frames, dict) or not isinstance(frames.get("front"), str):
@@ -147,6 +173,7 @@ async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
         image: Any = _surround_frames(payload)
         if image is None:
             return {"error": "frames need a front camera and a JPEG (data URL or base64) per camera"}
+        _check_upload(list(image.values()))
         t_ms = payload.get("t_ms")
         if isinstance(t_ms, (int, float)) and not isinstance(t_ms, bool):
             image["_captured_ms"] = float(t_ms)
@@ -154,6 +181,7 @@ async def vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
         image = payload.get("image") or payload.get("image_base64")
         if not isinstance(image, str) or len(image) < 64:
             return {"error": "image (data URL or base64) required"}
+        _check_upload([image])
     start, last, last_gen = _vision_slot.submit(image)
     if not start:
         body: Dict[str, Any] = {}
