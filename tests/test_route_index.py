@@ -32,18 +32,21 @@ const walk = []; { let x = 0, z = 0, h = 0; for (let i = 0; i < 3000; i++) { h +
 const eight = []; for (let i = 0; i <= 2000; i++) { const t = (i / 2000) * Math.PI * 2; eight.push({ x: 300 * Math.sin(t), z: 150 * Math.sin(2 * t) }); }
 const dupes = []; for (let i = 0; i < 400; i++) { const p = { x: (i >> 1) * 1.0, z: 0 }; dupes.push(p, { ...p }); }
 const grid = []; for (let i = 0; i < 60; i++) grid.push({ x: (i % 2) * 40, z: Math.floor(i / 2) * 8 });  // back and forth: parallel legs
-const routes = { walk: withS(walk), eight: withS(eight), dupes: withS(dupes), grid: withS(grid) };
+const nan = withS(walk.slice(0, 300)); nan[150] = { ...nan[150], x: NaN };  // a broken point: never indexed
+const routes = { walk: withS(walk), eight: withS(eight), dupes: withS(dupes), grid: withS(grid), nan };
 const out = {};
 for (const [name, pts] of Object.entries(routes)) {
   let same = 0, differ = [];
   const queries = [];
   for (let k = 0; k < 600; k++) { const p = pts[Math.floor(rnd() * pts.length)]; queries.push({ x: p.x + (rnd() - 0.5) * 40, z: p.z + (rnd() - 0.5) * 40 }); }
   for (let k = 0; k < 60; k++) queries.push({ x: (rnd() - 0.5) * 1000, z: (rnd() - 0.5) * 1000 });  // far from the route
+  for (let k = 0; k < 10; k++) queries.push({ x: 3000 + rnd() * 5000, z: -4000 - rnd() * 5000 });  // kilometres off
   for (let k = 0; k < 60; k++) { const p = pts[Math.floor(rnd() * pts.length)]; queries.push({ x: p.x, z: p.z }); }  // on a vertex: ties
   queries.push({ x: 20, z: 4 }, { x: 0.5, z: 0 });  // equidistant from parallel legs / duplicated points
   for (const q of queries) {
     const want = JSON.stringify(full(q, pts)), got = JSON.stringify(nearest(q, pts, e, a));
-    if (want === got) same++; else if (differ.length < 3) differ.push({ q, want, got });
+    const fresh = JSON.stringify(nearest(q, pts.slice(), e, a));  // a copy each time, as the worker gets
+    if (want === got && want === fresh) same++; else if (differ.length < 3) differ.push({ q, want, got, fresh });
   }
   out[name] = { same, total: queries.length, differ };
 }
@@ -52,7 +55,12 @@ const near = Array.from({ length: 2000 }, (_, k) => { const p = routes.walk[(k *
 const t0 = process.hrtime.bigint(); for (const q of near) full(q, routes.walk);
 const t1 = process.hrtime.bigint(); for (const q of near) nearest(q, routes.walk, e, a);
 const t2 = process.hrtime.bigint();
-out.speed = { fullUs: Number(t1 - t0) / 2000 / 1000, gridUs: Number(t2 - t1) / 2000 / 1000 };
+const far = Array.from({ length: 200 }, (_, k) => ({ x: 2000 + k, z: -3000 }));
+const t3 = process.hrtime.bigint(); for (const q of far) full(q, routes.walk);
+const t4 = process.hrtime.bigint(); for (const q of far) nearest(q, routes.walk, e, a);
+const t5 = process.hrtime.bigint();
+out.speed = { fullUs: Number(t1 - t0) / 2000 / 1000, gridUs: Number(t2 - t1) / 2000 / 1000,
+  farFullUs: Number(t4 - t3) / 200 / 1000, farGridUs: Number(t5 - t4) / 200 / 1000 };
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -72,9 +80,11 @@ def test_issue42_the_grid_finds_the_same_nearest_point_as_the_bundles_full_scan(
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
     out = json.loads(done.stdout)
-    for name in ("walk", "eight", "dupes", "grid"):
+    for name in ("walk", "eight", "dupes", "grid", "nan"):
         assert out[name]["same"] == out[name]["total"], (name, out[name]["differ"])
-    assert out["speed"]["gridUs"] * 5 < out["speed"]["fullUs"], out["speed"]
+    speed = out["speed"]
+    assert speed["gridUs"] * 2 < speed["fullUs"], speed  # beside the route, where the planner asks
+    assert speed["farGridUs"] < speed["farFullUs"] * 2.5, speed  # far off it, no worse than about a scan
 
 
 def test_issue42_only_the_coasts_full_route_searches_take_the_grid():

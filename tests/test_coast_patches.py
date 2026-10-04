@@ -225,7 +225,6 @@ COAST_PATCHES = [
     ("coast-worker-version", MAIN,
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js`",
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=HASH`"),
-    # --- the page's bundle entry loads main with a version too (#63): preload list and import
     # --- the nearest point on a route from a grid, the same answer as the full scan (#42 item 4,
     # semif-route-index.js): coast only, and only searches over the whole route (no start hint)
     ("coast-nearest", MAIN,
@@ -234,6 +233,7 @@ COAST_PATCHES = [
     ("coast-nearest-worker", WORKER,
      'function l(t,n,r=0){let i={distance:1/0,index:0,t:0,x:0,z:0,s:0};',
      'function l(t,n,r=0){if(!r&&globalThis.SEMIF_NEAREST&&String(globalThis.SEMIF_WORLD_TYPE??``).startsWith(`coast`))return globalThis.SEMIF_NEAREST(t,n,e,a);let i={distance:1/0,index:0,t:0,x:0,z:0,s:0};'),
+    # --- the page's bundle entry loads main with a version too (#63): preload list and import
     ("asset-version-preload", INDEX,
      '"assets/main-CvLEeHjW.js"',
      '"assets/main-CvLEeHjW.js?v=HASH"'),
