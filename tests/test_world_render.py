@@ -560,12 +560,28 @@ def test_issue58_the_coasts_static_world_sets_its_matrices_once_and_only_moving_
         "window.SEMIF_SIM = { world: { type: 'city' } }; const city = new Obj(); city.matrixAutoUpdate = false; api.built({ scene: city });"
         "out({ scene: scene.matrixAutoUpdate, city: city.matrixAutoUpdate, total: all.length,"
         "  frozen: all.filter((n) => n.frozen).length, wrong: all.filter((n) => n.frozen === n.moving).length,"
-        "  sky: named('semif-sky'), wheel: named('semif-festival-wheel'), root: named('semif-world') });"
+        "  sky: named('semif-sky'), wheel: named('semif-festival-wheel'), root: named('semif-world'),"
+        "  boats: (() => { const props = root.children.find((c) => c.name === 'semif-props'); return props.userData.boats.map((b) => b.matrixAutoUpdate !== false); })(),"
+        "  gondolas: (() => { const find = (n) => n.name === 'semif-festival-wheel' ? n : (n.children || []).map(find).find(Boolean); return find(root).userData.cars.length; })() });"
     )
     assert got["scene"] is False, "the scene no longer recomputes everything under it"
     assert got["city"] is True, "an old map's scene updates as before"
     assert got["wrong"] == 0, "every static node frozen, every moving one not"
     assert got["root"]["frozen"] and not got["sky"]["frozen"]
     assert got["wheel"]["frozen"], "the wheel's frame stands still; its rim and gondolas move"
-    assert got["total"] - got["frozen"] <= 30, got  # the sky, about ten boats, the rim and its gondolas
+    assert got["boats"] and all(got["boats"]), "every boat bobs: none frozen"
+    assert got["total"] - got["frozen"] == 1 + len(got["boats"]) + 1 + got["gondolas"], got  # sky, boats, rim, gondolas
+
+
+def test_issue58_review_the_bundles_own_car_keeps_its_wheels_turning_when_frozen():
+    got = _render(
+        "const F = await mod('freeze.js'); const car = new Obj(); car.name = 'model-y';"
+        "for (const n of ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']) { const p = new Obj(); p.name = n; const spin = new Obj(); const hub = new Obj(); p.add(spin, hub); car.add(p); }"
+        "const body = new Obj(); body.name = 'body'; car.add(body); F.freezeStatic(car);"
+        "out({ car: car.matrixAutoUpdate, body: body.matrixAutoUpdate, pivots: car.children.slice(0, 4).map((p) => [p.matrixAutoUpdate, p.children[0].matrixAutoUpdate, p.children[1].matrixAutoUpdate]) });"
+    )
+    assert got["car"] is False and got["body"] is False
+    for pivot, spin, hub in got["pivots"]:
+        assert pivot is not False and spin is not False, "the bundle steers the pivot and spins its first child"
+        assert hub is False, "the rest of the wheel keeps its place in the pivot"
 

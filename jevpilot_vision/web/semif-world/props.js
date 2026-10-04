@@ -98,7 +98,6 @@ export function buildProps(spots) {
   }
   boats = spots.boats.map((b, i) => {
     const boat = new T.Group();
-    boat.userData.moves = true; // bobs (updateProps)
     const hull = new T.Mesh(new T.BoxGeometry(2.4, 1.1, 7).scale(b.size, b.size, b.size), material(i % 3 ? PALETTE.trim : PALETTE.festival.blue, { roughness: 0.5 }));
     const bow = new T.Mesh(new T.ConeGeometry(1.2, 2.2, 4).rotateX(Math.PI / 2).rotateZ(Math.PI / 4).scale(b.size, 0.8 * b.size, b.size).translate(0, 0, -4.6 * b.size), hull.material);
     const cabin = new T.Mesh(new T.BoxGeometry(1.8, 1.3, 2.2).scale(b.size, b.size, b.size).translate(0, 1.1 * b.size, 0.8 * b.size), material(PALETTE.villa, { roughness: 0.6 }));
@@ -107,7 +106,7 @@ export function buildProps(spots) {
       boat.add(part);
     }
     boat.rotation.y = b.heading;
-    boat.userData = { base: SEA_LEVEL + 0.2, phase: b.phase };
+    boat.userData = { base: SEA_LEVEL + 0.2, phase: b.phase, moves: true }; // bobs (updateProps)
     boat.position.set(b.x, boat.userData.base, b.z);
     group.add(boat);
     return boat;

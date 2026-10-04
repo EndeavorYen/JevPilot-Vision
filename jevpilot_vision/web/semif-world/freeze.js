@@ -6,9 +6,16 @@
 // place in it are still frozen, and follow it through their world matrices.
 //
 // Their matrices are computed here, once. Whoever moves a node after it is built must mark it
-// `moves` when building it.
+// `moves` when building it. The bundle's own cars (the Model Y) carry no marks, so its convention
+// is honoured here: it steers each `wheel_fl/fr/rl/rr` pivot and spins the pivot's first child.
+const WHEEL = /^wheel_[fr][lr]$/;
+
 export function freezeStatic(node) {
   if (!node) return;
+  if (WHEEL.test(node.name || "")) {
+    node.userData.moves = true;
+    if (node.children?.[0]) node.children[0].userData.moves = true;
+  }
   if (!node.userData?.moves) {
     node.matrixAutoUpdate = false;
     node.updateMatrix?.();
