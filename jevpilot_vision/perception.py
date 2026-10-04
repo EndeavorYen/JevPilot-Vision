@@ -361,6 +361,171 @@ def _read_head(lights: List[Dict[str, Any]], image: np.ndarray, camera: "CameraM
     return {**out, "state": "unknown", "conf": 0.0}
 
 
+# Lane lines from the front camera (#80, the new Vision's de-mapping): the painted lines read in a
+# bird's-eye resampling of the road, the flat-ground camera model inverted (the same known camera
+# height the ranging uses, so renderer-bound like it). Chosen, then checked against the map's lane
+# on tuning-seed captures (benchmarks/eval_lanes.py).
+LANE_NEAR_M, LANE_FAR_M, LANE_STEP_M = 4.0, 24.0, 0.5  # rows of the bird's-eye view
+LANE_SIDE_M, LANE_CELL_M = 8.0, 0.1  # half its width and its column pitch
+LANE_MARK_MIN = 0.18  # a marking is this much brighter (luma 0..1) than the road 0.5 m either side
+LANE_MARK_MAX_M = 0.5  # and no wider than this (coast lines are 0.1-0.2 m)
+LANE_MIN_POINTS = 8  # rows a line needs to count
+LANE_WIDTH_M = (2.5, 8.0)  # a lane narrower or wider than this is two lines that are not one lane
+LANE_MAX_SLOPE = 0.3  # a lane line runs within about 17 degrees of the car (crosswalk stripes do not)
+LANE_KERB_M = 0.8  # a kerb: the road turns bright (pavement) and stays bright at least this far
+
+
+def _birdseye(image: np.ndarray, camera: "CameraModel") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(luma[rows, cols], ahead_m[rows], right_m[cols]) of the ground in front, nearest pixel."""
+    h, w = image.shape[0], image.shape[1]
+    ahead = np.arange(LANE_NEAR_M, LANE_FAR_M + 1e-6, LANE_STEP_M)
+    right = np.arange(-LANE_SIDE_M, LANE_SIDE_M + 1e-6, LANE_CELL_M)
+    v = camera.cy + camera.height_m * camera.fx / ahead
+    u = camera.cx + right[None, :] * camera.fx / ahead[:, None]
+    vi = np.clip(np.round(v).astype(int), 0, h - 1)[:, None].repeat(len(right), axis=1)
+    ui = np.round(u).astype(int)
+    inside = (ui >= 0) & (ui < w) & (v[:, None] < h)
+    rgb = image[vi, np.clip(ui, 0, w - 1), :3].astype(np.float32) / 255.0
+    luma = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
+    luma[~inside] = np.nan
+    return luma, ahead, right
+
+
+def _mark_points(luma: np.ndarray, ahead: np.ndarray, right: np.ndarray) -> List[tuple[float, float]]:
+    """(ahead, right) of each marking crossing: brighter than the road 0.5 m to both sides, narrow."""
+    k = int(round(0.5 / LANE_CELL_M))
+    pts = []
+    for r, row in enumerate(luma):
+        side = np.full_like(row, np.nan)
+        side[k:-k] = np.fmin(row[: -2 * k], row[2 * k:])  # the darker of the two sides
+        bright = (row - side) > LANE_MARK_MIN
+        c = 0
+        n = len(row)
+        while c < n:
+            if not bright[c]:
+                c += 1
+                continue
+            start = c
+            while c < n and bright[c]:
+                c += 1
+            if (c - start) * LANE_CELL_M <= LANE_MARK_MAX_M:
+                pts.append((float(ahead[r]), float(right[start] + (c - 1 - start) * LANE_CELL_M / 2.0)))
+    return pts
+
+
+def _kerb_points(luma: np.ndarray, ahead: np.ndarray, right: np.ndarray) -> List[tuple[float, float]]:
+    """(ahead, right) where the road meets a bright kerb or pavement: the first column, going out
+    from the car on each side, that is LANE_MARK_MIN brighter than the road at the car and stays so
+    for LANE_KERB_M (a painted line is narrower, and _mark_points reads it)."""
+    run = int(round(LANE_KERB_M / LANE_CELL_M))
+    centre = int(np.argmin(np.abs(right)))
+    pts = []
+    for r, row in enumerate(luma):
+        road = np.nanmedian(row[max(0, centre - 10) : centre + 11])
+        if not np.isfinite(road):
+            continue
+        bright = (row - road) > LANE_MARK_MIN
+        for step in (1, -1):
+            c = centre
+            while 0 <= c < len(row) and 0 <= c + step * run < len(row):
+                if bright[c] and all(bright[c + step * k] for k in range(run)):
+                    pts.append((float(ahead[r]), float(right[c]) - step * LANE_CELL_M / 2.0))
+                    break
+                c += step
+    return pts
+
+
+def _fit_lines(pts: List[tuple[float, float]]) -> List[Dict[str, float]]:
+    """Marking points grouped into lines (by where they would cross the car's axis) and each
+    fitted right = a + b * ahead + c * ahead^2, least squares, one outlier pass."""
+    lines = []
+    remaining = sorted(pts, key=lambda p: p[1])
+    while remaining:
+        # seed with the nearest-ahead points and grow along a straight guess
+        seed = remaining[0][1]
+        group = [p for p in remaining if abs(p[1] - seed) <= 0.6 + 0.04 * p[0]]
+        first = set(group) | {remaining[0]}  # always taken out: every pass leaves fewer points
+        if len(group) < LANE_MIN_POINTS:
+            remaining = [p for p in remaining if p not in first]
+            continue
+        for _ in range(2):
+            A = np.array([[1.0, a, a * a] for a, _ in group])
+            y = np.array([r for _, r in group])
+            coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+            fit = lambda a: coef[0] + coef[1] * a + coef[2] * a * a  # noqa: E731
+            group = [p for p in remaining if abs(p[1] - fit(p[0])) <= 0.35]
+            if len(group) < LANE_MIN_POINTS:
+                break
+        if len(group) >= LANE_MIN_POINTS and abs(coef[1] + 2 * coef[2] * LANE_NEAR_M) <= LANE_MAX_SLOPE:
+            resid = float(np.sqrt(np.mean([(r - fit(a)) ** 2 for a, r in group])))
+            lines.append({"a": float(coef[0]), "b": float(coef[1]), "c": float(coef[2]), "points": len(group), "resid": resid})
+        taken = first | set(group)
+        remaining = [p for p in remaining if p not in taken]
+    return lines
+
+
+def lane_from_frame(image: np.ndarray, camera: "CameraModel", prior_width: Optional[float] = None) -> Dict[str, Any]:
+    """Our lane as the front camera sees it (#80): `offset_m` of the car right of the lane's centre
+    (the planner's sign), `width_m`, `heading_rad` of the lane relative to the car, `curvature` (1/m),
+    `conf` 0..1, and the two lines used (`left`, `right`: a, b, c). The pair is the lines either side
+    of the car, a lane's width apart, best supported, and, with `prior_width` (the lane's width a
+    moment ago, LaneTracker), nearest that width. No such pair: conf 0."""
+    luma, ahead, right = _birdseye(image, camera)
+    lines = _fit_lines(_mark_points(luma, ahead, right)) + _fit_lines(_kerb_points(luma, ahead, right))
+    out: Dict[str, Any] = {"conf": 0.0, "lines": len(lines)}
+    best = None
+    for left in (ln for ln in lines if ln["a"] < -0.5):
+        for right_line in (ln for ln in lines if ln["a"] > 0.5):
+            width = right_line["a"] - left["a"]
+            if not (LANE_WIDTH_M[0] <= width <= LANE_WIDTH_M[1]):
+                continue
+            score = min(left["points"], right_line["points"]) - (4.0 * abs(width - prior_width) if prior_width else 0.0)
+            if best is None or score > best[0]:
+                best = (score, left, right_line, width)
+    if best is None:
+        return out
+    _, left, right_line, width = best
+    support = min(left["points"], right_line["points"]) / len(ahead)
+    spread = max(left["resid"], right_line["resid"])
+    conf = max(0.0, min(1.0, support * 1.5)) * max(0.0, 1.0 - spread / 0.35)
+    return {
+        **out,
+        "offset_m": round(-(left["a"] + right_line["a"]) / 2.0, 3),
+        "width_m": round(width, 3),
+        "heading_rad": round(float(np.arctan((left["b"] + right_line["b"]) / 2.0)), 4),
+        "curvature": round(float(left["c"] + right_line["c"]), 5),
+        "conf": round(conf, 3),
+        "lines": len(lines),
+        "left": [round(left[k], 4) for k in ("a", "b", "c")],
+        "right": [round(right_line[k], 4) for k in ("a", "b", "c")],
+    }
+
+
+class LaneTracker:
+    """The lane between frames (#80): the width read a moment ago steers which pair of lines is the
+    lane, and a frame with no lane keeps the last one, its confidence halving each frame, for up to
+    LANE_HOLD_S; after that, no lane."""
+
+    HOLD_S = 1.5
+
+    def __init__(self) -> None:
+        self.last: Optional[Dict[str, Any]] = None
+        self.at: Optional[float] = None
+        self.width: Optional[float] = None
+
+    def update(self, image: np.ndarray, camera: "CameraModel", t: float) -> Dict[str, Any]:
+        lane = lane_from_frame(image, camera, self.width)
+        if lane["conf"] > 0:
+            self.width = lane["width_m"] if self.width is None else 0.7 * self.width + 0.3 * lane["width_m"]
+            self.last, self.at = lane, t
+            return {**lane, "held_s": 0.0}
+        if self.last is not None and self.at is not None and 0 <= t - self.at <= self.HOLD_S:
+            self.last = {**self.last, "conf": round(self.last["conf"] / 2.0, 3)}
+            return {**self.last, "held_s": round(t - self.at, 2)}
+        self.last = self.at = self.width = None
+        return lane
+
+
 # Optical flow B (#75): how a tracked box moves. Chosen, not measured; the TTC error they give is
 # measured by benchmarks/eval_perception.py on tuning-seed captures (see #75).
 FLOW_WINDOW_S = 1.5  # = Tracker.MAX_GAP_S: a track's samples older than one allowed gap are dropped
@@ -615,6 +780,10 @@ class Perception:
     def __init__(self, detector: Optional[Detector] = None) -> None:
         self.detector = detector or Detector()
         self.tracker = Tracker()
+        self.lanes = LaneTracker()
+        # Lane lines (#80) are read only when asked: nothing drives on them yet, and they cost about
+        # 6 ms of CPU per frame (benchmarks/eval_lanes.py). SEMIF_LANES=1 turns them on.
+        self.lanes_on = os.environ.get("SEMIF_LANES", "0") == "1"
 
     def front(self, image: Any, t: Optional[float] = None, narrow: Any = None, yaw_rps: float = 0.0,
               speed_mps: float = 0.0) -> Dict[str, Any]:
@@ -634,6 +803,9 @@ class Perception:
             speed_mps=speed_mps,
         )
         out["signal"]["camera"] = "front"
+        if self.lanes_on and detections is not None:  # the painted lines need no detector, but share its frames (#80)
+            out["lane"] = self.lanes.update(np.asarray(image.convert("RGB")), CameraModel(width=width, height=height),
+                                            time.monotonic() if t is None else t)
         if "signal_read" in out:
             out["signal_read"]["camera"] = "front"
         if narrow is not None and detections is not None:

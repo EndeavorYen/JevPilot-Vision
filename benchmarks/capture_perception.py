@@ -11,7 +11,7 @@ the render: the frame's encode time).
 
 Writes <out_dir>/<seed>-<route>/fNNNN.jpg and truth.json:
 [{"file", "t", "grab_ms", "ego_speed", "yaw_rps", "near": [{"type", "id", "ahead", "right", "closing", "depth"}],
-   "light": {"control", "signal", "distance_to_line_m"} or null}]
+   "light": {"control", "signal", "distance_to_line_m"} or null, "lane": {"offset_m", "half_width_m"} or null}]
 in the ego frame (metres; closing in m/s along our heading, positive when the gap shrinks).
 Tuning seeds only (benchmarks/closed_loop_seeds.json): this is for looking into perception.
 """
@@ -55,7 +55,8 @@ _HOOK = r"""
         const d0 = s.lastDecisionState || {}, inter = (d0.scene && d0.scene.intersection) || d0.intersection;
         const light = inter && /signal|traffic_light/.test(String(inter.control || ""))
           ? { control: inter.control, signal: inter.signal ?? null, distance_to_line_m: inter.stop_line_ahead_m ?? inter.distance_to_line_m ?? null } : null;
-        window.__cap.push({ light, mode: window.SEMIF_DRIVE_MODE, t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
+        const lane = d0.lane && Number.isFinite(d0.lane.offset_m) ? { offset_m: d0.lane.offset_m, half_width_m: d0.lane.half_width_m } : null;
+        window.__cap.push({ light, lane, mode: window.SEMIF_DRIVE_MODE, t: value.t_ms / 1000, grab_ms: Math.round(performance.now() - value.t_ms), ego_speed: p.speed, yaw_rps: value.yaw_rps ?? 0,
           front: value.frames.front, near });
       }
     } catch (_) {}
@@ -67,12 +68,14 @@ _HOOK = r"""
 _TAKE = "(() => { const out = window.__cap.splice(0, window.__cap.length); return JSON.stringify(out); })()"
 
 
-def capture(base: str, seed: int, route: str, seconds: int, out: Path, mode: str = "vision-map") -> int:
+def capture(base: str, seed: int, route: str, seconds: int, out: Path, mode: str = "vision-map", hour: str = "") -> int:
     out.mkdir(parents=True, exist_ok=True)
     tab = cl.open_tab(base)
     rows, n = [], 0
     try:
         url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed={seed}&world=coast:{route}&mode={mode}&gfx=medium"
+        if hour:
+            url += f"&time={hour}&daycycle=0"
         cl._js(tab["target"], f"(location.href = {json.dumps(url)}, 1)", timeout=30)
         time.sleep(2)
         ready = "!!(window.SEMIF_SIM && window.SEMIF_SIM.player && window.SEMIF_SIM.player.route && document.getElementById('scene-loader') && document.getElementById('scene-loader').hidden)"
@@ -107,6 +110,7 @@ def main() -> None:
     ap.add_argument("--base", default="http://127.0.0.1:8768")
     ap.add_argument("--mode", default="vision-map", choices=["vision-map", "privileged"],
                     help="privileged: the bundle's state holds the true light (#76)")
+    ap.add_argument("--time", default="", help="a fixed hour, e.g. 18:45 (the lanes by time of day, #80)")
     args = ap.parse_args()
     bad = [s for s in args.seeds if s not in seeds]
     if bad:
@@ -119,7 +123,7 @@ def main() -> None:
     cl.ensure_anchor(args.base)
     for seed in args.seeds:
         for route in args.routes:
-            n = capture(args.base, seed, route, args.seconds, Path(args.out).resolve() / f"{seed}-{route}", args.mode)
+            n = capture(args.base, seed, route, args.seconds, Path(args.out).resolve() / f"{seed}-{route}{('-' + args.time.replace(':', '')) if args.time else ''}", args.mode, args.time)
             print(f"seed {seed} {route}: {n} frames")
 
 
