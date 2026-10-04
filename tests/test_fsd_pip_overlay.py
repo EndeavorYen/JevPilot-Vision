@@ -232,6 +232,7 @@ if (specEarly.mode) search += (search ? "&" : "?") + "mode=" + specEarly.mode;
 if (specEarly.lag) search += (search ? "&" : "?") + "lag_ms=" + specEarly.lag;
 if (specEarly.candidates) search += (search ? "&" : "?") + "candidates=" + specEarly.candidates;
 if (specEarly.minimal) search += (search ? "&" : "?") + "minimal=" + specEarly.minimal;
+if (specEarly.query) search += (search ? "&" : "?") + specEarly.query;
 // Latency stress (#28): timers the overlay sets, and when the decision request really goes out.
 const timers = [];
 const sentAt = [];
@@ -756,6 +757,33 @@ if (spec.cmd === "cstats") {
     readSizes,
   }));
   })();
+} else if (spec.cmd === "locnoise") {
+  // #79: the drift's statistics, its seed, and what it does to a decision request
+  const N = window.SEMIF_LOC_NOISE;
+  const series = (seed, sigma, tau) => {
+    const d = N.makeDrift(seed, sigma, tau);
+    const xs = [];
+    for (let i = 0; i < 20000; i++) xs.push(d(i * 0.1));
+    return xs;
+  };
+  const a = series(7, 0.5, 5);
+  let planCalls = 0;
+  window.SEMIF_SIM = {
+    world: { seed: 42 }, time: 12.5, step() {}, traffic: [], pedestrians: [], player: { heading: 0, speed: 5 },
+    planRandom: () => { planCalls += 1; return 0.5; },
+    lastDecisionState: { lane: { offset_m: 0.4 } },
+  };
+  const inter = { control: "signal", distance_to_line_m: 20, signal: "red" };
+  const shaped = [];
+  for (let i = 0; i < 3; i++) {
+    window.SEMIF_SIM.time = 12.5 + i * 0.5;
+    shaped.push(window.SEMIF_SHAPE_DECISION({ mode: "flat", state: { candidates: {}, intersection: inter } }).state);
+  }
+  process.stdout.write(JSON.stringify({
+    params: N.params, stage: window.SEMIF_VISION_STAGE, locStage: N.stage, a,
+    same: series(7, 0.5, 5).every((x, i) => x === a[i]), other: series(8, 0.5, 5).slice(0, 5),
+    off: series(7, 0, 5).slice(0, 5), planCalls, shaped, untouched: inter.distance_to_line_m,
+  }));
 } else if (spec.cmd === "vision-order") {
   canvas.toDataURL = () => "data:image/jpeg;base64,ONBOARD";
   function makeCam() {
@@ -1347,7 +1375,7 @@ def test_issue78_review_vision_map_names_itself_and_survives_a_trip_through_heur
     trip = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}["vision-map round trip"]
     assert trip["mapSaid"] == "Vision (map) mode, detector failed, holding to a crawl"
     assert trip["viaHeuristic"] == "heuristic"
-    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 1)
+    assert (trip["mode"], trip["drive"], trip["stage"]) == ("vision-map", "vision", 2)
 
 
 def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
@@ -1364,7 +1392,7 @@ def test_issue78_vision_map_is_its_own_mode_that_drives_as_vision():
     assert click["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["id"] == "vision"
     # #75: the new Vision names its stage, so the server applies that stage's rules
-    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 1}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 2}
 
 
 def test_switching_mode_from_the_indicator_changes_the_decision_request():
@@ -1374,7 +1402,7 @@ def test_switching_mode_from_the_indicator_changes_the_decision_request():
     out = _run({"cmd": "mode", "mode": "privileged"})
     steps = {s["at"]: s for s in out["steps"]}
     assert steps["load"]["shaped"] == {"drive_mode": None, "mode": "flat", "vision_stage": None}
-    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 1}
+    assert steps["click vision"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": 2}
     assert steps["click vision-map"]["shaped"] == {"drive_mode": "vision", "mode": "flat", "vision_stage": None}
     assert steps["click vision"]["checked"] == "true"
     # Heuristic is the bundle's own geometric planner: the strategy dropdown switches to it (the
@@ -1395,7 +1423,7 @@ def test_the_indicator_says_what_each_mode_reads_not_which_is_better():
     steps = {s["at"]: s for s in _run({"cmd": "mode"})["steps"]}
     assert steps["click vision-map"]["reads"] == "Objects & signals from cameras · map privileged"
     # #78/#75: the new Vision says which stage it is at and what is still privileged
-    assert steps["click vision"]["reads"] == "Objects, signals & box flow from cameras · stage 1 · map privileged"
+    assert steps["click vision"]["reads"] == "Cameras & box flow · noisy localization · stage 2 · map privileged"
     assert steps["click privileged"]["reads"] == "Simulator state · the ablation for a decision model"
     assert steps["click heuristic"]["reads"] == "Geometric rules · no model"
 
@@ -1554,4 +1582,41 @@ def test_issue75_review_the_page_sends_its_gyro_and_odometer_across_the_heading_
     rates = [yaw for yaw, _speed in gyro[1:]]
     assert rates and all(abs(r - 0.3) < 0.01 for r in rates), rates  # also where heading jumps from pi to -pi
     assert all(speed == 9 for _yaw, speed in gyro), "the odometer reads how fast, not which way"
+
+
+# --- #79: localization error in the new Vision ---------------------------------------------------
+
+def test_issue79_the_drift_has_the_asked_spread_and_correlation_and_repeats_by_seed():
+    out = _run({"cmd": "locnoise", "mode": "vision"})
+    xs = out["a"]  # sigma 0.5 m, tau 5 s, a sample every 0.1 s for 2000 s
+    mean = sum(xs) / len(xs)
+    sd = (sum((x - mean) ** 2 for x in xs) / len(xs)) ** 0.5
+    assert sd == pytest.approx(0.5, rel=0.15) and abs(mean) < 0.15
+    lag = 50  # 5 s: one correlation time
+    cov = sum((xs[i] - mean) * (xs[i + lag] - mean) for i in range(len(xs) - lag)) / (len(xs) - lag)
+    assert cov / sd ** 2 == pytest.approx(math.exp(-1), abs=0.12), "drift, not white noise"
+    step = sum((xs[i + 1] - xs[i]) ** 2 for i in range(len(xs) - 1)) / (len(xs) - 1)
+    assert step < 0.05 * sd ** 2, "one 0.1 s step moves it a little"
+    assert out["same"] is True and out["other"] != xs[:5], "same seed, same drift; another seed, another"
+    assert out["off"] == [0, 0, 0, 0, 0], "sigma 0 is no error"
+
+
+def test_issue79_the_new_vision_drives_on_noisy_localization_and_the_planners_random_is_untouched():
+    out = _run({"cmd": "locnoise", "mode": "vision", "query": "loc_sigma=0.5&loc_tau=3"})
+    assert out["params"] == {"sigma": 0.5, "tau": 3}
+    assert out["stage"] >= out["locStage"] == 2
+    assert out["planCalls"] == 0, "its own generator: the planner's planRandom is not drawn (#55)"
+    first = out["shaped"][0]
+    assert first["lateral_offset_m"] != 0.4 and abs(first["lateral_offset_m"] - 0.4) < 2.5
+    assert first["intersection"]["distance_to_line_m"] != 20 and first["intersection"]["signal"] == "red"
+    assert out["untouched"] == 20, "the bundle's own objects are copied, not changed"
+    lat = [s["lateral_offset_m"] for s in out["shaped"]]
+    assert len(set(lat)) == 3 and max(lat) - min(lat) < 1.0, "it drifts between requests"
+
+
+def test_issue79_vision_map_and_a_zero_spread_keep_the_true_pose():
+    for spec in ({"cmd": "locnoise", "mode": "vision-map"}, {"cmd": "locnoise", "mode": "vision", "query": "loc_sigma=0"}):
+        first = _run(spec)["shaped"][0]
+        assert first["lateral_offset_m"] == 0.4
+        assert first["intersection"]["distance_to_line_m"] == 20
 

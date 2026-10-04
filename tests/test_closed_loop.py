@@ -651,3 +651,23 @@ def test_issue22_evaluations_drive_todays_density_and_a_page_on_another_is_a_set
     assert cl.validate(run, dict(got, density_seen={"traffic": "med", "people": "low"})) == "drove density {'traffic': 'med', 'people': 'low'}"
     assert cl.validate(run, dict(got, density_seen={"traffic": "low", "people": "low"})) is None
     assert cl.validate(run, got) is None, "a page from before #22 drove today's counts"
+
+
+def test_issue79_a_localization_sweep_is_planned_driven_and_reported_apart():
+    plan = cl.plan_runs([7], ["festival"], ["vision"], seconds=150, lag_ms=0, loc_sigma=0.5)
+    run = plan[0]
+    assert run["loc_sigma"] == 0.5 and run["vision_stage"] == cl.VISION_STAGE
+    assert "&loc_sigma=0.5" in cl.page_url("http://localhost:8768", run)
+    assert "loc_sigma" not in cl.page_url("http://localhost:8768", cl.plan_runs([7], ["festival"], ["vision"], seconds=150, lag_ms=0)[0])
+    assert cl.report_mode(run) == "vision · loc 0.5 m"
+    assert cl.report_mode({**run, "loc_sigma": 0.0}) == "vision · loc 0.0 m"
+    # the page reports the spread it drove with; another one is a setup failure
+    good = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "loc_sigma_seen": 0.5, "world_seen": "coast:festival",
+            "lag_seen": 0, "gfx_seen": "medium", "autopilot": True, "crash": False, "sim_time_s": 150, "hidden": False, "distance_m": 1800}
+    assert cl.validate(run, good) is None
+    assert "localization" in cl.validate(run, dict(good, loc_sigma_seen=0.3))
+    assert "loc_sigma_seen" in cl._READ
+    # a Vision (map) run with a spread is refused: only the new Vision has localization error
+    with pytest.raises(ValueError):
+        cl.plan_runs([7], ["festival"], ["vision-map"], seconds=150, lag_ms=0, loc_sigma=0.5)
+

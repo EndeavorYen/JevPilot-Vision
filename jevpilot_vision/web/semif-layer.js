@@ -12,7 +12,7 @@
   const DRIVE_MODES = ["vision", "vision-map", "privileged", "heuristic"];
   // De-mapping stages landed in ?mode=vision (#85). benchmarks/closed_loop.py VISION_STAGE records
   // the same number and checks it against this one on every run.
-  window.SEMIF_VISION_STAGE = 1; // 1: box flow (#75)
+  window.SEMIF_VISION_STAGE = 2; // 1: box flow (#75); 2: localization error (#79)
   const driveOf = (id) => (id === "vision-map" ? "vision" : id);
   const MODE_KEY = "semif.driveMode";
   const modeParam = params.get("mode");
@@ -84,7 +84,7 @@
   // Always on screen (also in the minimal view): which mode drives, what it reads, and in Vision
   // whether perception is healthy. It says what each mode reads, not which is "better".
   const MODE_INFO = {
-    vision: { label: "Vision", reads: `Objects, signals & box flow from cameras · stage ${window.SEMIF_VISION_STAGE} · map privileged` },
+    vision: { label: "Vision", reads: `Cameras & box flow · noisy localization · stage ${window.SEMIF_VISION_STAGE} · map privileged` },
     "vision-map": { label: "Vision (map)", reads: "Objects & signals from cameras · map privileged" },
     privileged: { label: "Privileged", reads: "Simulator state · the ablation for a decision model" },
     heuristic: { label: "Heuristic", reads: "Geometric rules · no model" },
@@ -738,6 +738,81 @@
     }
   }
 
+  // ---- Localization error (#79) ------------------------------------------------------------------
+  // From stage 2 the new Vision's decision request carries a localization with a real one's error,
+  // not the simulator's perfect pose: the lane offset and the stop-line distance each drift by
+  // loc_sigma m (correlation time loc_tau s). First-order Markov (Ornstein-Uhlenbeck) drift on the
+  // sim clock, from its own seeded generator: the planner's planRandom is never drawn (#55). The
+  // defaults are chosen at the issue's scale (0.2-0.5 m), not measured; benchmarks/closed_loop.py
+  // --loc-sigma sweeps them. The position along the route is not in the request: the bundle's own
+  // planner (route following, candidate paths, route error, off-road) still runs on the true pose,
+  // which only patching the planner can change (#82, #83).
+  const LOC_STAGE = 2;
+  function locParam(name, fallback, lo, hi) {
+    const v = Number(params.get(name));
+    return params.has(name) && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+  }
+  const LOC = {
+    sigma: locParam("loc_sigma", 0.3, 0, 5),
+    tau: locParam("loc_tau", 5, 0.1, 600),
+  };
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // Spread sigma, correlation time tau; called with the time (s) of each reading.
+  function makeDrift(seed, sigma, tau) {
+    const rand = mulberry32(seed);
+    const gauss = () => {
+      let u = 0;
+      while (u === 0) u = rand();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+    };
+    let x = null;
+    let at = null;
+    return (now) => {
+      if (!(sigma > 0)) return 0;
+      if (x === null || !(now >= at)) {
+        x = sigma * gauss(); // a fresh start (or a reload) is a draw from the spread itself
+      } else {
+        const keep = Math.exp(-(now - at) / tau);
+        x = x * keep + sigma * Math.sqrt(1 - keep * keep) * gauss();
+      }
+      at = now;
+      return x;
+    };
+  }
+  let locDrift = null;
+  function localizationError(sim) {
+    const seed = Number(sim.world && sim.world.seed) || 0;
+    if (!locDrift || locDrift.seed !== seed) {
+      locDrift = {
+        seed,
+        lateral: makeDrift(seed ^ 0x9e3779b9, LOC.sigma, LOC.tau),
+        along: makeDrift(seed ^ 0x85ebca6b, LOC.sigma, LOC.tau),
+      };
+    }
+    const now = Number(sim.time) || 0;
+    return { lateral: locDrift.lateral(now), along: locDrift.along(now) };
+  }
+  window.SEMIF_LOC_NOISE = { params: LOC, makeDrift, stage: LOC_STAGE };
+  // The bundle's objects in the request are copied before they are moved: its own state stays true.
+  function addLocalizationError(state, sim) {
+    const e = localizationError(sim);
+    const moved = (v, by, digits) => +(v + by).toFixed(digits);
+    if (Number.isFinite(state.lateral_offset_m)) state.lateral_offset_m = moved(state.lateral_offset_m, e.lateral, 2);
+    const inter = state.intersection;
+    if (inter && Number.isFinite(inter.distance_to_line_m)) {
+      state.intersection = { ...inter, distance_to_line_m: moved(inter.distance_to_line_m, e.along, 2) };
+    }
+  }
+
   // What every decision request carries besides the bundle's own state.
   function shapeDecisionBody(body) {
     body.raw_mode = !!window.SEMIF_RAW_MODE;
@@ -769,6 +844,7 @@
       body.state.seen_signal = window.SEMIF_SEEN_SENT || null;
       const paths = candidatePaths(body.state.candidates);
       if (paths) body.state.candidate_paths = paths;
+      if (window.SEMIF_MODE_ID === "vision" && window.SEMIF_VISION_STAGE >= LOC_STAGE && sim) addLocalizationError(body.state, sim);
     }
     return body;
   }
