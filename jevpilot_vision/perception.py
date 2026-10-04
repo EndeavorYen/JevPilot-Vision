@@ -371,7 +371,11 @@ LANE_MARK_MIN = 0.18  # a marking is this much brighter (luma 0..1) than the roa
 LANE_MARK_MAX_M = 0.5  # and no wider than this (coast lines are 0.1-0.2 m)
 LANE_MIN_POINTS = 8  # rows a line needs to count
 LANE_WIDTH_M = (2.5, 8.0)  # a lane narrower or wider than this is two lines that are not one lane
+LANE_MAX_CURVE = 0.012
 LANE_MAX_SLOPE = 0.3  # a lane line runs within about 17 degrees of the car (crosswalk stripes do not)
+# A lane line bends no tighter than a road may: coast corners are at least 60 m in radius
+# (semif-worldgen.js MIN_RADIUS), i.e. c = 1/120; 0.012 (about 42 m) leaves room for the inner lane and
+# for error. Asphalt cracks fitted as lines bend far more.
 LANE_KERB_M = 0.8  # a kerb: the road turns bright (pavement) and stays bright at least this far
 LANE_PARALLEL = 0.2  # the two lines of a lane run within this slope of each other, 10 m out (on a bend too)
 LANE_RESID_M = 0.5  # a line's fit spread at which its confidence reaches zero
@@ -462,7 +466,8 @@ def _fit_lines(pts: List[tuple[float, float]]) -> List[Dict[str, float]]:
             group = [p for p in remaining if abs(p[1] - fit(p[0])) <= 0.35]
             if len(group) < LANE_MIN_POINTS:
                 break
-        if len(group) >= LANE_MIN_POINTS and abs(coef[1] + 2 * coef[2] * LANE_NEAR_M) <= LANE_MAX_SLOPE:
+        if (len(group) >= LANE_MIN_POINTS and abs(coef[1] + 2 * coef[2] * LANE_NEAR_M) <= LANE_MAX_SLOPE
+                and abs(coef[2]) <= LANE_MAX_CURVE):
             resid = float(np.sqrt(np.mean([(r - fit(a)) ** 2 for a, r in group])))
             lines.append({"a": float(coef[0]), "b": float(coef[1]), "c": float(coef[2]), "points": len(group), "resid": resid})
         taken = first | set(group)
