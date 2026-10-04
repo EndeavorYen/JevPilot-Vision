@@ -37,7 +37,8 @@ MODES = ("privileged", "vision", "vision-map", "heuristic")
 # #78: "vision-map" is the old Vision kept as a baseline (cameras, map privileged); "vision" is the
 # Vision losing its map and localization privilege stage by stage. Its runs record the stage; a
 # "vision" row without one predates the split and is reported as Vision (map).
-VISION_STAGE = 1  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's. 1: box flow (#75)
+VISION_STAGE = 2  # = semif-layer.js SEMIF_VISION_STAGE; validate() checks the page's. 1: box flow (#75); 2: localization error (#79)
+LOC_SIGMA_DEFAULT = 0.3  # = semif-layer.js LOC.sigma's default; every new-Vision run names its sigma
 DEFAULT_ROUTES = ("festival", "harbour", "pass")
 DEFAULT_MODES = ("privileged", "vision")
 GFX = ("medium", "high")  # docs/superpowers/specs/2026-10-03-visual-quality-design.md §4.3
@@ -87,10 +88,15 @@ def current_rows(rows: List[Dict[str, Any]], seeds: Dict[str, Any]) -> Tuple[Lis
 
 
 def plan_runs(seeds: Iterable[int], routes: Iterable[str], modes: Iterable[str], seconds: int, lag_ms: int,
-              gfx: str = "medium") -> List[Dict[str, Any]]:
+              gfx: str = "medium", loc_sigma: Optional[float] = None) -> List[Dict[str, Any]]:
+    """`loc_sigma`: the new Vision's localization error in metres (#79, ?loc_sigma=), for a sweep.
+    Every new-Vision run names it (the page's default when None), so runs are pooled by it."""
+    if loc_sigma is not None and any(mode != "vision" for mode in modes):
+        raise ValueError("--loc-sigma applies to the new Vision only (mode vision)")
     return [
         {"seed": int(seed), "route": route, "mode": mode, "seconds": int(seconds), "lag_ms": int(lag_ms), "gfx": gfx,
-         **({"vision_stage": VISION_STAGE} if mode == "vision" else {})}
+         **({"vision_stage": VISION_STAGE, "loc_sigma": float(LOC_SIGMA_DEFAULT if loc_sigma is None else loc_sigma)}
+            if mode == "vision" else {})}
         for seed in seeds
         for route in routes
         for mode in modes
@@ -105,7 +111,10 @@ def report_mode(row: Dict[str, Any]) -> Any:
         return mode
     if "vision_stage" not in row:
         return "vision-map"
-    return "vision" if row["vision_stage"] == VISION_STAGE else f"vision (stage {row['vision_stage']})"
+    name = "vision" if row["vision_stage"] == VISION_STAGE else f"vision (stage {row['vision_stage']})"
+    if row.get("loc_sigma") is None or float(row["loc_sigma"]) == LOC_SIGMA_DEFAULT:
+        return name  # the page's default spread: a plain run, explicit or not
+    return f"{name} · loc {float(row['loc_sigma']):g} m"
 
 
 def _key(row: Dict[str, Any]) -> Tuple[Any, ...]:
@@ -146,6 +155,8 @@ def page_url(base: str, run: Dict[str, Any]) -> str:
     url = f"{base.rstrip('/')}/jevpilot/?minimal=0&candidates=selected&traffic=low&people=low&seed={run['seed']}&world=coast:{run['route']}&mode={run['mode']}"
     if run.get("lag_ms"):
         url += f"&lag_ms={int(run['lag_ms'])}"
+    if run.get("loc_sigma") is not None:
+        url += f"&loc_sigma={float(run['loc_sigma']):g}"
     return url + f"&gfx={run.get('gfx', 'medium')}"
 
 
@@ -330,7 +341,7 @@ _READ = (
     "JSON.stringify((() => { clearInterval(window.__evalTimer); const s = window.SEMIF_SIM;"
     " const c = window.SEMIF_CLASSIFIER_STATS || {}, c0 = window.__eval.c0;"
     " const classifier = {}; for (const k of Object.keys(c)) classifier[k] = c[k] - (c0[k] || 0);"
-    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_MODE_ID || window.SEMIF_DRIVE_MODE, vision_stage_seen: window.SEMIF_VISION_STAGE ?? null, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
+    " return { engaged: window.__eval.engaged, classifier, mode_seen: window.SEMIF_MODE_ID || window.SEMIF_DRIVE_MODE, vision_stage_seen: window.SEMIF_VISION_STAGE ?? null, loc_sigma_seen: window.SEMIF_LOC_NOISE ? window.SEMIF_LOC_NOISE.params.sigma : null, world_seen: s.world.selectValue || s.world.type, lag_seen: window.SEMIF_LAG_MS || 0, gfx_seen: (window.SEMIF_GFX && window.SEMIF_GFX.quality) || null, density_seen: s.world.density || null,"
     " hidden: document.hidden, sim_time_s: Math.round(s.time - window.__eval.t0), distance_m: Math.round(s.distance),"
     " autopilot: !!s.autopilot, crash: !!s.crash, collisions: s.collisions || 0, vehicle_collisions: s.vehicleCollisions || 0,"
     " pedestrian_casualties: s.pedestrianCasualties || 0, red_light: s.redLightViolations || 0, violations: s.violations || 0,"
@@ -489,6 +500,8 @@ def validate(run: Dict[str, Any], got: Dict[str, Any]) -> Optional[str]:
         return f"drove mode {got.get('mode_seen')!r}"
     if "vision_stage" in run and got.get("vision_stage_seen") != run["vision_stage"]:
         return f"page at Vision stage {got.get('vision_stage_seen')!r}"  # another branch's page (#78)
+    if run.get("loc_sigma") is not None and got.get("loc_sigma_seen") != run["loc_sigma"]:
+        return f"page drove localization error {got.get('loc_sigma_seen')!r} m"
     if got.get("world_seen") != f"coast:{run['route']}":
         return f"drove route {got.get('world_seen')!r}"
     if int(got.get("lag_seen") or 0) != int(run.get("lag_ms") or 0):
@@ -605,6 +618,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
     ap.add_argument("--seconds", type=int, default=150)
     ap.add_argument("--gfx", choices=GFX, default="medium", help="graphics quality; medium is the world before the tiers")
+    ap.add_argument("--loc-sigma", type=float, default=None,
+                    help="the new Vision's localization error in m (#79); one value per call, call again to sweep")
     ap.add_argument("--lag-ms", type=int, default=0, help=f"0..{MAX_LAG_MS}: the bundle drops decisions older than 1.8 s")
     ap.add_argument("--base", default="http://localhost:8768")
     ap.add_argument("--out", type=Path, help="JSONL results (absolute path); reruns resume")
@@ -628,7 +643,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     seeds = [s for s in chosen if not args.seeds or s in args.seeds]
     if args.seeds and set(args.seeds) - set(chosen):
         ap.error(f"seeds {sorted(set(args.seeds) - set(chosen))} are not in the {args.set} set")
-    plan = plan_runs(seeds, args.routes, args.modes, args.seconds, args.lag_ms, gfx=args.gfx)
+    try:
+        plan = plan_runs(seeds, args.routes, args.modes, args.seconds, args.lag_ms, gfx=args.gfx, loc_sigma=args.loc_sigma)
+    except ValueError as err:
+        raise SystemExit(str(err))
     todo = pending(plan, read_rows(args.out))
     print(f"{len(plan)} runs planned ({args.set}), {len(plan) - len(todo)} already in {args.out}; "
           f"about {len(todo) * (args.seconds + 25) / 60:.0f} min to go", flush=True)

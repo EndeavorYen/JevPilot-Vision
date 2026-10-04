@@ -41,6 +41,7 @@ def _row(mode, seed, route, **kw):
             "broke": False, "unreadable": False, "fmt": cl.ROW_FORMAT}
     if mode == "vision":
         base["vision_stage"] = cl.VISION_STAGE  # as plan_runs writes it (#78)
+        base["loc_sigma"] = cl.LOC_SIGMA_DEFAULT  # and the localization error it drove with (#79)
     base.update(kw)
     return base
 
@@ -62,7 +63,7 @@ def test_issue78_old_vision_rows_are_reported_as_vision_map_never_pooled_with_th
 
 def test_issue78_review_a_page_at_another_vision_stage_is_a_setup_failure():
     run = cl.plan_runs([7], ["harbour"], ["vision"], seconds=150, lag_ms=0)[0]
-    good = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "world_seen": "coast:harbour", "lag_seen": 0,
+    good = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "loc_sigma_seen": cl.LOC_SIGMA_DEFAULT, "world_seen": "coast:harbour", "lag_seen": 0,
             "gfx_seen": "medium", "autopilot": True, "crash": False, "sim_time_s": 150, "hidden": False, "distance_m": 1800}
     assert cl.validate(run, good) is None
     assert "Vision stage" in cl.validate(run, dict(good, vision_stage_seen=cl.VISION_STAGE + 1))
@@ -630,7 +631,7 @@ def test_the_report_keeps_medium_and_high_apart():
 
 def test_a_page_on_the_wrong_quality_is_a_setup_failure():
     run = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0, gfx="high")[0]
-    got = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500}
+    got = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "loc_sigma_seen": cl.LOC_SIGMA_DEFAULT, "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500}
     assert cl.validate(run, dict(got, gfx_seen="medium")) == "drove graphics 'medium'"
     assert cl.validate(run, dict(got, gfx_seen="high")) is None
     assert cl.validate(run, got) == "drove graphics None", "a coast page always reports its quality"
@@ -647,7 +648,34 @@ def test_issue22_evaluations_drive_todays_density_and_a_page_on_another_is_a_set
     url = cl.page_url("http://localhost:8768", {"seed": 7, "route": "harbour", "mode": "vision"})
     assert "traffic=low&people=low" in url
     run = cl.plan_runs([1], ["festival"], ["vision"], seconds=150, lag_ms=0)[0]
-    got = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500, "gfx_seen": "medium"}
+    got = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "loc_sigma_seen": cl.LOC_SIGMA_DEFAULT, "world_seen": "coast:festival", "lag_seen": 0, "engaged": True, "distance_m": 1500, "gfx_seen": "medium"}
     assert cl.validate(run, dict(got, density_seen={"traffic": "med", "people": "low"})) == "drove density {'traffic': 'med', 'people': 'low'}"
     assert cl.validate(run, dict(got, density_seen={"traffic": "low", "people": "low"})) is None
     assert cl.validate(run, got) is None, "a page from before #22 drove today's counts"
+
+
+def test_issue79_a_localization_sweep_is_planned_driven_and_reported_apart():
+    plan = cl.plan_runs([7], ["festival"], ["vision"], seconds=150, lag_ms=0, loc_sigma=0.5)
+    run = plan[0]
+    assert run["loc_sigma"] == 0.5 and run["vision_stage"] == cl.VISION_STAGE
+    assert "&loc_sigma=0.5" in cl.page_url("http://localhost:8768", run)
+    # review: a run without --loc-sigma still names the page's default, so it pools with an explicit one
+    default = cl.plan_runs([7], ["festival"], ["vision"], seconds=150, lag_ms=0)[0]
+    assert default["loc_sigma"] == cl.LOC_SIGMA_DEFAULT and "&loc_sigma=0.3" in cl.page_url("http://localhost:8768", default)
+    assert cl._key(default) == cl._key(cl.plan_runs([7], ["festival"], ["vision"], seconds=150, lag_ms=0, loc_sigma=0.3)[0])
+    assert cl.report_mode(run) == "vision · loc 0.5 m"
+    assert cl.report_mode({**run, "loc_sigma": 0.0}) == "vision · loc 0 m"
+    # review: 0.25 is not 0.2
+    assert cl._key({**run, "loc_sigma": 0.25}) != cl._key({**run, "loc_sigma": 0.2})
+    page = (cl.HERE.parent / "jevpilot_vision" / "web" / "semif-layer.js").read_text(encoding="utf-8")
+    assert f'locParam("loc_sigma", {cl.LOC_SIGMA_DEFAULT}, ' in page
+    # the page reports the spread it drove with; another one is a setup failure
+    good = {"mode_seen": "vision", "vision_stage_seen": cl.VISION_STAGE, "loc_sigma_seen": 0.5, "world_seen": "coast:festival",
+            "lag_seen": 0, "gfx_seen": "medium", "autopilot": True, "crash": False, "sim_time_s": 150, "hidden": False, "distance_m": 1800}
+    assert cl.validate(run, good) is None
+    assert "localization" in cl.validate(run, dict(good, loc_sigma_seen=0.3))
+    assert "loc_sigma_seen" in cl._READ
+    # a Vision (map) run with a spread is refused: only the new Vision has localization error
+    with pytest.raises(ValueError):
+        cl.plan_runs([7], ["festival"], ["vision-map"], seconds=150, lag_ms=0, loc_sigma=0.5)
+
