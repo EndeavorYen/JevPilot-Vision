@@ -44,7 +44,8 @@
 | `coast-present` | main | 主畫面輸出先問 `SEMIF_SCENERY.present(view)` | 後製只作用在主畫面；車載相機另外渲染，不受影響 |
 | `coast-hero` | main | 主角車先問 `SEMIF_WORLD_KIT.hero(view, Jm)`，並把打包檔自己的 Model Y 載入函式 `Jm` 一起交過去；coast 回傳 Cybercab 風格的程式生成車，或（`?car=model-y`、`K` 鍵）用 `Jm` 載入的 Model Y；其他地圖回傳 undefined、照舊載入 Model Y | 新地圖的主角車由 `semif-world/vehicles.js` 產生（#25）；主角車改成 Tesla 後，Model Y 直接沿用打包檔的 glb 與輪子設定，不另寫一份（#47） |
 | `coast-signal-lamps` | main | coast 上點亮的號誌燈改用純色的紅、黃、綠（不含其他色光的成分，陽光再強也不會變白）並自發光；舊地圖維持打包檔原本的粉彩燈色 | 車載相機經過 ACES 後要讀得出燈色：原本的粉彩燈在畫面裡只剩淡橘、淡綠，任何依像素判讀號誌的方法都讀不到（#18） |
-| `coast-worker-version` | main | 規劃 worker 的網址帶上資產版本號（與頁面、`semif-worldgen.js` 相同） | 快取的舊 worker 不會在少了上面那些補丁的情況下規劃 |
+| `coast-worker-version` | main | 規劃 worker 的網址帶上版本記號 `?v=HASH`，由伺服器代成 worker 內容的雜湊（#63） | 快取的舊 worker 不會在少了上面那些補丁的情況下規劃 |
+| `asset-version-preload`、`asset-version-import` | index | 頁面入口載入 main 的預載清單與 import 網址帶上 `?v=HASH` | 同上：main 改了，網址就變（#63）。版本只寫在一處：`jevpilot_vision/asset_version.py` 在回應時代入被引用檔案的內容雜湊，沿引用鏈往上傳遞 |
 | `coast-signal-lamp-faces` | main | coast 上的燈泡改成朝向自己進口的平面燈片（原本是突出燈殼的球體），加 20 cm 遮光罩 | 真實號誌有遮光罩；20 cm 的罩在偏離燈軸約 60° 以上（橫向道路）與背面完全擋住亮光；球體從側面也亮，相機在停止線會讀到橫向道路的燈色而判讀衝突（#18） |
 | `vision-perception`、`vision-perception-worker` | main、wk | Vision 模式下，決策狀態的 `perception`（模擬器裡每個物體與號誌的真實顏色）是空的 | Vision 模式不讀模擬器（#18）；決策請求的號誌、附近物體、前車與衝突欄位因此都是空的，改由相機感知提供 |
 | `vision-lead`、`vision-lead-worker` | main、wk | Vision 模式下，自車的速度包絡不跟隨真實前車 | 同上：跟車距離改由感知到的物體決定 |

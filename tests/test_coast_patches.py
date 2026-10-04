@@ -18,7 +18,9 @@ WEB = REPO / "jevpilot_vision" / "web"
 ASSETS = WEB / "assets"
 MAIN = "main-CvLEeHjW.js"
 WORKER = "planner.worker-DFdG3q6n.js"
-WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=20261003h1";'
+INDEX = "index-DC8fTtby.js"
+# Versions are one token the server fills with the referenced file's hash (#63, asset_version.py).
+WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=HASH";'
 
 # three.js classes the bundle hands the renderer on top of the ones semif-scenery.js already gets,
 # as name: minified identifier. test_kit_classes_are_the_classes_they_claim_to_be checks each one.
@@ -222,7 +224,14 @@ COAST_PATCHES = [
     # without the patches above
     ("coast-worker-version", MAIN,
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js`",
-     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=20261003h1`"),
+     "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=HASH`"),
+    # --- the page's bundle entry loads main with a version too (#63): preload list and import
+    ("asset-version-preload", INDEX,
+     '"assets/main-CvLEeHjW.js"',
+     '"assets/main-CvLEeHjW.js?v=HASH"'),
+    ("asset-version-import", INDEX,
+     "`./main-CvLEeHjW.js`",
+     "`./main-CvLEeHjW.js?v=HASH`"),
     # --- the bundle's own scenery stays off the coast (semif-world/ draws it)
     ("coast-ground", MAIN,
      "X(r,3e3,.8,3e3,0,-.7,0,`#b2c5a0`)",
@@ -250,7 +259,7 @@ def apply() -> None:
 
 
 def test_coast_patches_are_applied_once_and_documented():
-    texts = {f: (ASSETS / f).read_text(encoding="utf-8") for f in (MAIN, WORKER)}
+    texts = {f: (ASSETS / f).read_text(encoding="utf-8") for f in (MAIN, WORKER, INDEX)}
     doc = (WEB / "BUNDLE_PATCHES.md").read_text(encoding="utf-8")
     for name, file, old, new in COAST_PATCHES:
         text = texts[file]
