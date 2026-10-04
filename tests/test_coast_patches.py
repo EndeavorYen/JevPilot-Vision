@@ -20,7 +20,7 @@ MAIN = "main-CvLEeHjW.js"
 WORKER = "planner.worker-DFdG3q6n.js"
 INDEX = "index-DC8fTtby.js"
 # Versions are one token the server fills with the referenced file's hash (#63, asset_version.py).
-WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=HASH";'
+WORKER_IMPORT = 'import"/jevpilot/semif-worldgen.js?v=HASH";import"/jevpilot/semif-route-index.js?v=HASH";'
 
 # three.js classes the bundle hands the renderer on top of the ones semif-scenery.js already gets,
 # as name: minified identifier. test_kit_classes_are_the_classes_they_claim_to_be checks each one.
@@ -226,6 +226,14 @@ COAST_PATCHES = [
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js`",
      "new URL(`/jevpilot/assets/planner.worker-DFdG3q6n.js?v=HASH`"),
     # --- the page's bundle entry loads main with a version too (#63): preload list and import
+    # --- the nearest point on a route from a grid, the same answer as the full scan (#42 item 4,
+    # semif-route-index.js): coast only, and only searches over the whole route (no start hint)
+    ("coast-nearest", MAIN,
+     'function p(e,t,n=0){let r={distance:1/0,index:0,t:0,x:0,z:0,s:0};',
+     'function p(e,t,n=0){if(!n&&globalThis.SEMIF_NEAREST&&String(globalThis.SEMIF_SIM?.world?.type??``).startsWith(`coast`))return globalThis.SEMIF_NEAREST(e,t,i,l);let r={distance:1/0,index:0,t:0,x:0,z:0,s:0};'),
+    ("coast-nearest-worker", WORKER,
+     'function l(t,n,r=0){let i={distance:1/0,index:0,t:0,x:0,z:0,s:0};',
+     'function l(t,n,r=0){if(!r&&globalThis.SEMIF_NEAREST&&String(globalThis.SEMIF_WORLD_TYPE??``).startsWith(`coast`))return globalThis.SEMIF_NEAREST(t,n,e,a);let i={distance:1/0,index:0,t:0,x:0,z:0,s:0};'),
     ("asset-version-preload", INDEX,
      '"assets/main-CvLEeHjW.js"',
      '"assets/main-CvLEeHjW.js?v=HASH"'),
