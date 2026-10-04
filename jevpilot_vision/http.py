@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
 
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -318,4 +317,6 @@ def mount(app: FastAPI, get_engine: Optional[Callable[[], Any]] = None) -> None:
 
         app.add_api_route("/v1/fleet", fleet_endpoint, methods=["POST"])
     if _WEB_DIR.exists():
-        app.mount("/jevpilot", StaticFiles(directory=str(_WEB_DIR), html=True), name="jevpilot")
+        from jevpilot_vision.asset_version import versioned_static
+
+        app.mount("/jevpilot", versioned_static(_WEB_DIR), name="jevpilot")

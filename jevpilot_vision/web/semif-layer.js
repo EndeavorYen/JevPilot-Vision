@@ -1560,7 +1560,7 @@
   async function grabSurround() {
     const world = window.SEMIF_WORLD;
     const capture = window.SEMIF_CAPTURE;
-    encoder = encoder || capture.createEncoder("/jevpilot/semif-encode-worker.js?v=20261003s1");
+    encoder = encoder || capture.createEncoder("/jevpilot/semif-encode-worker.js?v=HASH");
     const views = [["front", 0, FRONT_W, FRONT_H, ONBOARD_VFOV, FRONT_JPEG]].concat(
       SURROUND_SIDES.map(([name, yaw]) => [name, yaw, PIP_W, PIP_H, ONBOARD_VFOV, 0.55])
     );
