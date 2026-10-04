@@ -140,9 +140,50 @@ def test_the_cybercab_has_no_rear_window_full_width_light_bars_and_champagne_pai
         "const glass = pieces.filter((n) => n.material.name === 'Glass').map(span);"
         "const bars = (hex) => pieces.filter((n) => colour(n) === hex).map(span).filter((s) => s.w >= 1.3);"
         "out({ glassRear: Math.max(...glass.map((g) => g.z1)), front: bars(K.PALETTE.car.lens).map((s) => s.z0), rear: bars(K.PALETTE.car.taillight).map((s) => s.z1),"
-        "  paint: pieces.filter((n) => n.material.clearcoat === 1 && n.material.name !== 'Glass').map(colour), champagne: K.PALETTE.paint[2] });"
+        "  paint: [...new Set(pieces.filter((n) => n.material.metalness >= 0.5 && n.material.roughness >= 0.35).map(colour))],"
+        "  satin: pieces.filter((n) => colour(n) === K.PALETTE.car.champagne).every((n) => n.material.roughness >= 0.35), champagne: K.PALETTE.car.champagne });"
     )
     assert got["glassRear"] < 1.0, "no rear window: the fastback behind the roof is painted"
     assert got["front"] and min(got["front"]) < -2.3, "a full-width light bar across the nose"
     assert got["rear"] and max(got["rear"]) > 2.3, "and across the tail"
-    assert set(got["paint"]) == {got["champagne"]}
+    assert set(got["paint"]) == {got["champagne"]}, "one paint: the champagne"
+    assert got["satin"], "#90: a satin finish, not gloss"
+
+
+# ---- #90: the Cybercab rebuilt from photos -----------------------------------------------------
+
+def test_issue90_the_cybercab_has_big_wheels_at_the_corners_and_a_painted_roof():
+    """From the show-car photos: wheels about a sixth of the length pushed to the corners, glass only
+    in the windscreen and side windows (the roof is champagne), a lip overhanging the tail face."""
+    got = _render(
+        _BOX
+        + "const car = V.buildHero('cybercab'); const b = box(car);"
+        "const wheels = ['wheel_fl', 'wheel_rl'].map((n) => all(car).find((x) => x.name === n));"
+        "const glass = all(car).filter((n) => n.material && n.material.name === 'Glass');"
+        "let roofGlass = 0; for (const g of glass) { const p = g.geometry.attributes.position.array; const idx = g.geometry.index; const ids = Array.from(idx.array || idx);"
+        "  for (let i = 0; i < ids.length; i += 3) { const c = [0, 1, 2].map((k) => [0, 1, 2].reduce((s, j) => s + p[3 * ids[i + j] + k], 0) / 3);"
+        "    if (Math.abs(c[0]) < 0.35 && c[2] > -0.4 && c[1] > 1.3) roofGlass++; } }"
+        "const K = await mod('kit.js'); const body = all(car).find((n) => n.name === 'body');"
+        "const pts = (n) => { const p = n.geometry.attributes.position.array, o = []; for (let i = 0; i < p.length; i += 3) o.push([p[i], p[i + 1], p[i + 2]]); return o; };"
+        "const tris = (n) => { const v = pts(n), idx = n.geometry.index, ids = Array.from(idx.array || idx), o = []; for (let i = 0; i < ids.length; i += 3) o.push([v[ids[i]], v[ids[i + 1]], v[ids[i + 2]]]); return o; };"
+        "const col = (n) => n.material.color?.hex ?? n.material.color;"
+        "const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];"
+        "const near = (p, [a, b, c]) => { const ab = sub(b, a), ac = sub(c, a), ap = sub(p, a); const d1 = dot(ab, ap), d2 = dot(ac, ap); if (d1 <= 0 && d2 <= 0) return a;"
+        "  const bp = sub(p, b), d3 = dot(ab, bp), d4 = dot(ac, bp); if (d3 >= 0 && d4 <= d3) return b; const vc = d1 * d4 - d3 * d2;"
+        "  if (vc <= 0 && d1 >= 0 && d3 <= 0) { const v = d1 / (d1 - d3); return [a[0] + v * ab[0], a[1] + v * ab[1], a[2] + v * ab[2]]; }"
+        "  const cp = sub(p, c), d5 = dot(ab, cp), d6 = dot(ac, cp); if (d6 >= 0 && d5 <= d6) return c; const vb = d5 * d2 - d1 * d6;"
+        "  if (vb <= 0 && d2 >= 0 && d6 <= 0) { const w = d2 / (d2 - d6); return [a[0] + w * ac[0], a[1] + w * ac[1], a[2] + w * ac[2]]; }"
+        "  const va = d3 * d6 - d5 * d4; if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { const w = (d4 - d3) / (d4 - d3 + d5 - d6); return [b[0] + w * (c[0] - b[0]), b[1] + w * (c[1] - b[1]), b[2] + w * (c[2] - b[2])]; }"
+        "  const den = 1 / (va + vb + vc), v = vb * den, w = vc * den; return [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w]; };"
+        "const paint = body.children.filter((n) => col(n) === K.PALETTE.car.champagne), shell = paint.flatMap(pts), faces = paint.flatMap(tris);"
+        "const bar = body.children.filter((n) => col(n) === K.PALETTE.car.lens).flatMap(pts);"
+        "const gap = Math.max(...bar.map((q) => Math.min(...faces.filter((f) => Math.min(f[0][2], f[1][2], f[2][2]) - 0.05 < q[2] && Math.max(f[0][2], f[1][2], f[2][2]) + 0.05 > q[2]).map((f) => { const c = near(q, f); return Math.hypot(c[0] - q[0], c[1] - q[1], c[2] - q[2]); }))));"
+        "out({ minZ: b.minZ, maxZ: b.maxZ, r: wheels[0].userData.radius, fz: wheels[0].position.z, rz: wheels[1].position.z, roofGlass,"
+        "  shellTail: Math.max(...shell.map((v) => v[2])), bar: bar.length, gap });"
+    )
+    assert got["r"] >= 0.4, "big wheels"
+    assert got["fz"] - got["minZ"] <= 0.75 and got["maxZ"] - got["rz"] <= 0.8, "short overhangs: the wheels sit at the corners"
+    assert got["roofGlass"] == 0, "the roof is painted, not glass"
+    assert got["maxZ"] - got["shellTail"] >= 0.04, "the duckbill lip overhangs the tail face"
+    assert got["bar"] and got["gap"] < 0.03, "the light bar lies on the body, not in the air"
+

@@ -387,10 +387,19 @@ def _devtools_new_blank() -> None:
         conn.close()
 
 
+def _keeps_chrome(page: Dict[str, Any]) -> bool:
+    """A page that holds Chrome open: a web page or a blank one that is not a simulation. Browser
+    pages (edge://extensions, chrome://newtab) close themselves or get replaced; counting them let
+    Edge quit after a run (#88)."""
+    url = page.get("url", "")
+    return "/jevpilot" not in url and (url.startswith(("http://", "https://")) or url == "about:blank")
+
+
 def ensure_anchor(base: str) -> None:
-    """Closing the last page quits Chrome; keep one page that is not a simulation."""
-    if not [p for p in _devtools_pages() if "/jevpilot" not in p.get("url", "")]:
-        _cdp("open", f"{base.rstrip('/')}/openapi.json")
+    """Closing the last page quits Chrome; keep one page that is not a simulation. A new blank page
+    through DevTools (#88): chrome-cdp-ex `open` may reuse a tab the evaluation later takes."""
+    if not [p for p in _devtools_pages() if _keeps_chrome(p)]:
+        _devtools_new_blank()
 
 
 def open_tab(base: str) -> Dict[str, str]:
@@ -422,7 +431,7 @@ def close_tab(tab: Optional[Dict[str, str]], wait: bool = False) -> None:
     try:
         # Closing Chrome's last page quits Chrome (#53): every caller, perf_baseline and Ctrl-C
         # included, leaves a blank page behind first.
-        if not [p for p in _devtools_pages() if p["id"] != tab["id"]]:
+        if not [p for p in _devtools_pages() if p["id"] != tab["id"] and _keeps_chrome(p)]:
             _devtools_new_blank()
         _devtools_close(tab["id"])
         for _ in range(20 if wait else 0):
