@@ -1,4 +1,4 @@
-// The Cybercab-style hero (#90, finish pass #107), rebuilt from photos of the 2024 show car
+// The Cybercab-style hero (#90, finish pass #107, form pass #109), rebuilt from photos of the 2024 show car
 // (Wikimedia Commons, see docs/visual/cybercab/README.md) with the img2threejs workflow: analysis,
 // spec, passes reviewed against the references. No Tesla emblems or lettering.
 //
@@ -305,8 +305,10 @@ function capForwardZ(tris, x, y) {
 // face, because the sampled ring sits inside that face. Stations are 3 mm apart so a quad does not
 // cut the fender's plan curve. A flat offset from NOSE0 sinks the nose into the cap.
 function frontLightBar(rings, zs) {
-  const h = 0.035, gap = 0.003, rows = 24;
-  const barY = (z) => shoulder(z) - 0.03;
+  const h = 0.016, gap = 0.003, rows = 8;
+  // The show car's slit sits on the bumper crown and only rises as it wraps the corner (#109).
+  // Following the shoulder put a 35 mm band across the top of the nose.
+  const barY = spline([[-2.4, 0.43], [-2.2, 0.47], [-2.02, 0.53], [-1.9, 0.57]]);
   const ringAt = (z) => {
     let i = 0;
     while (i < zs.length - 2 && zs[i + 1] < z) i++;
@@ -550,7 +552,7 @@ function wheel(name, x, z, front, m) {
   // its radius, and a small domed centre cap.
   const f = out * (w / 2 + 0.002), o = (d) => f + out * d; // proud of the tyre's sidewall, so only a thin tyre band shows
   spin.add(m.cover, lathe([
-    [r * 0.945, o(-0.03)], [r * 0.945, o(-0.006)], [r * 0.925, o(0.002)], [r * 0.64, o(0.003)], [r * 0.61, o(-0.006)],
+    [r * 0.97, o(-0.03)], [r * 0.97, o(-0.006)], [r * 0.948, o(0.002)], [r * 0.64, o(0.003)], [r * 0.61, o(-0.006)],
     [r * 0.6, o(-0.012)], [0.07, o(-0.012)], [0.055, o(-0.004)], [0.035, o(0.002)], [0.001, o(0.004)],
   ], { segments: 44 }));
   spin.add(m.cover, lathe([[r * 0.9, -out * (w / 2)], [0.001, -out * (w / 2)]], { segments: 30 })); // the inner face
@@ -572,7 +574,7 @@ function mats() {
     clad: material(C.trim, { roughness: 0.62, metalness: 0.1 }),
     well: material(C.trim, { roughness: 0.95, side: 2 }),
     tyre: material(C.tyre, { roughness: 0.92, side: 2 }),
-    lens: material(C.lens, { emissive: C.lens, emissiveIntensity: 1.6, roughness: 0.2, side: 2 }),
+    lens: material(C.lens, { emissive: C.lens, emissiveIntensity: 0.7, roughness: 0.2, side: 2 }),
     tail: material(C.taillight, { emissive: C.taillight, emissiveIntensity: 0.9, roughness: 0.3, side: 2 }),
   };
 }
@@ -591,8 +593,8 @@ export function buildCybercab() {
   // lamps at the bumper corners and the dark bumper itself.
   const lipY = Math.max(shoulder(TAIL), roof(TAIL)) - 0.012;
   details.add(m.paint, box(1.72, 0.03, 0.13, 0, lipY, L2 - 0.065)); // overhangs the tail face by 6 cm; its edge is the car's end
-  details.add(m.tail, box(1.6, 0.04, 0.008, 0, lipY - 0.055, TAIL + 0.004));
-  for (const side of [-1, 1]) details.add(m.tail, box(0.4, 0.03, 0.008, side * 0.56, 0.535, TAIL + 0.03));
+  details.add(m.tail, box(1.62, 0.016, 0.008, 0, lipY - 0.028, TAIL + 0.004));
+  for (const side of [-1, 1]) details.add(m.tail, box(0.42, 0.014, 0.008, side * 0.55, 0.545, TAIL + 0.02));
   details.add(m.clad, box(1.66, 0.25, 0.05, 0, 0.385, TAIL + 0.005));
   // Wheel wells: a dark half-tube inside each arch, so the gap round the tyre is shadow, not the
   // far side of the car. It stays under the fender (shoulder > arch top over both axles).
@@ -604,7 +606,7 @@ export function buildCybercab() {
   extra.add(...details.meshes());
   group.add(extra);
 
-  const track = (az) => half(az) - CYBERCAB.w / 2 - 0.04; // covers flush with the fender lip
+  const track = (az) => half(az) - CYBERCAB.w / 2 - 0.014; // cover face stays just inside the fender lip
   for (const [name, az, isFront] of [["wheel_fl", front, true], ["wheel_fr", front, true], ["wheel_rl", rear, false], ["wheel_rr", rear, false]]) {
     group.add(wheel(name, (name.endsWith("l") ? -1 : 1) * track(az), az, isFront, m));
   }
