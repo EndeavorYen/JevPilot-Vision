@@ -1,6 +1,6 @@
-// The Cybercab-style hero (#90), rebuilt from photos of the 2024 show car (Wikimedia Commons, see
-// docs/visual/cybercab/README.md) with the img2threejs workflow: analysis, spec, passes reviewed
-// against the references. No Tesla emblems or lettering.
+// The Cybercab-style hero (#90, finish pass #107), rebuilt from photos of the 2024 show car
+// (Wikimedia Commons, see docs/visual/cybercab/README.md) with the img2threejs workflow: analysis,
+// spec, passes reviewed against the references. No Tesla emblems or lettering.
 //
 // One lofted shell carries the whole body: every section is a custom outline (sill, a side drawn in
 // toward the shoulder, then either the hood -- round fender crests, a valley between -- or a
@@ -232,6 +232,8 @@ function shell(m) {
   parts.add(m.clad, caps.clad);
   parts.add(m.quarter, quarterWindow(rings, zs));
   parts.add(m.well, doorLines(rings, zs));
+  parts.add(m.well, hoodSeam(rings, zs));
+  parts.add(m.well, fenderSeams());
   parts.add(m.lens, frontLightBar(rings, zs));
   return parts;
 }
@@ -261,21 +263,175 @@ function outerAt(ring, y, limit = Infinity) {
   return best;
 }
 
-// The front light bar, laid on the shell: just under the hood's leading edge across the domed nose
-// and along each fender's side as the edge rises toward the windscreen.
-function frontLightBar(rings, zs) {
-  const barY = (z) => shoulder(z) - 0.03;
-  const right = [];
-  for (let i = 0; i < zs.length && zs[i] < -1.95; i++) {
-    const x = outerAt(rings[i], barY(zs[i]));
-    if (x !== null) right.push([x + 0.007, barY(zs[i]), zs[i]]);
+// z of the nose-cap triangle under (x, y). Same rows as the cap in shell(), so the bar tracks the
+// mesh rather than the quarter circle the rows only sample. Forward is -z. Null off the cap.
+function capTriangles(ring, z0) {
+  const ys = ring.map((p) => p[1]);
+  const cy = Math.min(...ys) + 0.4 * (Math.max(...ys) - Math.min(...ys));
+  const dz = -(L2 + NOSE0);
+  const rows = [1, 0.88, 0.7, 0.45].map((k) => {
+    const depth = Math.sqrt(Math.max(0, 1 - k * k));
+    return ring.map(([rx, ry]) => [rx * k, cy + (ry - cy) * k, z0 + dz * depth]);
+  });
+  const centre = [0, cy, z0 + dz];
+  const tris = [];
+  for (let k = 0; k < ring.length; k++) {
+    const k1 = (k + 1) % ring.length;
+    for (let r = 0; r < rows.length - 1; r++) {
+      tris.push([rows[r][k], rows[r][k1], rows[r + 1][k]], [rows[r][k1], rows[r + 1][k1], rows[r + 1][k]]);
+    }
+    tris.push([rows[rows.length - 1][k], rows[rows.length - 1][k1], centre]);
   }
-  if (!right.length) return { positions: [], index: [] };
-  const [x0, y0] = right[0];
+  return tris;
+}
+
+// Most-forward z of the cap under (x, y). Null when (x, y) misses every cap triangle.
+function capForwardZ(tris, x, y) {
+  let skin = null;
+  for (const [a, b, c] of tris) {
+    const den = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+    if (Math.abs(den) < 1e-10) continue;
+    const w0 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / den;
+    const w1 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / den;
+    const w2 = 1 - w0 - w1;
+    if (w0 < -1e-3 || w1 < -1e-3 || w2 < -1e-3) continue;
+    const z = w0 * a[2] + w1 * b[2] + w2 * c[2];
+    if (skin === null || z < skin) skin = z;
+  }
+  return skin;
+}
+
+// The front light bar. The offset is 3 mm: 2 mm left the tightest quad interiors inside the lofted
+// face, because the sampled ring sits inside that face. Stations are 3 mm apart so a quad does not
+// cut the fender's plan curve. A flat offset from NOSE0 sinks the nose into the cap.
+function frontLightBar(rings, zs) {
+  const h = 0.035, gap = 0.003, rows = 24;
+  const barY = (z) => shoulder(z) - 0.03;
+  const ringAt = (z) => {
+    let i = 0;
+    while (i < zs.length - 2 && zs[i + 1] < z) i++;
+    const t = Math.min(1, Math.max(0, (z - zs[i]) / (zs[i + 1] - zs[i] || 1)));
+    return rings[i].map((p, k) => {
+      const q = rings[i + 1][k];
+      return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+    });
+  };
+  const columnAt = (z) => {
+    const ring = ringAt(z), y = barY(z), col = [];
+    for (let k = 0; k <= rows; k++) {
+      const yy = y - h / 2 + (h * k) / rows;
+      const x = outerAt(ring, yy);
+      if (x === null) return null;
+      col.push([x + gap, yy, z]);
+    }
+    return col;
+  };
+  const right = [];
+  for (let z = -1.96; z > zs[0] + 0.001; z -= 0.003) {
+    const col = columnAt(z);
+    if (col) right.push(col);
+  }
+  const nose = columnAt(zs[0]);
+  if (!nose) return { positions: [], index: [] };
+  right.push(nose);
+  const tris = capTriangles(rings[0], zs[0]);
+  const skin = nose.map((p) => [p[0] - gap, p[1]]);
+  const span = Math.max(...skin.map((p) => p[0]));
+  const steps = Math.max(1, Math.ceil((span * 2) / 0.003));
   const across = [];
-  for (let s = 1; s > -1; s -= 0.1) across.push([s * x0, y0, NOSE0 - 0.012]);
-  const left = right.map(([x, y, z]) => [-x, y, z]);
-  return strip([...right.slice().reverse(), ...across, ...left], 0.035);
+  for (let s = 0; s <= steps; s++) {
+    const sign = Math.max(-0.998, Math.min(0.998, 1 - 2 * (s / steps)));
+    const col = [];
+    let ok = true;
+    for (const [sx, y] of skin) {
+      const x = sx * sign;
+      const z = capForwardZ(tris, x, y);
+      if (z === null) { ok = false; break; }
+      col.push([x, y, z - gap]);
+    }
+    if (ok) across.push(col);
+  }
+  const left = [...right].reverse().map((col) => col.map((p) => [-p[0], p[1], p[2]]));
+  const columns = [...right, ...across, ...left];
+  const positions = [], index = [], n = rows + 1;
+  columns.forEach((col, i) => {
+    for (const p of col) positions.push(...p);
+    if (!i) return;
+    for (let k = 0; k < rows; k++) {
+      const a = (i - 1) * n + k, b = i * n + k;
+      index.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  });
+  return { positions, index };
+}
+
+// A 6 mm dark band through samples, `across` a unit vector in the band's width, lifted 2 mm off
+// the shell so it reads as a shut line rather than z-fighting the paint.
+function seam(samples, across) {
+  const positions = [], index = [], w = 0.003, lift = 0.002;
+  samples.forEach(([x, y, z], i) => {
+    positions.push(
+      x + across[0] * w, y + across[1] * w + lift, z + across[2] * w,
+      x - across[0] * w, y - across[1] * w + lift, z - across[2] * w,
+    );
+    if (i) {
+      const a = (i - 1) * 2, b = i * 2;
+      index.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  });
+  return { positions, index };
+}
+
+// The hood shut: crest to crest on the lofted ring, just ahead of the windscreen. The coarse
+// outline sits off that ring (inside it near the crests, above it in the valley).
+function hoodSeam(rings, zs) {
+  const z = -1.52;
+  let i = 0;
+  while (i < zs.length - 2 && zs[i + 1] < z) i++;
+  const t = Math.min(1, Math.max(0, (z - zs[i]) / (zs[i + 1] - zs[i] || 1)));
+  const ring = rings[i].map((p, k) => {
+    const q = rings[i + 1][k];
+    return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+  });
+  const mid = ring.length / 2; // top centre; the right half is the first half of the ring
+  let crest = 0;
+  for (let k = 1; k <= mid; k++) if (ring[k][1] > ring[crest][1]) crest = k;
+  const right = [];
+  for (let k = crest; k < mid; k++) {
+    for (let s = 0; s < 4; s++) {
+      const u = s / 4;
+      right.push([
+        ring[k][0] + (ring[k + 1][0] - ring[k][0]) * u,
+        ring[k][1] + (ring[k + 1][1] - ring[k][1]) * u,
+        z,
+      ]);
+    }
+  }
+  right.push([ring[mid][0], ring[mid][1], z]);
+  // right runs from the right crest to the centre. Mirror it, drop the shared centre, then
+  // walk back through the centre to the right crest. Reversing the mirror first jumps the valley.
+  const left = right.slice(0, -1).map(([x, y, zz]) => [-x, y, zz]);
+  const full = left.concat([...right].reverse());
+  return seam(full, [0, 0, 1]);
+}
+
+// The fender shut: along each front crest, from the nose of the arch back to the hood shut.
+function fenderSeams() {
+  const positions = [], index = [];
+  for (const side of [1, -1]) {
+    const samples = [];
+    for (let i = 0; i <= 18; i++) {
+      const z = -2.18 + (i * 0.62) / 18; // -2.18 .. -1.56, clear of the hood shut at -1.52
+      const crest = Math.min(0.62, half(z) - 0.2);
+      // The outline's crest is shoulder + 12 mm. Sampling the shoulder puts the band inside the paint.
+      samples.push([side * crest, shoulder(z) + 0.012, z]);
+    }
+    const part = seam(samples, [side, 0, 0]);
+    const base = positions.length / 3;
+    positions.push(...part.positions);
+    for (const i of part.index) index.push(base + i);
+  }
+  return { positions, index };
 }
 
 // The door shut lines: a 6 mm dark band on each side, at the door's front edge (leaning back at
@@ -405,8 +561,12 @@ function wheel(name, x, z, front, m) {
 
 function mats() {
   return {
-    paint: physical(C.champagne, { metalness: 0.55, roughness: 0.4, clearcoat: 0.2, clearcoatRoughness: 0.35 }),
-    cover: physical(C.champagne, { metalness: 0.5, roughness: 0.46, clearcoat: 0.1, clearcoatRoughness: 0.4, side: 2 }),
+    // Matte champagne (#107). Painted metal in the img2threejs material record is a dielectric
+    // coat (roughness up to 0.7, clearcoat free to go to 0). This host still classifies "the paint"
+    // as metalness >= 0.5, so the flake stays and the gloss hotspot is what goes: roughness at the
+    // top of that range, clearcoat almost off. The colour stays PALETTE.car.champagne.
+    paint: physical(C.champagne, { metalness: 0.55, roughness: 0.68, clearcoat: 0.04, clearcoatRoughness: 0.35 }),
+    cover: physical(C.champagne, { metalness: 0.5, roughness: 0.7, clearcoat: 0.04, clearcoatRoughness: 0.35, side: 2 }),
     glass: physical(C.glass, { name: "Glass", metalness: 0.3, roughness: 0.05, clearcoat: 1 }),
     quarter: physical(C.glass, { metalness: 0.35, roughness: 0.08, clearcoat: 1, side: 2 }),
     clad: material(C.trim, { roughness: 0.62, metalness: 0.1 }),

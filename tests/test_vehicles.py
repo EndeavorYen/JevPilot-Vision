@@ -187,3 +187,87 @@ def test_issue90_the_cybercab_has_big_wheels_at_the_corners_and_a_painted_roof()
     assert got["maxZ"] - got["shellTail"] >= 0.04, "the duckbill lip overhangs the tail face"
     assert got["bar"] and got["gap"] < 0.03, "the light bar lies on the body, not in the air"
 
+
+def test_issue107_the_paint_is_matte_and_the_hood_and_fenders_are_split():
+    """#107: matte paint, and the shut lines and the light bar sit just outside the paint faces.
+
+    Distance is to the containing face, including the interior of each light-bar triangle and
+    each hood-shut triangle. A vertex can sit outside the paint while the quad between two
+    stations cuts back through it.
+    """
+    got = _render(
+        _BOX
+        + "const K = await mod('kit.js'); const car = V.buildHero('cybercab');"
+        "const pieces = all(car).filter((n) => n.geometry && n.geometry.attributes.position);"
+        "const colour = (n) => { const c = n.material && n.material.color; return typeof c === 'string' ? c : c && c.hex; };"
+        "const body = all(car).find((n) => n.name === 'body');"
+        "const faces = body.children.filter((n) => colour(n) === K.PALETTE.car.champagne).flatMap((n) => {"
+        "  const p = n.geometry.attributes.position.array; const idx = n.geometry.index; const ids = idx ? Array.from(idx.array || idx) : null; const o = [];"
+        "  const push = (i0, i1, i2) => o.push([[p[3*i0], p[3*i0+1], p[3*i0+2]], [p[3*i1], p[3*i1+1], p[3*i1+2]], [p[3*i2], p[3*i2+1], p[3*i2+2]]]);"
+        "  if (ids) for (let i = 0; i < ids.length; i += 3) push(ids[i], ids[i+1], ids[i+2]); else for (let v = 0; v < p.length / 3; v += 3) push(v, v+1, v+2); return o; });"
+        "const front = faces.filter((t) => Math.min(t[0][2], t[1][2], t[2][2]) < -1.85);"
+        "const verts = (hex) => pieces.filter((n) => colour(n) === hex).flatMap((n) => { const p = n.geometry.attributes.position.array, o = [];"
+        "  for (let i = 0; i < p.length; i += 3) o.push([p[i], p[i+1], p[i+2]]); return o; });"
+        "const bary = (u, v, a0, a1, b0, b1, c0, c1) => { const den = (b1-c1)*(a0-c0)+(c0-b0)*(a1-c1); if (Math.abs(den) < 1e-10) return null;"
+        "  const w0 = ((b1-c1)*(u-c0)+(c0-b0)*(v-c1))/den, w1 = ((c1-a1)*(u-c0)+(a0-c0)*(v-c1))/den, w2 = 1-w0-w1;"
+        "  return (w0 < -1e-3 || w1 < -1e-3 || w2 < -1e-3) ? null : [w0, w1, w2]; };"
+        "const skinY = (p) => { let best = null; for (const [a,b,c] of faces) {"
+        "  if (a[2] < -2.4 && b[2] < -2.4 && c[2] < -2.4) continue; if (a[2] > -1.2 && b[2] > -1.2 && c[2] > -1.2) continue;"
+        "  const w = bary(p[0], p[2], a[0], a[2], b[0], b[2], c[0], c[2]); if (!w) continue;"
+        "  const y = w[0]*a[1]+w[1]*b[1]+w[2]*c[1]; if (best === null || y > best) best = y; } return best; };"
+        "const skinZ = (p) => { let best = null; for (const [a,b,c] of front) { if (Math.min(a[2], b[2], c[2]) > -2.1) continue;"
+        "  const w = bary(p[0], p[1], a[0], a[1], b[0], b[1], c[0], c[1]); if (!w) continue;"
+        "  const z = w[0]*a[2]+w[1]*b[2]+w[2]*c[2]; if (best === null || z < best) best = z; } return best; };"
+        "const skinX = (p) => { const sign = Math.sign(p[0]) || 1; let best = null; for (const [a,b,c] of front) {"
+        "  if (a[0]*sign < 0.05 && b[0]*sign < 0.05 && c[0]*sign < 0.05) continue; if (Math.min(a[2], b[2], c[2]) > -1.9) continue;"
+        "  const w = bary(p[1], p[2], a[1], a[2], b[1], b[2], c[1], c[2]); if (!w) continue;"
+        "  const x = w[0]*a[0]+w[1]*b[0]+w[2]*c[0]; if (best === null || x*sign > best*sign) best = x; } return best; };"
+        "const champ = pieces.filter((n) => colour(n) === K.PALETTE.car.champagne);"
+        "const tv = verts(K.PALETTE.car.trim), lens = verts(K.PALETTE.car.lens);"
+        "const hood = tv.filter((p) => Math.abs(p[2] + 1.52) < 0.006 && p[1] > 0.85);"
+        "const fender = tv.filter((p) => p[1] > 0.7 && p[2] < -1.55 && p[2] > -2.20 && Math.abs(Math.abs(p[0]) - 0.62) < 0.02);"
+        "const nose = lens.filter((p) => p[2] < -2.331);"
+        "const side = lens.filter((p) => p[2] >= -2.331 && p[2] < -1.95 && Math.abs(p[0]) > 0.2);"
+        "const cents = pieces.filter((n) => colour(n) === K.PALETTE.car.lens).flatMap((n) => {"
+        "  const p = n.geometry.attributes.position.array; const idx = n.geometry.index; const ids = idx ? Array.from(idx.array || idx) : null; const o = [];"
+        "  const push = (i0, i1, i2) => { const a = [p[3*i0], p[3*i0+1], p[3*i0+2]], b = [p[3*i1], p[3*i1+1], p[3*i1+2]], c = [p[3*i2], p[3*i2+1], p[3*i2+2]];"
+        "    o.push([(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3]); };"
+        "  if (ids) for (let i = 0; i < ids.length; i += 3) push(ids[i], ids[i+1], ids[i+2]); else for (let v = 0; v < p.length / 3; v += 3) push(v, v+1, v+2); return o; });"
+        "const noseC = cents.filter((p) => p[2] < -2.3315);"
+        "const sideC = cents.filter((p) => p[2] >= -2.3295 && p[2] < -1.95 && Math.abs(p[0]) > 0.2);"
+        "const onHood = (p) => Math.abs(p[2] + 1.52) < 0.006 && p[1] > 0.85;"
+        "const hoodC = pieces.filter((n) => colour(n) === K.PALETTE.car.trim).flatMap((n) => {"
+        "  const p = n.geometry.attributes.position.array; const idx = n.geometry.index; const ids = idx ? Array.from(idx.array || idx) : null; const o = [];"
+        "  const push = (i0, i1, i2) => { const a = [p[3*i0], p[3*i0+1], p[3*i0+2]], b = [p[3*i1], p[3*i1+1], p[3*i1+2]], c = [p[3*i2], p[3*i2+1], p[3*i2+2]];"
+        "    if (!onHood(a) || !onHood(b) || !onHood(c)) return;"
+        "    o.push([(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3]); };"
+        "  if (ids) for (let i = 0; i < ids.length; i += 3) push(ids[i], ids[i+1], ids[i+2]); else for (let v = 0; v < p.length / 3; v += 3) push(v, v+1, v+2); return o; });"
+        "const off = (p) => { const s = skinY(p); return s !== null && p[1] - s > 0.001 && p[1] - s < 0.008; };"
+        "const band = (lo, hi) => (g) => g !== null && g > lo && g < hi;"
+        "const ahead = (p) => { const s = skinZ(p); return band(0.0002, 0.007)(s === null ? null : s - p[2]); };"
+        "const outboard = (p) => { const s = skinX(p); return band(0.0002, 0.007)(s === null ? null : (p[0]-s)*Math.sign(p[0])); };"
+        "const face = (pts, gap) => { let hit = 0, min = Infinity, max = -Infinity; for (const p of pts) { const g = gap(p); if (g === null) continue; hit++; if (g < min) min = g; if (g > max) max = g; } return { n: pts.length, hit, min, max }; };"
+        "out({ matte: champ.length > 0 && champ.every((n) => n.material.roughness >= 0.62 && (n.material.clearcoat ?? 1) <= 0.05 && n.material.metalness >= 0.5),"
+        "  hoodL: hood.some((p) => p[0] < -0.3), hoodR: hood.some((p) => p[0] > 0.3),"
+        "  fenderL: fender.some((p) => p[0] < -0.45), fenderR: fender.some((p) => p[0] > 0.45),"
+        "  hoodOut: hood.length >= 80 && hood.every(off), fenderOut: fender.length >= 60 && fender.every(off),"
+        "  noseOut: nose.length >= 16 && nose.every(ahead) && Math.min(...nose.map((p) => p[0])) < -0.4 && Math.max(...nose.map((p) => p[0])) > 0.4,"
+        "  sideOut: side.length >= 40 && side.every(outboard),"
+        "  noseFace: face(noseC, (p) => { const s = skinZ(p); return s === null ? null : s - p[2]; }),"
+        "  sideFace: face(sideC, (p) => { const s = skinX(p); return s === null ? null : (p[0]-s)*Math.sign(p[0]); }),"
+        "  hoodFace: face(hoodC, (p) => { const s = skinY(p); return s === null ? null : p[1] - s; }) });"
+    )
+    assert got["matte"], "champagne body and covers are matte: rough, almost no clearcoat"
+    assert got["hoodL"] and got["hoodR"], "a shut line crosses the hood ahead of the windscreen"
+    assert got["fenderL"] and got["fenderR"], "each front fender has a shut line"
+    assert got["hoodOut"], "the hood shut line sits just outside the paint"
+    assert got["fenderOut"], "the fender shut lines sit just outside the paint"
+    assert got["noseOut"], "the nose light-bar vertices sit just ahead of the nose skin"
+    assert got["sideOut"], "the light-bar vertices stay just outside the front fenders"
+    for name, band in (("noseFace", got["noseFace"]), ("sideFace", got["sideFace"])):
+        assert band["n"] >= 1000 and band["hit"] == band["n"], band
+        assert 0.0002 < band["min"] and band["max"] < 0.007, (name, band)
+    hood_face = got["hoodFace"]
+    assert hood_face["n"] >= 80 and hood_face["hit"] == hood_face["n"], hood_face
+    assert 0.001 < hood_face["min"] and hood_face["max"] < 0.008, hood_face
+
