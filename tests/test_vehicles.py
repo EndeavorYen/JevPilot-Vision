@@ -226,15 +226,15 @@ def test_issue107_the_paint_is_matte_and_the_hood_and_fenders_are_split():
         "const tv = verts(K.PALETTE.car.trim), lens = verts(K.PALETTE.car.lens);"
         "const hood = tv.filter((p) => Math.abs(p[2] + 1.52) < 0.006 && p[1] > 0.85);"
         "const fender = tv.filter((p) => p[1] > 0.7 && p[2] < -1.55 && p[2] > -2.20 && Math.abs(Math.abs(p[0]) - 0.62) < 0.02);"
-        "const nose = lens.filter((p) => p[2] < -2.331);"
-        "const side = lens.filter((p) => p[2] >= -2.331 && p[2] < -1.95 && Math.abs(p[0]) > 0.2);"
+        "const nose = lens.filter((p) => p[2] < -2.236);"
+        "const side = lens.filter((p) => p[2] >= -2.232 && p[2] < -1.95 && Math.abs(p[0]) > 0.2);"
         "const cents = pieces.filter((n) => colour(n) === K.PALETTE.car.lens).flatMap((n) => {"
         "  const p = n.geometry.attributes.position.array; const idx = n.geometry.index; const ids = idx ? Array.from(idx.array || idx) : null; const o = [];"
         "  const push = (i0, i1, i2) => { const a = [p[3*i0], p[3*i0+1], p[3*i0+2]], b = [p[3*i1], p[3*i1+1], p[3*i1+2]], c = [p[3*i2], p[3*i2+1], p[3*i2+2]];"
         "    o.push([(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3]); };"
         "  if (ids) for (let i = 0; i < ids.length; i += 3) push(ids[i], ids[i+1], ids[i+2]); else for (let v = 0; v < p.length / 3; v += 3) push(v, v+1, v+2); return o; });"
-        "const noseC = cents.filter((p) => p[2] < -2.3315);"
-        "const sideC = cents.filter((p) => p[2] >= -2.3295 && p[2] < -1.95 && Math.abs(p[0]) > 0.2);"
+        "const noseC = cents.filter((p) => p[2] < -2.237);"
+        "const sideC = cents.filter((p) => p[2] >= -2.231 && p[2] < -1.95 && Math.abs(p[0]) > 0.2);"
         "const onHood = (p) => Math.abs(p[2] + 1.52) < 0.006 && p[1] > 0.85;"
         "const hoodC = pieces.filter((n) => colour(n) === K.PALETTE.car.trim).flatMap((n) => {"
         "  const p = n.geometry.attributes.position.array; const idx = n.geometry.index; const ids = idx ? Array.from(idx.array || idx) : null; const o = [];"
@@ -264,10 +264,54 @@ def test_issue107_the_paint_is_matte_and_the_hood_and_fenders_are_split():
     assert got["fenderOut"], "the fender shut lines sit just outside the paint"
     assert got["noseOut"], "the nose light-bar vertices sit just ahead of the nose skin"
     assert got["sideOut"], "the light-bar vertices stay just outside the front fenders"
-    for name, band in (("noseFace", got["noseFace"]), ("sideFace", got["sideFace"])):
-        assert band["n"] >= 1000 and band["hit"] == band["n"], band
+    for name, band, least in (("noseFace", got["noseFace"], 1000), ("sideFace", got["sideFace"], 400)):
+        assert band["n"] >= least and band["hit"] == band["n"], (name, band)
         assert 0.0002 < band["min"] and band["max"] < 0.007, (name, band)
     hood_face = got["hoodFace"]
     assert hood_face["n"] >= 80 and hood_face["hit"] == hood_face["n"], hood_face
     assert 0.001 < hood_face["min"] and hood_face["max"] < 0.008, hood_face
+
+
+def test_issue109_the_lamps_are_slits_and_the_wheels_sit_in_the_arches():
+    """#109: thin bumper and tail slits, wheels sitting inside the arches. The body loft stays
+    the #107 sweep; the plan and the belt are not pulled into a separate fastback."""
+    got = _render(
+        _BOX
+        + "const K = await mod('kit.js'); const car = V.buildHero('cybercab');"
+        "const colour = (n) => { const c = n.material && n.material.color; return typeof c === 'string' ? c : c && c.hex; };"
+        "const pts = (n, ox, oy, oz) => { const p = n.geometry.attributes.position.array, o = [];"
+        "  for (let i = 0; i < p.length; i += 3) o.push([ox + p[i], oy + p[i + 1], oz + p[i + 2]]); return o; };"
+        "const walk = (n, ox, oy, oz, acc) => { const x = ox + (n.position?.x || 0), y = oy + (n.position?.y || 0), z = oz + (n.position?.z || 0);"
+        "  if (n.geometry && colour(n)) acc.push([colour(n), pts(n, x, y, z)]); (n.children || []).forEach((c) => walk(c, x, y, z, acc)); };"
+        "const bag = []; walk(car, 0, 0, 0, bag);"
+        "const of = (hex) => bag.filter((b) => b[0] === hex).flatMap((b) => b[1]);"
+        "const span = (ps) => { const ys = ps.map((p) => p[1]); return { n: ps.length, lo: Math.min(...ys), hi: Math.max(...ys), mid: ys.reduce((s, y) => s + y, 0) / ys.length }; };"
+        "const lens = of(K.PALETTE.car.lens);"
+        "const slit = span(lens.filter((p) => p[2] < -2.30 && Math.abs(p[0]) < 0.15));"
+        "const tail = of(K.PALETTE.car.taillight);"
+        "const tailSlit = span(tail.filter((p) => p[1] > 0.8));"
+        "const paint = of(K.PALETTE.car.champagne);"
+        "const band = (z, pred) => paint.filter((p) => Math.abs(p[2] - z) < 0.03 && pred(p) && p[1] > 0.7);"
+        "const ymax = (ps) => ps.reduce((m, p) => Math.max(m, p[1]), 0);"
+        "const crest = ymax(band(-1.85, (p) => Math.abs(Math.abs(p[0]) - 0.62) < 0.08));"
+        "const centre = ymax(band(-1.85, (p) => Math.abs(p[0]) < 0.05));"
+        "const fl = all(car).find((n) => n.name === 'wheel_fl');"
+        "const cover = []; walk(fl, 0, 0, 0, cover);"
+        "const coverPts = cover.filter((b) => b[0] === K.PALETTE.car.champagne).flatMap((b) => b[1]);"
+        "const coverX = Math.min(...coverPts.map((p) => p[0]));"
+        "const coverR = Math.max(...coverPts.map((p) => Math.hypot(p[1] - fl.position.y, p[2] - fl.position.z)));"
+        "const body = all(car).find((n) => n.name === 'body');"
+        "const skin = []; walk(body, 0, 0, 0, skin);"
+        "const lipPts = skin.filter((b) => b[0] === K.PALETTE.car.champagne).flatMap((b) => b[1]).filter((p) => Math.abs(p[2] - fl.position.z) < 0.15 && p[1] > 0.85);"
+        "const lip = Math.min(...lipPts.map((p) => p[0]));"
+        "out({ slit, tailSlit, valley: crest - centre, crest, centre, gap: coverX - lip, coverX, lip, coverR });"
+    )
+    slit, tail = got["slit"], got["tailSlit"]
+    assert slit["n"] >= 8, slit
+    assert 0.012 < slit["hi"] - slit["lo"] < 0.022, slit
+    assert 0.38 < slit["mid"] < 0.52, slit
+    assert tail["n"] >= 8 and 0.012 < tail["hi"] - tail["lo"] < 0.022, tail
+    assert got["valley"] > 0.04, got
+    assert 0.006 < got["gap"] < 0.022, got
+    assert 0.40 < got["coverR"] < 0.418, got
 
